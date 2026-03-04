@@ -9,7 +9,7 @@ from aiogram.exceptions import TelegramBadRequest
 from config import ADMIN_IDS, DIFFICULTY
 from utils import store
 from utils.states import Contact
-from keyboards.kb import main_kb, test_card_kb, cancel_kb
+from keyboards.kb import main_kb, test_card_kb, cancel_kb, remove_kb
 
 log    = logging.getLogger(__name__)
 router = Router()
@@ -93,6 +93,12 @@ def _contact_kb():
 
 # ── Test kodi (to'g'ridan) ───────────────────────────────
 
+# Tugma matnlari — bular boshqa handlerlarda boshqariladi
+_MENU_TEXTS = {
+    "📚 Testlar", "➕ Test Yaratish", "📊 Natijalarim",
+    "🏆 Reyting", "👤 Profil", "ℹ️ Yordam", "👑 Admin Panel",
+}
+
 @router.message(F.text)
 async def maybe_test_code(msg: Message, state: FSMContext):
     if msg.chat.type != "private":
@@ -101,6 +107,9 @@ async def maybe_test_code(msg: Message, state: FSMContext):
     if cur:  # FSM faol bo'lsa o'tkazib yubor
         return
     text = (msg.text or "").strip()
+    # Menyu tugmalari — o'tkazib yuboramiz
+    if text in _MENU_TEXTS:
+        return
     # Test kodi: 6-20 belgi, bo'sh joy yo'q, slash yo'q
     if not text or " " in text or "/" in text or len(text) not in range(6, 21):
         return
