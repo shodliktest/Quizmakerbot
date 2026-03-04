@@ -41,14 +41,14 @@ def _make_bot_dp():
     _dp  = Dispatcher(storage=MemoryStorage())
 
     # Tartib muhim: guruh handlerlari tests/poll dan oldin!
-    _dp.include_router(r_inline)
-    _dp.include_router(r_group)
-    _dp.include_router(r_poll)
-    _dp.include_router(r_start)
-    _dp.include_router(r_tests)
-    _dp.include_router(r_create)
-    _dp.include_router(r_profile)
-    _dp.include_router(r_admin)
+    _dp.include_router(r_inline)   # Inline query — birinchi
+    _dp.include_router(r_group)    # Guruh — ikkinchi
+    _dp.include_router(r_poll)     # Poll test
+    _dp.include_router(r_tests)    # Testlar katalogi + inline test
+    _dp.include_router(r_create)   # Test yaratish
+    _dp.include_router(r_profile)  # Profil, natijalar, reyting
+    _dp.include_router(r_admin)    # Admin panel
+    _dp.include_router(r_start)    # Start + misc — ENG OXIRDA
 
     @_dp.errors()
     async def on_error(event: ErrorEvent):
