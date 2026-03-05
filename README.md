@@ -1,81 +1,59 @@
-# 🎓 QuizBot
+# 🎓 Quiz Bot Pro — Firebase'siz versiya
 
-Telegram test boti — Streamlit boshqaruv paneli bilan.
+## ✅ Firebase kerak emas!
+Hamma narsa (testlar, userlar, natijalar) **Telegram kanalda** saqlanadi.
 
-## ⚡ Ishga tushirish
+## 🚀 Ishga tushirish
 
-### 1. Secrets sozlash
+### 1. Telegram Storage kanal yarating
+1. Yangi **yopiq** kanal yarating
+2. Botni kanalga **admin** qiling (Post + Pin huquqi)
+3. Kanal ID ni oling (`-1001234567890` ko'rinishida)
 
-`.streamlit/secrets.toml.example` → `.streamlit/secrets.toml` ga nusxa oling:
-
+### 2. `.streamlit/secrets.toml` ni to'ldiring
 ```toml
-BOT_TOKEN = "your_bot_token_here"
-STORAGE_CHANNEL_ID = "-100xxxxxxxxxx"
-ADMIN_IDS = "123456789"
+BOT_TOKEN          = "YOUR_BOT_TOKEN"
+ADMIN_IDS          = "YOUR_TELEGRAM_ID"
+ADMIN_PASSWORD     = "your_password"
+STORAGE_CHANNEL_ID = "-1001234567890"
 ```
 
-### 2. O'rnatish va ishga tushirish
-
-```bash
-pip install -r requirements.txt
-streamlit run streamlit_app.py
+### 3. Streamlit Cloud ga deploy qiling
+```
+streamlit_app.py ni main file qilib belgilang
 ```
 
-Bot avtomatik background'da ishga tushadi!
-
----
-
-## ☁️ Streamlit Cloud (GitHub orqali)
-
-1. Bu reponi GitHub'ga push qiling
-2. [share.streamlit.io](https://share.streamlit.io) ga kiring
-3. Repo → `streamlit_app.py` tanlang
-4. **Secrets** bo'limiga `secrets.toml` ni qo'ying
-5. Deploy!
-
-> ⚠️ `.streamlit/secrets.toml` ni hech qachon GitHub'ga push qilmang!  
-> `.gitignore` da allaqachon qo'shilgan.
-
----
-
-## 📁 Fayl strukturasi
-
+## 📦 Arxitektura
 ```
-QuizBot/
-├── streamlit_app.py        ← Streamlit boshqaruv paneli
-├── bot.py                  ← Telegram bot (background)
-├── config.py               ← Konfiguratsiya
+Telegram Kanal:
+  📌 pinned → index.json   (barcha msg_id lar)
+  📄 tests.json            (barcha testlar)
+  📄 users.json            (barcha userlar)
+  📄 backup_2024-05-20.json (kunlik natijalar)
+```
+
+## 📁 Fayl tuzilishi
+```
+├── bot.py
+├── config.py
+├── streamlit_app.py
 ├── requirements.txt
-├── .gitignore
-├── .streamlit/
-│   ├── config.toml         ← UI sozlamalari
-│   └── secrets.toml        ← 🔒 (gitignore'd)
-├── handlers/
-│   ├── start.py            — /start, yordam
-│   ├── tests.py            — katalog + inline test
-│   ├── poll_test.py        — private poll test
-│   ├── group.py            — guruh test
-│   ├── create_test.py      — test yaratish
-│   ├── profile.py          — profil, natijalar
-│   ├── admin.py            — admin panel
-│   └── inline_mode.py      — inline query
-├── keyboards/kb.py         — barcha klaviaturalar
 ├── utils/
-│   ├── store.py            — RAM + TG kanal storage
-│   ├── scoring.py          — ball hisoblash
-│   ├── states.py           — FSM states
-│   └── parser.py           — TXT/PDF/DOCX parser
-└── samples/                — namuna fayllar
+│   ├── tg_db.py      ← TG kanal = Database
+│   ├── ram_cache.py  ← RAM + session_state
+│   ├── db.py         ← CRUD (Firebase YO'Q)
+│   ├── parser.py     ← TXT/PDF/DOCX parser
+│   ├── scoring.py    ← Ball hisoblash
+│   └── states.py     ← FSM states
+├── handlers/
+│   ├── start.py
+│   ├── tests.py      ← Inline test (Keyingi tugmasi)
+│   ├── poll_test.py  ← Poll (Pause/Resume)
+│   ├── create_test.py
+│   ├── profile.py    ← Tahlil ◀️▶️ navigatsiya
+│   ├── leaderboard.py
+│   └── admin.py      ← RAM Flush, backup
+├── keyboards/
+│   └── keyboards.py
+└── samples/          ← Namuna fayllar
 ```
-
-## 🤖 Bot imkoniyatlari
-
-| Funksiya | Tavsif |
-|----------|--------|
-| ▶️ Inline test | A/B/C/D tugmalar, avto-o'tish, tahlil |
-| 📊 Poll test | Telegram viktorina, timer, pauza |
-| 👥 Guruh test | Inline + Poll rejim, reyting |
-| ➕ Test yaratish | TXT/PDF/DOCX, matn, @QuizBot forward |
-| 🔍 Inline query | Guruhga test yuborish |
-| 👑 Admin panel | Broadcast, bloklash, statistika |
-| 💾 TG kanal storage | Restart keyin ham ma'lumot saqlanadi |
