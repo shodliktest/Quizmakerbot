@@ -1,4 +1,11 @@
-"""TG_DB — Telegram kanal storage"""
+"""TG_DB — Telegram kanal storage
+Qoidalar:
+ - Yangi test yaratilganda → test_{tid}.json yuklanadi
+ - Yangi user qo'shilganda → users.json yangilanadi
+ - Natijalar TG ga YUKLANMAYDI — faqat midnight yoki admin flush
+ - Kunlik backup → backup_YYYY-MM-DD.json (1 marta)
+ - O'chirilayotgan test → DELETED_test_{tid}.json
+"""
 import json, logging, io, asyncio
 from datetime import datetime, timezone
 
@@ -181,7 +188,10 @@ async def get_users():
     return data.get("users", {}) if isinstance(data, dict) else {}
 
 async def save_users(users):
-    """Users JSON — yangi user kelganda + admin flush da chaqiriladi"""
+    """
+    Users JSON — yangi user kelganda DARHOL chaqiriladi.
+    users.json har yangi user qo'shilganda yangilanadi.
+    """
     if not ready(): return False
     try:
         ts  = datetime.now(UTC).strftime("%Y-%m-%d %H:%M")
@@ -283,15 +293,12 @@ async def manual_flush(daily_data, users, settings=None):
     results = []
     if not ready():
         return ["❌ TG kanal ulanmagan"]
-    # Users
     if users:
         ok = await save_users(users)
         results.append(f"{'✅' if ok else '❌'} Users: {len(users)} ta")
-    # Settings
     if settings:
         ok = await save_settings(settings)
         results.append(f"{'✅' if ok else '❌'} Settings: {len(settings)} ta")
-    # Backup
     if daily_data:
         from datetime import date
         today = str(date.today())

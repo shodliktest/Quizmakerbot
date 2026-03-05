@@ -73,7 +73,6 @@ async def get_test_full(tid):
         if full and full.get("questions"):
             ram.cache_questions(tid, full)
             return full
-    # Meta bor bo'lsa qaytaramiz (savollarsiz)
     meta = ram.get_test_meta(tid)
     return meta if meta else {}
 
@@ -110,9 +109,8 @@ async def create_test(creator_id, data):
         "is_paused":     False,
         "created_at":    str(datetime.now(UTC)),
     }
-    # RAMga qo'shamiz
     ram.add_test(test)
-    # TG kanalga darhol to'liq yuboramiz (JSON fayl)
+    # TG kanalga darhol to'liq JSON yuboradi
     from utils import tg_db
     if tg_db.ready():
         ok = await tg_db.save_test_full(test)
@@ -123,13 +121,10 @@ async def create_test(creator_id, data):
 async def delete_test(tid):
     """Test o'chirishdan avval TG ga yuboriladi (backup), keyin o'chiriladi"""
     from utils import tg_db
-    # Avval full testni backup sifatida TG ga jo'nat
     test = await get_test_full(tid)
     if test and tg_db.ready():
         await tg_db.save_deleted_test_backup(test)
-    # RAMdan o'chirish
     ram.delete_test_from_ram(tid)
-    # TG index da is_active=False
     if tg_db.ready():
         await tg_db.delete_test_tg(tid)
 
@@ -137,7 +132,6 @@ def pause_test(tid, paused: bool):
     ram.update_test_meta(tid, {"is_paused": paused})
 
 def get_all_tests_admin():
-    """Admin uchun — o'chirilganlarni ham ko'rsatadi"""
     return ram.get_all_tests_meta()
 
 
@@ -182,7 +176,6 @@ def get_test_stats_for_user(user_id, test_id):
     return ram.get_test_entry(user_id, test_id)
 
 def get_test_solvers(test_id):
-    """Test yechgan barcha userlar — creator/admin uchun"""
     return ram.get_all_solvers_for_test(test_id)
 
 def get_leaderboard(limit=20):

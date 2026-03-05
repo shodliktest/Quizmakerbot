@@ -9,7 +9,8 @@ RAM CACHE — Arxitektura:
 MUHIM QOIDALAR:
   - Testlar hech qachon o'chirilmaydi (faqat admin delete)
   - Har user uchun har test: ALL percentages + ONLY LAST analysis
-  - TG upload: yangi test/user yaratilganda, admin buyruq, midnight
+  - TG upload: faqat admin buyruq yoki midnight
+  - RAM daily tozalanmaydi (faqat midnight backup + clear)
 """
 import threading, logging, sys
 from datetime import datetime, timezone, timedelta
@@ -195,14 +196,14 @@ def clear_users_dirty(): _set("users_dirty", False)
 #       "all_pcts":     [85.0, 92.0, ...],   # BARCHA urinishlar foizi
 #       "best_score":   92.0,
 #       "avg_score":    88.5,
-#       "first_result": {...},               # Birinchi urinish to'liq (creator/admin uchun)
+#       "first_result": {...},               # Birinchi urinish to'liq
 #       "last_result":  {...},               # Oxirgi urinish to'liq
 #       "last_analysis":[...],              # FAQAT OXIRGI tahlil
 #       "accessed_link": False,             # Link orqali kirganmi
 #       "last_at":      "2025-01-01 12:00",
 #     }
 #   },
-#   "history": [  # Yengil ro'yxat (profile uchun)
+#   "history": [  # Yengil ro'yxat
 #     {tid, title, last_pct, best_pct, attempts, all_pcts, completed_at, accessed_link}
 #   ]
 # }
@@ -250,7 +251,6 @@ def save_result_to_ram(user_id, test_id, result, via_link=False):
     best    = max(e["best_score"], pct)
     avg     = round(sum(all_p) / len(all_p), 1)
 
-    # To'liq natija (result_id va meta qo'shib)
     full_res = {
         **result,
         "result_id":   rid,
@@ -274,7 +274,7 @@ def save_result_to_ram(user_id, test_id, result, via_link=False):
     if via_link:
         e["accessed_link"] = True
 
-    # History (yengil) — har test uchun bitta yozuv
+    # History — har test uchun bitta yozuv
     h = [x for x in daily[uid_str].get("history", []) if x.get("test_id") != test_id]
     h.insert(0, {
         "test_id":      test_id,
@@ -315,15 +315,10 @@ def get_analysis(uid, rid):
             .get("last_analysis", []))
 
 def get_test_stats_for_user(uid, tid):
-    """Moslik uchun — test entry qaytaradi"""
     return get_test_entry(uid, tid)
 
 def get_all_solvers_for_test(tid):
-    """
-    Bu test yechgan barcha userlar:
-    [{uid_str, name, attempts, all_pcts, best_score, avg_score, first_result, last_result}]
-    Creator/admin uchun.
-    """
+    """Bu test yechgan barcha userlar — creator/admin uchun."""
     daily   = _get("daily_results", {})
     users   = get_users()
     result  = []
