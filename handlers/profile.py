@@ -62,7 +62,7 @@ async def _show_profile(msg, uid, edit=False):
     )
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="📋 Natijalarim",          callback_data="results_p0"))
-    b.row(InlineKeyboardButton(text="🔗 Linklar",              callback_data="link_results_p0"))
+    b.row(InlineKeyboardButton(text="🔗 Link testlar",         callback_data="link_results_p0"))
     b.row(InlineKeyboardButton(text="🗂 Mening testlarim",     callback_data="mytests_p0"))
     b.row(InlineKeyboardButton(text="🏠 Asosiy menyu",         callback_data="main_menu"))
     try:
@@ -72,7 +72,7 @@ async def _show_profile(msg, uid, edit=False):
         await msg.answer(text, reply_markup=b.as_markup())
 
 
-# ══ 2. NATIJALAR ═══════════════════════════════════════════════
+# ══ 2. NATIJALAR (ommaviy testlar) ═════════════════════════════
 
 @router.message(F.text == "📊 Natijalarim")
 async def results_msg(message: Message):
@@ -86,6 +86,7 @@ async def results_page_cb(callback: CallbackQuery):
 
 async def _show_results(msg, uid, page=0, edit=False, link_only=False):
     all_results = get_user_results(uid)
+    # Link testlarni ajratib olish
     if link_only:
         all_results = [r for r in all_results if r.get("accessed_link")]
         section     = "🔗 LINK ORQALI YECHILGAN TESTLAR"
@@ -103,8 +104,7 @@ async def _show_results(msg, uid, page=0, edit=False, link_only=False):
             f"{'📚 Testlar bo\'limidan boshlang! 🚀' if not link_only else ''}"
         )
         b = InlineKeyboardBuilder()
-        if not link_only:
-            b.row(InlineKeyboardButton(text="📚 Testlarga o'tish", callback_data="go_tests"))
+        b.row(InlineKeyboardButton(text="📚 Testlarga o'tish", callback_data="go_tests"))
         b.row(InlineKeyboardButton(text="🏠 Bosh sahifa",     callback_data="main_menu"))
         try:
             if edit: await msg.edit_text(msg_txt, reply_markup=b.as_markup())
@@ -121,7 +121,7 @@ async def _show_results(msg, uid, page=0, edit=False, link_only=False):
         f"<b>{section}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"<i>Sahifa {page+1}/{total_pages} | Jami: {len(all_results)} ta test</i>\n"
-        f"<i>(Barcha urinishlar foizi | faqat oxirgi tahlil)</i>\n\n"
+        f"<i>(Har urinish foizi ko'rsatiladi, faqat oxirgi tahlil)</i>\n\n"
     )
     b = InlineKeyboardBuilder()
 
@@ -137,7 +137,8 @@ async def _show_results(msg, uid, page=0, edit=False, link_only=False):
         dt        = res.get("completed_at","")[:10]
         rid       = res.get("result_id","")
 
-        all_p_str = " → ".join(f"{p}%" for p in all_pcts[-5:])
+        # Barcha urinishlar foizi
+        all_p_str = " → ".join(f"{p}%" for p in all_pcts[-5:])  # Oxirgi 5 tasi
         if len(all_pcts) > 5:
             all_p_str = f"...{len(all_pcts)-5} ta oldin | " + all_p_str
 
@@ -201,6 +202,7 @@ async def _show_result_card(callback, rid):
     meta     = get_test_by_id(tid)
     title    = meta.get("title","Noma'lum") if meta else "O'chirilgan test"
     cat      = meta.get("category","") if meta else ""
+    entry    = get_test_stats_for_user(uid, tid)
     all_pcts = res.get("all_pcts", [res.get("last_pct", 0)])
     att      = res.get("attempts", 1)
     best     = res.get("best_pct", max(all_pcts) if all_pcts else 0)
@@ -209,6 +211,7 @@ async def _show_result_card(callback, rid):
     passed   = res.get("passed", last_pct >= 60)
     dt_str   = res.get("completed_at","")[:16]
 
+    # Barcha urinishlar
     all_p_txt = "\n".join(
         f"  {'✅' if p >= (meta.get('passing_score',60) if meta else 60) else '❌'} "
         f"{i+1}-urinish: {p}%"
@@ -232,6 +235,7 @@ async def _show_result_card(callback, rid):
         f"{'🎉 MUVAFFAQIYATLI!' if passed else '❌ YIQILDINGIZ'}"
     )
     b = InlineKeyboardBuilder()
+    # Faqat oxirgi tahlil
     b.row(InlineKeyboardButton(text="🔍 Oxirgi tahlil", callback_data=f"analysis_{rid}_0"))
     if meta:
         b.row(
@@ -414,6 +418,7 @@ async def my_test_view(callback: CallbackQuery):
     test = get_test_by_id(tid)
     if not test:
         return await callback.message.answer("❌ Test topilmadi.")
+
     from handlers.start import _send_test_card
     await _send_test_card(callback, test, tid, viewer_uid=uid, edit=True)
 
@@ -495,6 +500,7 @@ def _test_to_txt(test):
     return "\n".join(lines)
 
 
+# go_tests compatibility
 @router.callback_query(F.data == "go_tests")
 async def go_tests_cb(callback: CallbackQuery):
     await callback.answer()
