@@ -73,14 +73,19 @@ async def main():
     await dp.start_polling(bot, drop_pending_updates=True)
 
 
-# ── MIDNIGHT FLUSH — kuniga 1 marta, faqat 00:00 ──────────────
+# ── MIDNIGHT FLUSH — kuniga 1 marta, 00:00 UTC ────────────────
 
 async def _midnight_flush_loop(bot):
     """
     Har kun 00:00 UTC da:
     1. Kecha kunlik natijalarni TG ga yuboradi (backup)
     2. Users va settings saqlaydi
-    3. RAM daily tozalanmaydi — testlar va users doim qoladi
+    3. RAM daily tozalanadi — yangi kun uchun
+    4. Admin ga xabar yuboriladi
+
+    MUHIM:
+    - Natijalar TG ga FAQAT shu yerda yuklanadi (har yechilganda emas)
+    - RAM daily faqat midnight da tozalanadi
     """
     flushed_date = None
     while True:
@@ -93,14 +98,13 @@ async def _midnight_flush_loop(bot):
                 log.info("🌙 Midnight flush boshlanmoqda...")
                 from utils import tg_db, ram_cache as ram
 
-                # Kecha sanasi (chunki 00:00 da kecha tugagan)
                 yesterday = str(today - timedelta(days=1))
                 daily     = ram.get_daily()
                 users     = ram.get_users()
                 settings  = ram.get_all_settings()
 
                 if tg_db.ready():
-                    # 1. Kunlik backup
+                    # 1. Kunlik backup (bitta fayl)
                     if daily:
                         mid = await tg_db.upload_backup(daily, yesterday)
                         log.info(f"✅ Backup yuborildi: {yesterday} msg={mid}")
@@ -109,9 +113,9 @@ async def _midnight_flush_loop(bot):
                     ram.clear_users_dirty()
                     # 3. Settings
                     await tg_db.save_settings(settings)
-                    # 4. RAM daily tozalash (yangi kun uchun)
+                    # 4. RAM daily tozalash
                     ram.clear_daily()
-                    log.info("✅ Midnight flush yakunlandi, daily RAM tozalandi")
+                    log.info("✅ Midnight flush yakunlandi")
 
                 # Admin ga xabar
                 for aid in ADMIN_IDS:
@@ -132,6 +136,7 @@ async def _midnight_flush_loop(bot):
 # ── USERS AUTO FLUSH — har 10 daqiqada (dirty bo'lsa) ─────────
 
 async def _users_auto_flush_loop(bot):
+    """Yangi user qo'shilsa users.json ni TG ga yuboradi"""
     await asyncio.sleep(600)
     while True:
         try:
@@ -161,90 +166,6 @@ async def _cache_cleanup_loop():
             break
         except Exception as e:
             log.error(f"Cache cleanup xato: {e}")
-
-
-def run_in_background():
-    """Streamlit tomonidan chaqiriladi — botni alohida threadda ishga tushiradi."""
-    import threading
-    import signal
-
-    def _run():
-        # set_wakeup_fd faqat main threadda ishlaydi.
-        # Sub-threadda chaqirilsa xato beradi — shuning uchun uni o'chiramiz.
-        original_set_wakeup_fd = signal.set_wakeup_fd
-        signal.set_wakeup_fd = lambda *a, **kw: -1
-
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(_main_no_signals())
-        except Exception as e:
-            log.error(f"Bot thread xato: {e}")
-        finally:
-            signal.set_wakeup_fd = original_set_wakeup_fd
-            loop.close()
-
-    t = threading.Thread(target=_run, daemon=True, name="telegram-bot")
-    t.start()
-    log.info("✅ Bot thread ishga tushdi!")
-    return t
-
-
-async def _main_no_signals():
-    """main() — lekin handle_signals=False (sub-thread uchun)."""
-    from handlers.inline_mode import router as r_inline
-    from handlers.poll_router import router as r_poll_router
-    from handlers.group       import router as r_group
-    from handlers.poll_test   import router as r_poll
-    from handlers.start       import router as r_start
-    from handlers.tests       import router as r_tests
-    from handlers.create_test import router as r_create
-    from handlers.profile     import router as r_profile
-    from handlers.leaderboard import router as r_lb
-    from handlers.admin       import router as r_admin
-
-    bot = Bot(token=BOT_TOKEN,
-              default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-    dp  = Dispatcher(storage=MemoryStorage())
-
-    dp.include_router(r_inline)
-    dp.include_router(r_poll_router)
-    dp.include_router(r_group)
-    dp.include_router(r_poll)
-    dp.include_router(r_start)
-    dp.include_router(r_tests)
-    dp.include_router(r_create)
-    dp.include_router(r_profile)
-    dp.include_router(r_lb)
-    dp.include_router(r_admin)
-
-    if STORAGE_CHANNEL_ID:
-        from utils import tg_db
-        log.info("TG DB initsializatsiya...")
-        await tg_db.init(bot, STORAGE_CHANNEL_ID)
-        from utils import ram_cache as ram
-        tests = await tg_db.get_tests()
-        if tests: ram.set_tests(tests)
-        users = await tg_db.get_users()
-        if users: ram.set_users(users)
-        settings = await tg_db.get_settings_tg()
-        if settings: ram.set_all_settings(settings)
-        log.info(f"✅ Yuklandi: {ram.stats()['tests']} test, {ram.stats()['users']} user")
-
-    asyncio.create_task(_midnight_flush_loop(bot))
-    asyncio.create_task(_users_auto_flush_loop(bot))
-    asyncio.create_task(_cache_cleanup_loop())
-
-    for aid in ADMIN_IDS:
-        try:
-            await bot.send_message(aid,
-                f"✅ <b>Bot ishga tushdi!</b>\n"
-                f"📅 {datetime.now(UTC).strftime('%Y-%m-%d %H:%M')} UTC")
-        except Exception: pass
-
-    log.info("🚀 Bot ishga tushdi!")
-    # handle_signals=False — sub-threadda set_wakeup_fd xatosini oldini oladi
-    await dp.start_polling(bot, drop_pending_updates=True, handle_signals=False)
 
 
 if __name__ == "__main__":
