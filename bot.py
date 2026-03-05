@@ -168,5 +168,25 @@ async def _cache_cleanup_loop():
             log.error(f"Cache cleanup xato: {e}")
 
 
+def run_in_background():
+    """Streamlit app tomonidan chaqiriladi — botni background threadda ishga tushiradi"""
+    import threading
+
+    def _run():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(main())
+        except Exception as e:
+            log.error(f"Bot thread xato: {e}")
+        finally:
+            loop.close()
+
+    t = threading.Thread(target=_run, daemon=True, name="bot-thread")
+    t.start()
+    log.info("✅ Bot background threadda ishga tushdi")
+    return t
+
+
 if __name__ == "__main__":
     asyncio.run(main())
