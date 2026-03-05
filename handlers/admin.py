@@ -1,460 +1,408 @@
-"""👑 ADMIN PANEL — to'liq versiya"""
-import asyncio, logging, json
+"""👑 ADMIN PANEL"""
+import json, logging
+from datetime import datetime, timezone
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, BufferedInputFile
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardButton
-from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest
 
 from config import ADMIN_IDS
-from utils.db import get_all_users, get_all_tests, block_user, delete_test, get_test
-from utils.ram_cache import get_daily, clear_daily, refresh_tests, stats as ram_stats
+from utils import ram_cache as ram
+from utils.db import get_all_users, get_all_tests, block_user
+from keyboards.keyboards import admin_kb, main_kb
 from utils.states import AdminPanel
-from keyboards.keyboards import main_kb, admin_kb
 
 log    = logging.getLogger(__name__)
 router = Router()
+UTC    = timezone.utc
 
 
-def _is_admin(uid): return uid in ADMIN_IDS
+def is_admin(uid): return uid in ADMIN_IDS
 
 
-# ══ 1. PANEL KIRISH ════════════════════════════════════
+# ── Kirish ────────────────────────────────────────────────────
 
 @router.message(F.text == "👑 Admin Panel")
-async def admin_panel_msg(message: Message, state: FSMContext):
-    await state.clear()
-    if not _is_admin(message.from_user.id): return
-    await message.answer(
-        "<b>👑 ADMIN PANEL</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "Bo'limdan birini tanlang:",
-        reply_markup=admin_kb()
+@router.message(Command("admin"))
+async def admin_panel(message: Message):
+    if not is_admin(message.from_user.id):
+        return await message.answer("🚫 Ruxsat yo'q.")
+    await _show_admin(message)
+
+async def _show_admin(msg_or_cb, edit=False):
+    st    = ram.stats()
+    tests = ram.get_tests_meta()
+    users = ram.get_users()
+    text  = (
+        f"👑 <b>ADMIN PANEL</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📋 Testlar: <b>{len(tests)}</b>\n"
+        f"👥 Foydalanuvchilar: <b>{len(users)}</b>\n"
+        f"📊 Kunlik natijalar: <b>{st.get('daily_r',0)}</b>\n"
+        f"💾 Cached savollar: <b>{st.get('cached_q',0)}</b>\n"
+        f"🧠 RAM: <b>{st.get('mb',0)} MB ({st.get('pct',0)}%)</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     )
+    try:
+        if edit and hasattr(msg_or_cb, 'message'):
+            await msg_or_cb.message.edit_text(text, reply_markup=admin_kb())
+        elif edit:
+            await msg_or_cb.edit_text(text, reply_markup=admin_kb())
+        else:
+            await msg_or_cb.answer(text, reply_markup=admin_kb())
+    except TelegramBadRequest:
+        target = msg_or_cb.message if hasattr(msg_or_cb, 'message') else msg_or_cb
+        await target.answer(text, reply_markup=admin_kb())
+
 
 @router.callback_query(F.data == "admin_panel")
-async def admin_panel_cb(callback: CallbackQuery, state: FSMContext):
-    if not _is_admin(callback.from_user.id):
-        return await callback.answer("🚫 Ruxsat yo'q!", show_alert=True)
-    await state.clear()
+async def admin_panel_cb(callback: CallbackQuery):
     await callback.answer()
-    try:
-        await callback.message.edit_text(
-            "<b>👑 ADMIN PANEL</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            "Bo'limdan birini tanlang:",
-            reply_markup=admin_kb()
-        )
-    except TelegramBadRequest:
-        pass
+    if not is_admin(callback.from_user.id):
+        return await callback.answer("🚫 Ruxsat yo'q!", show_alert=True)
+    await _show_admin(callback, edit=True)
 
 
-# ══ 2. STATISTIKA ══════════════════════════════════════
+# ── Statistika ────────────────────────────────────────────────
 
 @router.callback_query(F.data == "admin_stats")
 async def admin_stats(callback: CallbackQuery):
-    if not _is_admin(callback.from_user.id):
-        return await callback.answer("🚫", show_alert=True)
-    await callback.answer("⏳")
+    await callback.answer()
+    if not is_admin(callback.from_user.id): return
 
-    s       = ram_stats()
-    users   = get_all_users()
-    tests   = get_all_tests()
-    blocked = sum(1 for u in users if u.get("is_blocked"))
-    scores  = [u.get("avg_score", 0) for u in users if u.get("total_tests", 0) > 0]
-    avg_sc  = round(sum(scores) / len(scores), 1) if scores else 0.0
-    pass_r  = round(sum(1 for sc in scores if sc >= 60) / len(scores) * 100, 1) if scores else 0.0
+    st    = ram.stats()
+    users = ram.get_users()
+    tests = ram.get_tests_meta()
+    daily = ram.get_daily()
 
-    from utils import tg_db
-    tg_info = tg_db.get_index_info() if tg_db.ready() else {}
-
+    active_today = sum(
+        1 for uid_str, d in daily.items()
+        if d.get("by_test") and any(
+            e.get("attempts",0) > 0 for e in d["by_test"].values()
+        )
+    )
+    total_attempts = sum(
+        sum(e.get("attempts",0) for e in d.get("by_test",{}).values())
+        for d in daily.values()
+    )
     text = (
-        f"📈 <b>TIZIM STATISTIKASI</b>\n"
+        f"📈 <b>STATISTIKA</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"👥 Foydalanuvchilar: <b>{len(users)} ta</b>\n"
-        f"🔴 Bloklangan: <b>{blocked} ta</b>\n"
-        f"📋 Testlar: <b>{len(tests)} ta</b>\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 O'rtacha natija: <b>{avg_sc}%</b>\n"
-        f"✅ Muvaffaqiyat (≥60%): <b>{pass_r}%</b>\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"💾 RAM: <b>{s['mb']} MB</b> ({s['pct']}%)\n"
-        f"📋 Test meta: <b>{s['tests']} ta</b>\n"
-        f"🔵 Savollar cache: <b>{s.get('cached_q', 0)} ta</b>\n"
-        f"👥 Userlar: <b>{s['users']} ta</b>\n"
-        f"📊 Kunlik natijalar: <b>{s['daily_r']} ta</b>\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📡 TG Kanal: {'✅ Ulangan' if tg_db.ready() else '❌ Ulanmagan'}\n"
-        f"💾 Backuplar: <b>{tg_info.get('backups', 0)} ta</b>"
+        f"👥 Jami userlar: <b>{len(users)}</b>\n"
+        f"📋 Jami testlar: <b>{len(tests)}</b>\n\n"
+        f"<b>BUGUN:</b>\n"
+        f"  👤 Faol userlar: <b>{active_today}</b>\n"
+        f"  🔄 Jami urinishlar: <b>{total_attempts}</b>\n\n"
+        f"<b>RAM:</b>\n"
+        f"  💾 {st.get('mb',0)} MB ({st.get('pct',0)}%)\n"
+        f"  📦 {st.get('cached_q',0)} ta savollar cache\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     )
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="🔄 Yangilash", callback_data="admin_stats"))
-    b.row(InlineKeyboardButton(text="◀️ Panel", callback_data="admin_panel"))
-    try:
-        await callback.message.edit_text(text, reply_markup=b.as_markup())
-    except TelegramBadRequest:
-        await callback.message.answer(text, reply_markup=b.as_markup())
+    b.row(InlineKeyboardButton(text="⬅️ Admin Panel", callback_data="admin_panel"))
+    try: await callback.message.edit_text(text, reply_markup=b.as_markup())
+    except TelegramBadRequest: await callback.message.answer(text, reply_markup=b.as_markup())
 
 
-# ══ 3. FOYDALANUVCHILAR ════════════════════════════════
+# ── Userlar ───────────────────────────────────────────────────
 
-@router.callback_query(F.data == "admin_users")
+@router.callback_query(F.data.startswith("admin_users"))
 async def admin_users(callback: CallbackQuery):
-    if not _is_admin(callback.from_user.id):
-        return await callback.answer("🚫", show_alert=True)
-    await callback.answer("⏳")
+    await callback.answer()
+    if not is_admin(callback.from_user.id): return
 
     users = get_all_users()
-    if not users:
-        b = InlineKeyboardBuilder()
-        b.row(InlineKeyboardButton(text="◀️ Panel", callback_data="admin_panel"))
-        return await callback.message.answer("❌ Foydalanuvchilar yo'q.", reply_markup=b.as_markup())
+    page  = int(callback.data.split("_")[-1]) if callback.data != "admin_users" else 0
+    PG    = 8
+    total = (len(users)+PG-1)//PG
+    page  = max(0, min(page, total-1))
+    chunk = users[page*PG:(page+1)*PG]
 
-    lines = ["ID | ISM | TESTLAR | O'RTACHA | HOLAT", "─" * 55]
-    for u in users:
-        uid   = u.get("tg_id") or u.get("telegram_id", "?")
-        name  = u.get("name", "Ismsiz")[:20]
-        tc    = u.get("total_tests", 0)
-        avg   = round(u.get("avg_score", 0), 1)
-        holat = "🔴 Bloklangan" if u.get("is_blocked") else "🟢 Faol"
-        lines.append(f"{uid} | {name} | {tc} | {avg}% | {holat}")
-
-    doc = BufferedInputFile("\n".join(lines).encode("utf-8"), filename="Foydalanuvchilar.txt")
-    await callback.message.answer_document(
-        doc,
-        caption=f"<b>👥 FOYDALANUVCHILAR</b>\nJami: <b>{len(users)} ta</b>"
+    text = (
+        f"👥 <b>FOYDALANUVCHILAR</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Sahifa {page+1}/{total} | Jami: {len(users)}\n\n"
     )
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="🚫 Bloklash/Ochish", callback_data="admin_block"))
-    b.row(InlineKeyboardButton(text="◀️ Panel", callback_data="admin_panel"))
-    await callback.message.answer("Qo'shimcha amallar:", reply_markup=b.as_markup())
+    for u in chunk:
+        uid   = u.get("telegram_id","")
+        name  = u.get("name","?")[:15]
+        role  = "👑" if uid in ADMIN_IDS else ("🚫" if u.get("is_blocked") else "👤")
+        tt    = u.get("total_tests",0)
+        avg   = round(u.get("avg_score",0),1)
+        text += f"{role} <b>{name}</b> | {tt} test | {avg}%\n<code>{uid}</code>\n\n"
+        b.row(
+            InlineKeyboardButton(text=f"{'🔓' if u.get('is_blocked') else '🔒'} Block",
+                                 callback_data=f"block_{uid}_{1 if not u.get('is_blocked') else 0}"),
+        )
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"admin_users_{page-1}"))
+    if page < total-1:
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"admin_users_{page+1}"))
+    if nav: b.row(*nav)
+    b.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data="admin_panel"))
+    try: await callback.message.edit_text(text, reply_markup=b.as_markup())
+    except TelegramBadRequest: await callback.message.answer(text, reply_markup=b.as_markup())
 
 
-# ══ 4. TESTLAR ═════════════════════════════════════════
+@router.callback_query(F.data.startswith("block_"))
+async def block_cb(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        return await callback.answer("🚫", show_alert=True)
+    parts   = callback.data.split("_")
+    uid     = int(parts[1])
+    blocked = parts[2] == "1"
+    block_user(uid, blocked)
+    await callback.answer(f"{'🚫 Bloklandi' if blocked else '✅ Blok ochildi'}")
+    await admin_users(callback)
+
+
+# ── Testlar (admin) ───────────────────────────────────────────
 
 @router.callback_query(F.data == "admin_tests")
 async def admin_tests(callback: CallbackQuery):
-    if not _is_admin(callback.from_user.id):
-        return await callback.answer("🚫", show_alert=True)
-    await callback.answer("⏳")
-
-    tests = get_all_tests()
-    if not tests:
-        b = InlineKeyboardBuilder()
-        b.row(InlineKeyboardButton(text="◀️ Panel", callback_data="admin_panel"))
-        return await callback.message.answer("❌ Testlar yo'q.", reply_markup=b.as_markup())
-
-    lines = ["KOD | FAN | MAVZU | SAVOLLAR | ISHLANGAN", "─" * 55]
-    for t in tests:
-        tid   = t.get("test_id", "?")
-        cat   = t.get("category", "Boshqa")[:15]
-        title = t.get("title", "Nomsiz")[:25]
-        qc    = t.get("question_count", len(t.get("questions", [])))
-        sc    = t.get("solve_count", 0)
-        lines.append(f"{tid} | {cat} | {title} | {qc} ta | {sc} marta")
-
-    doc = BufferedInputFile("\n".join(lines).encode("utf-8"), filename="Testlar.txt")
-    await callback.message.answer_document(
-        doc,
-        caption=f"<b>📋 TESTLAR</b>\nJami: <b>{len(tests)} ta</b>"
-    )
-    b = InlineKeyboardBuilder()
-    for t in tests[:8]:
-        tid   = t.get("test_id", "")
-        title = t.get("title", "Nomsiz")[:20]
-        b.row(InlineKeyboardButton(
-            text=f"📄 {title} [{tid}]",
-            callback_data=f"admin_dl_{tid}"
-        ))
-    b.row(InlineKeyboardButton(text="🗑 Test o'chirish", callback_data="admin_del_test"))
-    b.row(InlineKeyboardButton(text="◀️ Panel", callback_data="admin_panel"))
-    await callback.message.answer("<b>📄 Test TXT yuklab olish:</b>", reply_markup=b.as_markup())
-
-
-@router.callback_query(F.data.startswith("admin_dl_"))
-async def admin_download_test(callback: CallbackQuery):
-    if not _is_admin(callback.from_user.id):
-        return await callback.answer("🚫", show_alert=True)
-    await callback.answer("⏳ TXT tayyorlanmoqda...")
-    tid  = callback.data[9:]
-    from utils.db import get_test_full as _gtf
-    test = await _gtf(tid)
-    if not test: test = get_test(tid)
-    if not test:
-        return await callback.message.answer("❌ Test topilmadi.")
-    from handlers.profile import _test_to_txt
-    txt = _test_to_txt(test)
-    doc = BufferedInputFile(txt.encode("utf-8"), filename=f"{test.get('title', tid)}.txt")
-    await callback.message.answer_document(
-        doc,
-        caption=f"📄 <b>{test.get('title')}</b>\n📋 {len(test.get('questions', []))} savol\n🆔 <code>{tid}</code>"
-    )
-
-
-# ══ 5. BROADCAST ═══════════════════════════════════════
-
-@router.callback_query(F.data == "admin_broadcast")
-async def broadcast_start(callback: CallbackQuery, state: FSMContext):
-    if not _is_admin(callback.from_user.id):
-        return await callback.answer("🚫", show_alert=True)
     await callback.answer()
+    if not is_admin(callback.from_user.id): return
+
+    tests = ram.get_all_tests_meta()
+    text  = (
+        f"📋 <b>BARCHA TESTLAR</b> ({len(tests)} ta)\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    )
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="❌ Bekor qilish", callback_data="admin_panel"))
+    for t in tests[:15]:
+        tid    = t.get("test_id","")
+        title  = t.get("title","?")[:20]
+        sc     = t.get("solve_count",0)
+        active = t.get("is_active",True)
+        paused = t.get("is_paused",False)
+        icon   = "🗑" if not active else ("⏸" if paused else "✅")
+        text += f"{icon} <b>{title}</b> [{tid}] | 👥{sc}\n"
+        b.row(
+            InlineKeyboardButton(text=f"🗑 O'chirish {tid}",
+                                 callback_data=f"del_test_{tid}"),
+            InlineKeyboardButton(text=f"{'▶️' if paused else '⏸'} {tid}",
+                                 callback_data=f"{'test_resume' if paused else 'test_pause'}_{tid}"),
+        )
+    if len(tests) > 15:
+        text += f"\n<i>...va yana {len(tests)-15} ta test</i>"
+    b.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data="admin_panel"))
+    try: await callback.message.edit_text(text, reply_markup=b.as_markup())
+    except TelegramBadRequest: await callback.message.answer(text, reply_markup=b.as_markup())
+
+
+@router.callback_query(F.data.startswith("del_test_"))
+async def del_test_confirm(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        return await callback.answer("🚫", show_alert=True)
+    tid  = callback.data[9:]
+    meta = ram.get_test_meta(tid)
+    if not meta:
+        return await callback.answer("❌ Test topilmadi.", show_alert=True)
+
+    b = InlineKeyboardBuilder()
+    b.row(
+        InlineKeyboardButton(text="✅ Ha, o'chirish", callback_data=f"del_confirm_{tid}"),
+        InlineKeyboardButton(text="❌ Yo'q",          callback_data="admin_tests"),
+    )
     try:
         await callback.message.edit_text(
-            "<b>📢 BARCHA FOYDALANUVCHILARGA XABAR</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            "Xabaringizni yozing:\n"
-            "<i>(matn, rasm, video, fayl qabul qilinadi)</i>",
+            f"⚠️ <b>O'CHIRISH TASDIQLASH</b>\n\n"
+            f"📝 {meta.get('title','?')} [{tid}]\n\n"
+            f"O'chirishdan avval <b>TG ga backup yuboriladi</b>.\n"
+            f"Bu amalni qaytarib bo'lmaydi!",
             reply_markup=b.as_markup()
         )
     except TelegramBadRequest:
-        pass
+        await callback.message.answer(
+            f"⚠️ {meta.get('title','?')} [{tid}] ni o'chirilsinmi?",
+            reply_markup=b.as_markup()
+        )
+
+@router.callback_query(F.data.startswith("del_confirm_"))
+async def del_test_exec(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        return await callback.answer("🚫", show_alert=True)
+    tid = callback.data[12:]
+    await callback.answer("⏳ O'chirilmoqda...")
+    from utils.db import delete_test
+    await delete_test(tid)
+    try:
+        await callback.message.edit_text(
+            f"✅ Test [{tid}] o'chirildi va TG ga backup yuborildi."
+        )
+    except Exception: pass
+
+
+# ── Broadcast ─────────────────────────────────────────────────
+
+@router.callback_query(F.data == "admin_broadcast")
+async def broadcast_start(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    if not is_admin(callback.from_user.id): return
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="❌ Bekor", callback_data="admin_panel"))
+    try:
+        await callback.message.edit_text(
+            "📢 <b>BROADCAST</b>\n\nYubormoqchi bo'lgan xabarni yozing:",
+            reply_markup=b.as_markup()
+        )
+    except TelegramBadRequest:
+        await callback.message.answer("📢 Xabarni yozing:", reply_markup=b.as_markup())
     await state.set_state(AdminPanel.broadcast)
 
 @router.message(AdminPanel.broadcast)
 async def broadcast_send(message: Message, state: FSMContext):
-    if not _is_admin(message.from_user.id): return
-    status = await message.answer("⏳ Tarqatish boshlandi...")
-    users  = get_all_users()
-    ok = fail = 0
-    for u in users:
-        uid = u.get("tg_id") or u.get("telegram_id")
-        if not uid or u.get("is_blocked"): continue
-        try:
-            await message.bot.copy_message(uid, message.chat.id, message.message_id)
-            ok += 1
-        except TelegramForbiddenError:
-            block_user(uid, True); fail += 1
-        except Exception:
-            fail += 1
-        await asyncio.sleep(0.05)
-    await state.clear()
-    await status.edit_text(
-        f"<b>✅ TARQATISH YAKUNLANDI</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🟢 Muvaffaqiyatli: <b>{ok} ta</b>\n"
-        f"🔴 Yetkazilmadi: <b>{fail} ta</b>"
-    )
-
-
-# ══ 6. BLOKLASH ════════════════════════════════════════
-
-@router.callback_query(F.data == "admin_block")
-async def block_start(callback: CallbackQuery, state: FSMContext):
-    if not _is_admin(callback.from_user.id): return
-    await callback.answer()
-    b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="❌ Bekor qilish", callback_data="admin_panel"))
-    try:
-        await callback.message.edit_text(
-            "<b>🚫 BLOKLASH / OCHISH</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            "Foydalanuvchi <b>Telegram ID</b> ni yuboring:",
-            reply_markup=b.as_markup()
-        )
-    except TelegramBadRequest:
-        pass
-    await state.set_state(AdminPanel.block_user)
-
-@router.message(AdminPanel.block_user)
-async def block_process(message: Message, state: FSMContext):
-    if not _is_admin(message.from_user.id): return
-    t = message.text.strip().lstrip("-")
-    if not t.isdigit():
-        return await message.answer("❌ Faqat Telegram ID raqam kiriting.")
-    uid   = int(t)
+    if not is_admin(message.from_user.id): return
     users = get_all_users()
-    user  = next((u for u in users
-                  if (u.get("tg_id") or u.get("telegram_id")) == uid), None)
-    if not user:
-        return await message.answer("❌ Foydalanuvchi topilmadi.")
-    new_status = not user.get("is_blocked", False)
-    block_user(uid, new_status)
+    ok = err = 0
+    for u in users:
+        uid = u.get("telegram_id")
+        if uid and not u.get("is_blocked"):
+            try:
+                await message.copy_to(uid)
+                ok += 1
+            except Exception:
+                err += 1
     await state.clear()
-    txt = "🔴 BLOKLANDI" if new_status else "🟢 BLOKDAN CHIQARILDI"
     await message.answer(
-        f"<b>✅ BAJARILDI</b>\n"
-        "👤 " + str(user.get("name", "Noma'lum")) + "\n"
-        f"🆔 <code>{uid}</code>\n"
-        f"Holat: <b>{txt}</b>"
+        f"✅ Broadcast yakunlandi!\n✅ Muvaffaqiyatli: {ok}\n❌ Xato: {err}",
+        reply_markup=admin_kb()
     )
 
 
-# ══ 7. TEST O'CHIRISH ══════════════════════════════════
-
-@router.callback_query(F.data == "admin_del_test")
-async def del_test_start(callback: CallbackQuery, state: FSMContext):
-    if not _is_admin(callback.from_user.id): return
-    await callback.answer()
-    b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="❌ Bekor qilish", callback_data="admin_panel"))
-    try:
-        await callback.message.edit_text(
-            "<b>🗑 TESTNI O'CHIRISH</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            "Test <b>KODINI</b> yuboring:\n"
-            "<i>⚠️ Bu amalni qaytarib bo'lmaydi! RAM + TG kanaldan o'chiriladi.</i>",
-            reply_markup=b.as_markup()
-        )
-    except TelegramBadRequest:
-        pass
-    await state.set_state(AdminPanel.delete_test)
-
-@router.message(AdminPanel.delete_test)
-async def del_test_process(message: Message, state: FSMContext):
-    if not _is_admin(message.from_user.id): return
-    tid  = message.text.strip().upper()
-    test = get_test(tid)
-    if not test:
-        return await message.answer("❌ Bu kodli test topilmadi.")
-
-    # RAM dan o'chirish
-    import utils.ram_cache as ram
-    ram.delete_test_from_ram(tid)
-
-    # TG kanaldan o'chirish
-    await delete_test(tid)
-
-    await state.clear()
-    await message.answer(
-        f"<b>✅ TEST TO'LIQ O'CHIRILDI</b>\n"
-        f"🗑 Kod: <code>{tid}</code>\n"
-        f"📝 Mavzu: {test.get('title', '?')}\n\n"
-        f"<i>RAM va TG kanaldan o'chirildi.</i>"
-    )
-
-
-# ══ 8. RAM FLUSH (RAM → TG) ════════════════════════════
+# ── Flush (RAM → TG) ──────────────────────────────────────────
 
 @router.callback_query(F.data == "adm_flush")
-async def admin_flush(callback: CallbackQuery):
-    if not _is_admin(callback.from_user.id):
-        return await callback.answer("🚫", show_alert=True)
-    await callback.answer("⏳")
-    status_msg = await callback.message.answer("⏳ RAM → TG yuborilmoqda...")
+async def adm_flush(callback: CallbackQuery):
+    await callback.answer("⏳ Yuklanmoqda...")
+    if not is_admin(callback.from_user.id): return
+
+    from utils import tg_db
+    daily    = ram.get_daily()
+    users    = ram.get_users()
+    settings = ram.get_all_settings()
+
+    results = await tg_db.manual_flush(daily, users, settings)
+    ram.clear_users_dirty()
+
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="⬅️ Admin Panel", callback_data="admin_panel"))
     try:
-        from utils import tg_db
-        from utils import ram_cache as ram
-        from datetime import date, datetime
-
-        if not tg_db.ready():
-            return await status_msg.edit_text("❌ TG kanal ulanmagan.")
-
-        results = []
-
-        # Userlar
-        users = ram.get_users()
-        ok2   = await tg_db.save_users(users)
-        if ok2: ram.clear_users_dirty()
-        results.append(f"{'✅' if ok2 else '❌'} Userlar: {len(users)} ta")
-
-        # Settings
-        settings = ram.get_all_settings()
-        if settings:
-            ok_s = await tg_db.save_settings(settings)
-            results.append(f"{'✅' if ok_s else '❌'} Settings: {len(settings)} ta")
-
-        # Backup
-        daily = ram.get_daily()
-        if daily:
-            today = str(date.today())
-            slot  = "12" if datetime.now().hour >= 12 else "00"
-            mid   = await tg_db.upload_backup(daily, today, slot)
-            if mid:
-                results.append(f"✅ Backup ({today}_{slot}): {len(daily)} user")
-            else:
-                results.append("❌ Backup xato!")
-        else:
-            results.append("ℹ️ Kunlik natijalar bo'sh")
-
-        await status_msg.edit_text(
-            f"<b>✅ RAM FLUSH NATIJASI</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            + "\n".join(results)
+        await callback.message.edit_text(
+            f"💾 <b>FLUSH NATIJASI</b>\n\n" + "\n".join(results),
+            reply_markup=b.as_markup()
         )
-    except Exception as e:
-        await status_msg.edit_text(f"❌ Flush xatosi: {e}")
+    except TelegramBadRequest:
+        await callback.message.answer(
+            "💾 Flush:\n" + "\n".join(results), reply_markup=b.as_markup()
+        )
 
 
-# ══ 9. TG → RAM REFRESH ════════════════════════════════
+# ── TG → RAM (Refresh) ────────────────────────────────────────
 
 @router.callback_query(F.data == "adm_refresh")
-async def admin_refresh(callback: CallbackQuery):
-    if not _is_admin(callback.from_user.id):
-        return await callback.answer("🚫", show_alert=True)
-    await callback.answer("⏳")
-    status = await callback.message.answer("⏳ TG → RAM yangilanmoqda...")
+async def adm_refresh(callback: CallbackQuery):
+    await callback.answer("🔄 Yangilanmoqda...")
+    if not is_admin(callback.from_user.id): return
+
+    from utils import tg_db
+    ram.clear_expired_cache()
+
+    tests = await tg_db.get_tests()
+    if tests:
+        ram.set_tests_meta(tests) if all("questions" not in t for t in tests) else None
+        ram.set_tests(tests)
+
+    users = await tg_db.get_users()
+    if users: ram.set_users(users)
+
+    st = ram.stats()
+    b  = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="⬅️ Admin Panel", callback_data="admin_panel"))
     try:
-        from utils import tg_db
-        from utils import ram_cache as ram
-        if not tg_db.ready():
-            return await status.edit_text("❌ TG kanal ulanmagan.")
-
-        tests = await tg_db.get_tests()
-        if tests: ram.set_tests(tests)
-
-        users = await tg_db.get_users()
-        if users: ram.set_users(users)
-
-        settings = await tg_db.get_settings_tg()
-        if settings: ram.set_all_settings(settings)
-
-        ram.clear_expired_cache()
-        info = tg_db.get_index_info()
-
-        await status.edit_text(
-            f"✅ <b>Cache yangilandi!</b>\n"
-            f"📋 {len(tests) if tests else 0} test meta\n"
-            f"👥 {len(users) if users else 0} user\n"
-            f"⚙️ {len(settings) if settings else 0} settings\n"
-            f"💾 Backup: {info.get('backups', 0)} ta"
+        await callback.message.edit_text(
+            f"✅ <b>YANGILANDI</b>\n\n"
+            f"📋 Testlar: {st['tests']}\n"
+            f"👥 Userlar: {st['users']}\n"
+            f"💾 RAM: {st['mb']} MB",
+            reply_markup=b.as_markup()
         )
-    except Exception as e:
-        await status.edit_text(f"❌ Xato: {e}")
+    except TelegramBadRequest:
+        await callback.message.answer("✅ Yangilandi.", reply_markup=b.as_markup())
 
 
-# ══ 10. JSON EXPORT ════════════════════════════════════
+# ── JSON Export ───────────────────────────────────────────────
 
 @router.callback_query(F.data == "adm_export_json")
-async def admin_export_json(callback: CallbackQuery):
-    """To'liq bazani JSON fayl sifatida yuborish"""
-    if not _is_admin(callback.from_user.id):
-        return await callback.answer("🚫", show_alert=True)
+async def adm_export_json(callback: CallbackQuery):
     await callback.answer("⏳ JSON tayyorlanmoqda...")
-    status = await callback.message.answer("⏳ <b>JSON fayl tayyorlanmoqda...</b>")
+    if not is_admin(callback.from_user.id): return
 
-    try:
-        from utils import ram_cache as ram
-        from utils import tg_db
-        from datetime import datetime, timezone
-
-        # RAM dan to'liq ma'lumotlar
-        export_data = {
-            "exported_at": str(datetime.now(timezone.utc)),
-            "tests_meta":  ram.get_tests_meta(),
-            "users":       ram.get_users(),
-            "settings":    ram.get_all_settings(),
-            "daily_results": ram.get_daily(),
-            "tg_index":    tg_db.get_index_info() if tg_db.ready() else {},
-            "backup_dates": tg_db.get_backup_dates() if tg_db.ready() else [],
-        }
-
-        raw = json.dumps(export_data, ensure_ascii=False, default=str, indent=2).encode("utf-8")
-        doc = BufferedInputFile(raw, filename=f"quizbot_export_{datetime.now().strftime('%Y%m%d_%H%M')}.json")
-
-        await status.delete()
-        await callback.message.answer_document(
-            doc,
-            caption=(
-                f"💾 <b>TO'LIQ BAZA EXPORT</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"📋 Testlar: <b>{len(export_data['tests_meta'])} ta</b>\n"
-                f"👥 Userlar: <b>{len(export_data['users'])} ta</b>\n"
-                f"📊 Kunlik: <b>{len(export_data['daily_results'])} user</b>\n\n"
-                f"<i>Bu faylni saqlang — backup uchun ishlatiladi.</i>"
-            )
+    from utils import tg_db
+    export_data = {
+        "exported_at": str(datetime.now(UTC)),
+        "tests_meta":  ram.get_tests_meta(),
+        "users":       ram.get_users(),
+        "settings":    ram.get_all_settings(),
+        "daily":       ram.get_daily(),
+        "tg_index":    tg_db.get_index_info() if tg_db.ready() else {},
+        "backup_dates":tg_db.get_backup_dates() if tg_db.ready() else [],
+    }
+    raw = json.dumps(export_data, ensure_ascii=False, default=str, indent=2).encode()
+    doc = BufferedInputFile(raw, filename="quizbot_export.json")
+    await callback.message.answer_document(
+        doc,
+        caption=(
+            f"💾 <b>FULL EXPORT</b>\n"
+            f"📋 {len(export_data['tests_meta'])} test\n"
+            f"👥 {len(export_data['users'])} user\n"
+            f"📅 {export_data['exported_at'][:16]}"
         )
-    except Exception as e:
-        await status.edit_text(f"❌ Export xatosi: {e}")
+    )
+
+
+# ── Backuplar ─────────────────────────────────────────────────
+
+@router.callback_query(F.data == "adm_backups")
+async def adm_backups(callback: CallbackQuery):
+    await callback.answer()
+    if not is_admin(callback.from_user.id): return
+
+    from utils import tg_db
+    dates = tg_db.get_backup_dates() if tg_db.ready() else []
+    if not dates:
+        b = InlineKeyboardBuilder()
+        b.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data="admin_panel"))
+        try: await callback.message.edit_text("📦 Backuplar yo'q.", reply_markup=b.as_markup())
+        except TelegramBadRequest: pass
+        return
+
+    text = f"🗂 <b>BACKUPLAR</b> ({len(dates)} ta)\n\n"
+    b    = InlineKeyboardBuilder()
+    for d in dates[:10]:
+        text += f"📅 {d}\n"
+        b.row(InlineKeyboardButton(text=f"📥 {d}", callback_data=f"dl_backup_{d}"))
+    b.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data="admin_panel"))
+    try: await callback.message.edit_text(text, reply_markup=b.as_markup())
+    except TelegramBadRequest: await callback.message.answer(text, reply_markup=b.as_markup())
+
+@router.callback_query(F.data.startswith("dl_backup_"))
+async def dl_backup(callback: CallbackQuery):
+    await callback.answer("⏳ Yuklanmoqda...")
+    if not is_admin(callback.from_user.id): return
+
+    from utils import tg_db
+    date_str = callback.data[10:]
+    data = await tg_db.get_backup(date_str)
+    if not data:
+        return await callback.answer("❌ Backup topilmadi.", show_alert=True)
+    raw = json.dumps(data, ensure_ascii=False, default=str, indent=2).encode()
+    doc = BufferedInputFile(raw, filename=f"backup_{date_str}.json")
+    await callback.message.answer_document(
+        doc, caption=f"📦 Backup: {date_str}"
+    )

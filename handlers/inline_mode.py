@@ -1,4 +1,4 @@
-"""📤 INLINE MODE — Testni istalgan chatga yuborish"""
+"""📤 INLINE MODE — Test ulashish: 3 ta tugma"""
 import logging
 from aiogram import Router, F
 from aiogram.types import (InlineQuery, InlineQueryResultArticle,
@@ -18,7 +18,7 @@ async def inline_handler(query: InlineQuery):
     bot_info     = await query.bot.me()
     bot_username = bot_info.username
 
-    # "test_XXXXX" formatini tekshirish
+    # "test_XXXXX" — to'g'ridan
     if text.startswith("test_"):
         tid  = text[5:].upper()
         test = get_test_by_id(tid) or await get_test_full(tid)
@@ -28,10 +28,11 @@ async def inline_handler(query: InlineQuery):
                 cache_time=0, is_personal=True
             )
 
-    # Barcha ommaviy testlar
+    # Barcha ommaviy + link testlar
     all_metas = [t for t in get_tests_meta()
                  if t.get("is_active", True)
-                 and t.get("visibility") in ("public", "link")]
+                 and t.get("visibility") in ("public", "link")
+                 and not t.get("is_paused", False)]
 
     if text:
         all_metas = [t for t in all_metas
@@ -39,20 +40,16 @@ async def inline_handler(query: InlineQuery):
                      or text in t.get("category", "").lower()
                      or text in t.get("test_id", "").lower()]
 
-    results = []
-    for meta in all_metas[:20]:
-        tid  = meta.get("test_id", "")
-        test = get_test_by_id(tid) or meta
-        results.append(_make_result(test, bot_username))
+    results = [_make_result(get_test_by_id(t["test_id"]) or t, bot_username)
+               for t in all_metas[:20]]
 
     if not results:
         results = [InlineQueryResultArticle(
-            id="empty_result",
+            id="empty",
             title="❌ Test topilmadi",
-            description="Boshqa so'z bilan qidiring yoki test kodini kiriting",
+            description="Boshqa so'z bilan qidiring",
             input_message_content=InputTextMessageContent(
-                message_text="❌ Test topilmadi."
-            )
+                message_text="❌ Test topilmadi.")
         )]
 
     await query.answer(results, cache_time=0, is_personal=True)
@@ -65,19 +62,13 @@ def _make_result(test: dict, bot_username: str) -> InlineQueryResultArticle:
     qc    = len(test.get("questions", [])) or test.get("question_count", 0)
     sc    = test.get("solve_count", 0)
     pt    = test.get("poll_time", 30)
-    pt_t  = f"{pt}s/savol" if pt else "Cheksiz"
 
     diff_map = {
-        "easy":   "🟢 Oson",
-        "medium": "🟡 O'rtacha",
-        "hard":   "🔴 Qiyin",
-        "expert": "⚡ Ekspert",
+        "easy":   "🟢 Oson", "medium": "🟡 O'rtacha",
+        "hard":   "🔴 Qiyin", "expert": "⚡ Ekspert",
     }
     diff = diff_map.get(test.get("difficulty", ""), "🟡 O'rtacha")
-
-    base      = f"https://t.me/{bot_username}"
-    link_test = f"{base}?start={tid}"
-    link_poll = f"{base}?start=poll_{tid}"
+    base = f"https://t.me/{bot_username}"
 
     msg_text = (
         f"📝 <b>{title}</b>\n"
@@ -85,25 +76,25 @@ def _make_result(test: dict, bot_username: str) -> InlineQueryResultArticle:
         f"📁 Fan: <b>{cat}</b>\n"
         f"📊 Qiyinlik: {diff}\n"
         f"📋 Savollar: <b>{qc} ta</b>\n"
-        f"⏱ Savol vaqti: {pt_t}\n"
+        f"⏱ Poll vaqti: {pt}s/savol\n"
         f"🎯 O'tish foizi: <b>{test.get('passing_score', 60)}%</b>\n"
         f"👥 Ishlaganlar: <b>{sc} marta</b>\n"
         f"🆔 Kod: <code>{tid}</code>\n\n"
-        f"👇 <b>Boshlash uchun tugmani bosing!</b>"
+        f"👇 <b>Qanday boshlash?</b>"
     )
 
     b = InlineKeyboardBuilder()
-    # Private chat uchun URL tugmalar
+    # 3 ta asosiy tugma:
     b.row(
-        InlineKeyboardButton(text="▶️ Bot orqali boshlash", url=link_test),
-        InlineKeyboardButton(text="📊 Poll rejim",          url=link_poll),
+        InlineKeyboardButton(text="▶️ Inline test",  url=f"{base}?start={tid}"),
+        InlineKeyboardButton(text="📊 Quiz Poll",    url=f"{base}?start=poll_{tid}"),
     )
-    # Guruhda boshlash — callback_data (bot guruhda bo'lsa ishlaydi)
     b.row(
-        InlineKeyboardButton(
-            text="👥 Guruhda boshlash (Poll)",
-            callback_data=f"group_start_{tid}"
-        ),
+        InlineKeyboardButton(text="👥 Guruhda boshlash", callback_data=f"group_start_{tid}"),
+    )
+    b.row(
+        InlineKeyboardButton(text="➕ Shunga o'xshash test yarat",
+                             url=f"{base}?start=create"),
     )
 
     return InlineQueryResultArticle(
@@ -111,8 +102,7 @@ def _make_result(test: dict, bot_username: str) -> InlineQueryResultArticle:
         title=f"📝 {title}",
         description=f"📁 {cat} | 📋 {qc} savol | 👥 {sc} marta",
         input_message_content=InputTextMessageContent(
-            message_text=msg_text,
-            parse_mode="HTML"
+            message_text=msg_text, parse_mode="HTML"
         ),
         reply_markup=b.as_markup(),
     )
