@@ -129,22 +129,13 @@ async def _midnight_flush_loop(bot):
             log.error(f"Flush loop xato: {e}")
 
 
-# ── USERS AUTO FLUSH — har 10 daqiqada (dirty bo'lsa) ─────────
+# ── USERS AUTO FLUSH — o'chirildi
+# Users faqat midnight da yoki yangi user kelganda yuklanadi
+# (test yechilganda TG ga hech narsa yuborilmaydi)
 
 async def _users_auto_flush_loop(bot):
-    await asyncio.sleep(600)
-    while True:
-        try:
-            await asyncio.sleep(600)
-            from utils import tg_db, ram_cache as ram
-            if tg_db.ready() and ram.is_users_dirty():
-                await tg_db.save_users(ram.get_users())
-                ram.clear_users_dirty()
-                log.debug("Users auto-flush")
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            log.error(f"Users flush xato: {e}")
+    """Disabled — users faqat midnight da yuklanadi"""
+    pass
 
 
 # ── CACHE CLEANUP — har 30 daqiqada ──────────────────────────
