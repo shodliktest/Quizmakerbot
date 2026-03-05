@@ -1,4 +1,4 @@
-"""📌 FSM States"""
+"""📌 FSM States — to'liq"""
 from aiogram.fsm.state import State, StatesGroup
 
 class TestSolving(StatesGroup):
@@ -8,9 +8,6 @@ class TestSolving(StatesGroup):
 class PollTest(StatesGroup):
     active = State()
     paused = State()
-
-class GroupTest(StatesGroup):
-    running = State()
 
 class CreateTest(StatesGroup):
     choose_method  = State()
@@ -26,9 +23,10 @@ class CreateTest(StatesGroup):
     set_visibility = State()
 
 class AdminPanel(StatesGroup):
-    broadcast   = State()
-    block_user  = State()
-    delete_test = State()
+    broadcast    = State()
+    block_user   = State()
+    delete_test  = State()
+    test_stats   = State()   # Test statistikasi uchun
 
 class ContactAdmin(StatesGroup):
     waiting_message = State()
