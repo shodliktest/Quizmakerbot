@@ -28,8 +28,8 @@ async def get_or_create_user(tg_id, name, username=None):
         "_just_created": True,
     }
     ram.upsert_user(tg_id, user)
-    # Yangi user — users.json ni darhol TG ga yuklash
-    await _flush_users_to_tg()
+    # Yangi user RAM da saqlanadi, midnight da TG ga yuklanadi
+    ram.mark_users_dirty()
     return user
 
 def update_user(tg_id, data):

@@ -182,6 +182,7 @@ def upsert_user(tg_id, data):
     _set("users_dirty", True)
 
 def is_users_dirty():    return _get("users_dirty", False)
+def mark_users_dirty():  _set("users_dirty", True)
 def clear_users_dirty(): _set("users_dirty", False)
 
 
