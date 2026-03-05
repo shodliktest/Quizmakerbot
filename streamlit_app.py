@@ -401,11 +401,11 @@ if menu == "📊 Dashboard":
                     "Vaqt": str(r.get("completed_at", ""))[:16],
                 })
         if rows:
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, height=220)
+            st.dataframe(pd.DataFrame(rows), width="stretch", height=220)
             # Fan bo'yicha bar chart
             if cat_count:
                 fig = bar_chart(cat_count, "Fan bo'yicha urinishlar")
-                if fig: st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+                if fig: st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
         else:
             st.markdown("""
             <div style='text-align:center;padding:60px;color:#64748b;
@@ -418,7 +418,7 @@ if menu == "📊 Dashboard":
     with right:
         st.markdown("#### 🎯 Javoblar tahlili")
         fig = donut_chart(correct_total, wrong_total, skip_total)
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
 
         total_ans = correct_total + wrong_total + skip_total
         if total_ans > 0:
@@ -582,7 +582,7 @@ elif menu == "📋 Testlar":
         if cats:
             fig = bar_chart(cats, "Fanlari bo'yicha testlar")
             if fig:
-                st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+                st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
 
         st.markdown("#### 📄 Test ro'yxati")
         vis_map = {"public": "🌍", "link": "🔗", "private": "🔒"}
@@ -597,7 +597,7 @@ elif menu == "📋 Testlar":
             "O'rtacha": f"{t.get('avg_score',0):.1f}%",
             "Ko'rinish":vis_map.get(t.get("visibility",""),""),
         } for t in tests])
-        st.dataframe(df, use_container_width=True, height=400)
+        st.dataframe(df, width="stretch", height=400)
         st.caption(f"Jami: {len(tests)} ta test RAM da")
 
 
@@ -638,7 +638,7 @@ elif menu == "👥 Userlar":
                 xaxis=dict(showgrid=True,gridcolor="#1e293b",tickfont={"color":"#64748b"},range=[0,110]),
                 yaxis=dict(showgrid=False,tickfont={"color":"#e2e8f0"}),
             )
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+            st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
 
         st.markdown("#### 👥 Userlar ro'yxati")
         df = pd.DataFrame([{
@@ -649,7 +649,7 @@ elif menu == "👥 Userlar":
             "Holat":    "🚫" if u.get("is_blocked") else "✅",
             "Qo'shildi":str(u.get("created_at",""))[:10],
         } for u in sorted(users, key=lambda x: x.get("total_tests",0), reverse=True)])
-        st.dataframe(df, use_container_width=True, height=400)
+        st.dataframe(df, width="stretch", height=400)
 
 
 # ══ BACKUP ════════════════════════════════════════════════
@@ -790,7 +790,7 @@ elif menu == "🏆 Reyting":
             xaxis=dict(showgrid=True,gridcolor="#1e293b",tickfont={"color":"#64748b"},range=[0,110]),
             yaxis=dict(showgrid=False,tickfont={"color":"#e2e8f0","size":11}),
         )
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
 
         # To'liq jadval
         with st.expander("📋 To'liq ro'yxat"):
@@ -803,4 +803,4 @@ elif menu == "🏆 Reyting":
                     "Testlar": u.get("total_tests",0),
                     "O'rtacha":f"{u.get('avg_score',0):.1f}%",
                 })
-            st.dataframe(pd.DataFrame(rows), use_container_width=True)
+            st.dataframe(pd.DataFrame(rows), width="stretch")
