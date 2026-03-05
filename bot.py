@@ -165,3 +165,29 @@ async def _cache_cleanup_loop():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
+# ── Streamlit uchun background thread ────────────────────────
+
+def run_in_background():
+    """
+    streamlit_app.py tomonidan chaqiriladi.
+    Botni alohida thread da ishga tushiradi.
+    """
+    import threading
+
+    def _run():
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(main())
+        except Exception as e:
+            log.error(f"Bot thread xato: {e}")
+        finally:
+            loop.close()
+
+    t = threading.Thread(target=_run, daemon=True, name="TelegramBot")
+    t.start()
+    log.info("✅ Bot thread ishga tushdi")
+    return t
