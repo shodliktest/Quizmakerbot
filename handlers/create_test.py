@@ -11,6 +11,10 @@ from utils.states import CreateTest
 from utils.db import create_test
 from keyboards.keyboards import subject_kb, difficulty_kb, visibility_kb, main_kb, test_created_kb
 
+def _get_user_subjects(uid):
+    from utils.ram_cache import get_user_custom_subjects
+    return get_user_custom_subjects(uid)
+
 log        = logging.getLogger(__name__)
 router     = Router()
 SAMPLES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "samples")
@@ -456,7 +460,7 @@ async def set_pt(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
         f"⏱ <b>Savol vaqti: {ptt}</b>\n\n"
         f"📁 Qaysi fanga tegishli?",
-        reply_markup=subject_kb()
+        reply_markup=subject_kb(extra_subjects=_get_user_subjects(callback.from_user.id))
     )
     await state.set_state(CreateTest.set_subject)
 
@@ -484,8 +488,12 @@ async def set_subj(callback: CallbackQuery, state: FSMContext):
 
 @router.message(F.text, CreateTest.set_subject)
 async def subj_text(message: Message, state: FSMContext):
-    await state.update_data(category=message.text.strip())
+    subj = message.text.strip()
+    await state.update_data(category=subj)
     await _del(message.bot, message.chat.id, message.message_id)
+    # Maxsus fan nomini RAM ga saqlash
+    from utils.ram_cache import add_user_custom_subject
+    add_user_custom_subject(message.from_user.id, subj)
     await message.answer("<b>🏷 Test nomini yozing:</b>")
     await state.set_state(CreateTest.set_title)
 
@@ -600,42 +608,44 @@ async def save_test(callback: CallbackQuery, state: FSMContext):
         "hard": "🔴 Qiyin", "expert": "⚡ Ekspert"
     }
     diff = diff_map.get(td["difficulty"], "")
+    vis_map = {"public": "🌍 Ommaviy", "link": "🔗 Ssilka", "private": "🔒 Shaxsiy"}
+    vis  = vis_map.get(td["visibility"], "")
 
     await state.clear()
 
-    # Yuklash jarayonidagi xabarlarni o'chirish
-    for mid_key in ("progress_msg_id", "upload_status_id"):
-        d2 = await state.get_data() if mid_key == "upload_status_id" else d
-        old_id = d2.get(mid_key)
-        if old_id:
-            await _del(callback.bot, callback.from_user.id, old_id)
-
-    await callback.message.edit_text(
-        f"🎉 <b>TEST MUVAFFAQIYATLI YARATILDI!</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🆔 Kod: <code>{tid}</code>\n"
-        f"🔗 Ssilka: <code>{link}</code>\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📝 Mavzu: <b>{td['title']}</b>\n"
-        f"📁 Fan: {td['category']}\n"
-        f"📊 Qiyinlik: {diff}\n"
-        f"📋 Savollar: <b>{len(td['questions'])} ta</b>\n"
-        f"⏱ Umumiy vaqt: {tl_t}\n"
-        f"⏱ Poll vaqti: {pt_t}\n"
-        f"🎯 O'tish foizi: <b>{td['passing_score']}%</b>\n\n"
-        f"👇 <b>Quyidagi tugmalar orqali boshlang:</b>",
-        reply_markup=test_created_kb(tid, bu)
-    )
-
-    # Kalit javoblar
+    # Kalit javoblar matni
     qs   = td["questions"]
     keys = (
-        f"🔑 <b>JAVOBLAR KALITI</b>\n"
-        f"<code>{tid}</code>\n"
+        f"🔑 <b>JAVOBLAR KALITI</b> — <code>{tid}</code>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
     )
     for i, q in enumerate(qs, 1):
-        keys += f"<b>{i}.</b> {q.get('correct', '?')}\n"
+        corr = q.get("correct", "?")
+        keys += f"<b>{i}.</b> {corr}\n"
+
+    # Test haqida to'liq ma'lumot + kalit + tugmalar
+    info_text = (
+        "🎉 <b>TEST MUVAFFAQIYATLI YARATILDI!</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🆔 Kod: <code>{tid}</code>\n"
+        f"🔗 Ssilka: <code>{link}</code>\n\n"
+        f"📝 Mavzu: <b>{td['title']}</b>\n"
+        f"📁 Fan: {td['category']}\n"
+        f"📊 Qiyinlik: {diff}\n"
+        f"🔒 Ko'rinish: {vis}\n"
+        f"📋 Savollar: <b>{len(qs)} ta</b>\n"
+        f"⏱ Umumiy vaqt: {tl_t}\n"
+        f"⏱ Poll vaqti: {pt_t}\n"
+        f"🎯 O'tish foizi: <b>{td['passing_score']}%</b>\n\n"
+        "👇 <b>Boshlash usulini tanlang:</b>"
+    )
+
+    try:
+        await callback.message.edit_text(info_text, reply_markup=test_created_kb(tid, bu))
+    except Exception:
+        await callback.message.answer(info_text, reply_markup=test_created_kb(tid, bu))
+
+    # Kalitni alohida xabar sifatida yuborish
     if len(keys) <= 4000:
         await callback.message.answer(keys)
 

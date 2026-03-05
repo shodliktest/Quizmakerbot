@@ -1,4 +1,4 @@
-"""👤 PROFIL, NATIJALAR, TAHLIL"""
+"""👤 PROFIL — Natijalar, Tahlil, Mening testlarim (fan bo'yicha)"""
 import logging
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, BufferedInputFile
@@ -7,19 +7,17 @@ from aiogram.types import InlineKeyboardButton
 from aiogram.exceptions import TelegramBadRequest
 
 from utils.db import (get_user, get_my_tests, get_user_results,
-                      get_analysis, get_test, get_test_full,
-                      get_test_stats_for_user, pause_test, get_test_solvers)
+                      get_analysis, get_test_full, get_test_stats_for_user,
+                      pause_test, get_test_solvers)
 from utils.ram_cache import get_test_by_id, get_test_meta
-from keyboards.keyboards import main_kb, analysis_kb
+from keyboards.keyboards import (main_kb, analysis_kb, mytest_settings_kb, CAT_ICONS)
 
-log             = logging.getLogger(__name__)
-router          = Router()
-PAGE_SIZE_RES   = 7
-PAGE_SIZE_TESTS = 5
+log = logging.getLogger(__name__)
+router = Router()
+PAGE_RES = 7
 
 
-# ══ 1. PROFIL ══════════════════════════════════════════════════
-
+# ══ PROFIL ═════════════════════════════════════════════════════
 @router.message(F.text == "👤 Profil")
 async def profile_msg(message: Message):
     await _show_profile(message, message.from_user.id)
@@ -32,39 +30,34 @@ async def profile_cb(callback: CallbackQuery):
 async def _show_profile(msg, uid, edit=False):
     user = get_user(uid)
     if not user:
-        text = "❌ Profil topilmadi. /start ni bosing."
-        await (msg.edit_text(text) if edit else msg.answer(text))
+        t = "❌ Profil topilmadi. /start ni bosing."
+        try:
+            if edit: await msg.edit_text(t)
+            else:    await msg.answer(t)
+        except: pass
         return
-
-    role  = {"admin":"👑 Admin","teacher":"👨‍🏫 O'qituvchi","user":"🎓 O'quvchi"}.get(
-        user.get("role","user"), "🎓 O'quvchi")
-    avg   = round(user.get("avg_score", 0), 1)
-    total = user.get("total_tests", 0)
-
-    badges = []
+    avg   = round(user.get("avg_score",0),1)
+    total = user.get("total_tests",0)
+    badges= []
     if total >= 1:  badges.append("🥉 Boshliqchi")
     if total >= 10: badges.append("🥈 Tajribali")
     if total >= 50: badges.append("🥇 Ustoz")
     if avg >= 90:   badges.append("🌟 Mukammal")
     if avg >= 80:   badges.append("🔥 A'lochi")
-
     text = (
         f"👤 <b>SHAXSIY PROFIL</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"🆔 ID: <code>{uid}</code>\n"
-        f"👤 Ism: <b>" + str(user.get("name","Noma'lum")) + "</b>\n"
-        f"🎭 Rol: <b>{role}</b>\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📋 Yechilgan testlar: <b>{total} ta</b>\n"
-        f"📊 O'rtacha natija: <b>{avg}%</b>\n"
-        f"🏅 Yutuqlar: " + ("  ".join(badges) if badges else "Hali yo'q") + "\n"
+        f"👤 Ism: <b>{user.get('name','?')}</b>\n\n"
+        f"📋 Yechilgan: <b>{total} ta</b>\n"
+        f"📊 O'rtacha: <b>{avg}%</b>\n"
+        f"🏅 {('  '.join(badges)) if badges else 'Hali yo\'q'}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     )
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="📋 Natijalarim",          callback_data="results_p0"))
-    b.row(InlineKeyboardButton(text="🔗 Link testlar",         callback_data="link_results_p0"))
-    b.row(InlineKeyboardButton(text="🗂 Mening testlarim",     callback_data="mytests_p0"))
-    b.row(InlineKeyboardButton(text="🏠 Asosiy menyu",         callback_data="main_menu"))
+    b.row(InlineKeyboardButton(text="📋 Natijalarim",      callback_data="results_p0"))
+    b.row(InlineKeyboardButton(text="🗂 Mening testlarim", callback_data="mytests_cats"))
+    b.row(InlineKeyboardButton(text="🏠 Asosiy menyu",     callback_data="main_menu"))
     try:
         if edit: await msg.edit_text(text, reply_markup=b.as_markup())
         else:    await msg.answer(text, reply_markup=b.as_markup())
@@ -72,95 +65,73 @@ async def _show_profile(msg, uid, edit=False):
         await msg.answer(text, reply_markup=b.as_markup())
 
 
-# ══ 2. NATIJALAR (ommaviy testlar) ═════════════════════════════
-
+# ══ NATIJALAR ══════════════════════════════════════════════════
 @router.message(F.text == "📊 Natijalarim")
 async def results_msg(message: Message):
-    await _show_results(message, message.from_user.id, page=0)
+    await _show_results(message, message.from_user.id)
 
 @router.callback_query(F.data.startswith("results_p"))
 async def results_page_cb(callback: CallbackQuery):
     await callback.answer()
-    page = int(callback.data[9:])
-    await _show_results(callback.message, callback.from_user.id, page=page, edit=True)
+    await _show_results(callback.message, callback.from_user.id,
+                        page=int(callback.data[9:]), edit=True)
 
-async def _show_results(msg, uid, page=0, edit=False, link_only=False):
-    all_results = get_user_results(uid)
-    # Link testlarni ajratib olish
-    if link_only:
-        all_results = [r for r in all_results if r.get("accessed_link")]
-        section     = "🔗 LINK ORQALI YECHILGAN TESTLAR"
-        pref        = "link_results_p"
-    else:
-        all_results = [r for r in all_results if not r.get("accessed_link")]
-        section     = "📋 NATIJALARIM"
-        pref        = "results_p"
-
-    if not all_results:
-        msg_txt = (
-            f"📭 <b>{section}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"{'Link orqali yechilgan testlar yo\'q.' if link_only else 'Hali test ishlamagansiz.'}\n"
-            f"{'📚 Testlar bo\'limidan boshlang! 🚀' if not link_only else ''}"
+async def _show_results(msg, uid, page=0, edit=False):
+    all_r = get_user_results(uid)
+    if not all_r:
+        text = (
+            "📭 <b>NATIJALARIM</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Hali test ishlamagansiz.\n📚 Testlar bo'limidan boshlang! 🚀"
         )
         b = InlineKeyboardBuilder()
         b.row(InlineKeyboardButton(text="📚 Testlarga o'tish", callback_data="go_tests"))
-        b.row(InlineKeyboardButton(text="🏠 Bosh sahifa",     callback_data="main_menu"))
+        b.row(InlineKeyboardButton(text="🏠 Bosh sahifa",      callback_data="main_menu"))
         try:
-            if edit: await msg.edit_text(msg_txt, reply_markup=b.as_markup())
-            else:    await msg.answer(msg_txt, reply_markup=b.as_markup())
+            if edit: await msg.edit_text(text, reply_markup=b.as_markup())
+            else:    await msg.answer(text, reply_markup=b.as_markup())
         except TelegramBadRequest:
-            await msg.answer(msg_txt, reply_markup=b.as_markup())
+            await msg.answer(text, reply_markup=b.as_markup())
         return
 
-    total_pages = (len(all_results) + PAGE_SIZE_RES - 1) // PAGE_SIZE_RES
-    page        = max(0, min(page, total_pages - 1))
-    chunk       = all_results[page * PAGE_SIZE_RES:(page + 1) * PAGE_SIZE_RES]
+    total_pg = (len(all_r)+PAGE_RES-1)//PAGE_RES
+    page     = max(0, min(page, total_pg-1))
+    chunk    = all_r[page*PAGE_RES:(page+1)*PAGE_RES]
 
     text = (
-        f"<b>{section}</b>\n"
+        f"<b>📋 NATIJALARIM</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"<i>Sahifa {page+1}/{total_pages} | Jami: {len(all_results)} ta test</i>\n"
-        f"<i>(Har urinish foizi ko'rsatiladi, faqat oxirgi tahlil)</i>\n\n"
+        f"<i>Sahifa {page+1}/{total_pg} | Jami: {len(all_r)} ta</i>\n\n"
     )
     b = InlineKeyboardBuilder()
-
     for res in chunk:
-        tid       = res.get("test_id", "")
-        meta      = get_test_by_id(tid)
-        title     = meta.get("title","Noma'lum")[:20] if meta else "Noma'lum test"
-        icon      = "✅" if res.get("passed") else "❌"
-        last_pct  = res.get("last_pct", 0)
-        best_pct  = res.get("best_pct", last_pct)
-        att       = res.get("attempts", 1)
-        all_pcts  = res.get("all_pcts", [last_pct])
-        dt        = res.get("completed_at","")[:10]
-        rid       = res.get("result_id","")
-
-        # Barcha urinishlar foizi
-        all_p_str = " → ".join(f"{p}%" for p in all_pcts[-5:])  # Oxirgi 5 tasi
-        if len(all_pcts) > 5:
-            all_p_str = f"...{len(all_pcts)-5} ta oldin | " + all_p_str
-
+        tid      = res.get("test_id","")
+        meta     = get_test_by_id(tid)
+        title    = meta.get("title","?")[:18] if meta else "O'chirilgan test"
+        icon     = "✅" if res.get("passed") else "❌"
+        last_pct = res.get("last_pct",0)
+        best_pct = res.get("best_pct",last_pct)
+        att      = res.get("attempts",1)
+        all_pcts = res.get("all_pcts",[last_pct])
+        dt       = res.get("completed_at","")[:10]
+        rid      = res.get("result_id","")
+        all_str  = " → ".join(f"{p}%" for p in all_pcts[-5:])
+        if len(all_pcts)>5: all_str = f"...{len(all_pcts)-5} oldin | "+all_str
         text += (
             f"{icon} <b>{title}</b>\n"
-            f"   📊 Oxirgi: {last_pct}% | ⭐ Eng yaxshi: {best_pct}%\n"
-            f"   📈 {all_p_str}\n"
-            f"   🔄 {att} urinish | 📅 {dt}\n\n"
+            f"   📊 {last_pct}% | ⭐ {best_pct}% | 🔄 {att}x | 📅 {dt}\n"
+            f"   📈 {all_str}\n\n"
         )
         b.row(InlineKeyboardButton(
             text=f"{icon} {title[:15]} — {last_pct}%",
             callback_data=f"res_back_{rid}"
         ))
-
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"{pref}{page-1}"))
-    if page < total_pages - 1:
-        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"{pref}{page+1}"))
+        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"results_p{page-1}"))
+    if page < total_pg-1:
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"results_p{page+1}"))
     if nav: b.row(*nav)
     b.row(InlineKeyboardButton(text="🏠 Bosh sahifa", callback_data="main_menu"))
-
     try:
         if edit: await msg.edit_text(text, reply_markup=b.as_markup())
         else:    await msg.answer(text, reply_markup=b.as_markup())
@@ -168,187 +139,141 @@ async def _show_results(msg, uid, page=0, edit=False, link_only=False):
         await msg.answer(text, reply_markup=b.as_markup())
 
 
-# ══ 2b. LINK TESTLAR ═══════════════════════════════════════════
-
-@router.callback_query(F.data.startswith("link_results_p"))
-async def link_results_cb(callback: CallbackQuery):
-    await callback.answer()
-    page = int(callback.data[14:])
-    await _show_results(callback.message, callback.from_user.id, page=page, edit=True, link_only=True)
-
-
-# ══ 3. NATIJA KARTOCHKASI ══════════════════════════════════════
-
+# ══ NATIJA KARTOCHKASI ══════════════════════════════════════════
 @router.callback_query(F.data.startswith("res_back_"))
 async def result_back_cb(callback: CallbackQuery):
     await callback.answer()
-    rid = callback.data[9:]
-    await _show_result_card(callback, rid)
-
-@router.callback_query(F.data.startswith("res_detail_"))
-async def result_detail(callback: CallbackQuery):
-    await callback.answer()
-    rid = callback.data[11:]
-    await _show_result_card(callback, rid)
+    await _show_result_card(callback, callback.data[9:])
 
 async def _show_result_card(callback, rid):
     uid     = callback.from_user.id
     results = get_user_results(uid)
-    res     = next((r for r in results if r.get("result_id") == rid), None)
+    res     = next((r for r in results if r.get("result_id")==rid), None)
     if not res:
         return await callback.answer("❌ Natija topilmadi.", show_alert=True)
-
     tid      = res.get("test_id","")
     meta     = get_test_by_id(tid)
-    title    = meta.get("title","Noma'lum") if meta else "O'chirilgan test"
-    cat      = meta.get("category","") if meta else ""
-    entry    = get_test_stats_for_user(uid, tid)
-    all_pcts = res.get("all_pcts", [res.get("last_pct", 0)])
-    att      = res.get("attempts", 1)
-    best     = res.get("best_pct", max(all_pcts) if all_pcts else 0)
-    avg_s    = round(sum(all_pcts) / len(all_pcts), 1) if all_pcts else 0
-    last_pct = res.get("last_pct", 0)
-    passed   = res.get("passed", last_pct >= 60)
-    dt_str   = res.get("completed_at","")[:16]
-
-    # Barcha urinishlar
-    all_p_txt = "\n".join(
-        f"  {'✅' if p >= (meta.get('passing_score',60) if meta else 60) else '❌'} "
-        f"{i+1}-urinish: {p}%"
-        for i, p in enumerate(all_pcts)
+    title    = meta.get("title","?") if meta else "O'chirilgan test"
+    all_pcts = res.get("all_pcts",[res.get("last_pct",0)])
+    att      = res.get("attempts",1)
+    best     = res.get("best_pct",max(all_pcts) if all_pcts else 0)
+    avg_s    = round(sum(all_pcts)/len(all_pcts),1) if all_pcts else 0
+    last_pct = res.get("last_pct",0)
+    passed   = res.get("passed", last_pct>=60)
+    ps       = meta.get("passing_score",60) if meta else 60
+    all_txt  = "\n".join(
+        f"  {'✅' if p>=ps else '❌'} {i+1}-urinish: {p}%"
+        for i,p in enumerate(all_pcts)
     )
-
     text = (
         f"{'✅' if passed else '❌'} <b>TEST NATIJASI</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"📝 <b>{title}</b>\n"
-        f"📁 Fan: {cat}\n"
-        f"📅 Oxirgi: {dt_str}\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 Oxirgi natija: <b>{last_pct}%</b>\n"
-        f"⭐ Eng yaxshi: <b>{best}%</b>\n"
-        f"📈 O'rtacha: <b>{avg_s}%</b>\n"
-        f"🔄 Jami urinishlar: <b>{att} marta</b>\n\n"
-        f"<b>Barcha urinishlar:</b>\n"
-        f"<code>{all_p_txt}</code>\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📅 {res.get('completed_at','')[:16]}\n\n"
+        f"📊 Oxirgi: <b>{last_pct}%</b> | ⭐ Eng yaxshi: <b>{best}%</b>\n"
+        f"📈 O'rtacha: <b>{avg_s}%</b> | 🔄 {att} urinish\n\n"
+        f"<b>Barcha urinishlar:</b>\n<code>{all_txt}</code>\n\n"
         f"{'🎉 MUVAFFAQIYATLI!' if passed else '❌ YIQILDINGIZ'}"
     )
     b = InlineKeyboardBuilder()
-    # Faqat oxirgi tahlil
     b.row(InlineKeyboardButton(text="🔍 Oxirgi tahlil", callback_data=f"analysis_{rid}_0"))
     if meta:
         b.row(
-            InlineKeyboardButton(text="🔄 Qaytadan",   callback_data=f"start_test_{tid}"),
-            InlineKeyboardButton(text="📊 Poll rejim", callback_data=f"start_poll_{tid}"),
+            InlineKeyboardButton(text="🔄 Qaytadan",  callback_data=f"start_test_{tid}"),
+            InlineKeyboardButton(text="📊 Quiz Poll", callback_data=f"start_poll_{tid}"),
         )
-    b.row(InlineKeyboardButton(text="📤 Ulashish", switch_inline_query=f"test_{tid}"))
-    b.row(InlineKeyboardButton(text="⬅️ Natijalar", callback_data="results_p0"))
+    b.row(InlineKeyboardButton(text="📤 Ulashish",    switch_inline_query=f"test_{tid}"))
+    b.row(InlineKeyboardButton(text="⬅️ Natijalar",   callback_data="results_p0"))
     b.row(InlineKeyboardButton(text="🏠 Bosh sahifa", callback_data="main_menu"))
-
     try:
         await callback.message.edit_text(text, reply_markup=b.as_markup())
     except TelegramBadRequest:
         await callback.message.answer(text, reply_markup=b.as_markup())
 
 
-# ══ 4. BATAFSIL TAHLIL (faqat oxirgi) ═════════════════════════
-
+# ══ TAHLIL ═════════════════════════════════════════════════════
 @router.callback_query(F.data.startswith("analysis_"))
 async def analysis_handler(callback: CallbackQuery):
     await callback.answer()
-    parts = callback.data[9:].rsplit("_", 1)
+    parts = callback.data[9:].rsplit("_",1)
     rid   = parts[0]
-    page  = int(parts[1]) if len(parts) > 1 else 0
-    await _show_analysis(callback, rid, page)
-
-async def _show_analysis(callback, rid, page):
-    uid      = callback.from_user.id
-    detailed = get_analysis(uid, rid)
-
-    if not detailed:
-        parts = str(rid).split("_", 1)
-        if len(parts) == 2:
-            full = await get_test_full(parts[1])
-            if full:
-                detailed = get_analysis(uid, rid)
-
-    if not detailed:
+    page  = int(parts[1]) if len(parts)>1 else 0
+    uid   = callback.from_user.id
+    det   = get_analysis(uid, rid)
+    if not det:
         return await callback.answer(
-            "❌ Tahlil topilmadi. Bu faqat oxirgi yechilgan test uchun mavjud.", show_alert=True
+            "❌ Tahlil topilmadi.\nFaqat oxirgi yechilgan test tahlili mavjud.",
+            show_alert=True
         )
-
-    results = get_user_results(uid)
-    res     = next((r for r in results if r.get("result_id") == rid), None)
-    tid     = res.get("test_id","") if res else rid.split("_",1)[-1]
-    test    = await get_test_full(tid) if tid else {}
-    qs      = test.get("questions",[]) if test else []
-    title   = test.get("title","Test") if test else "Test"
-
-    PG      = 5
-    total_p = (len(detailed) + PG - 1) // PG
-    page    = max(0, min(page, total_p - 1))
-    chunk   = detailed[page * PG:(page + 1) * PG]
-    corr    = sum(1 for d in detailed if d.get("is_correct"))
-
-    text = (
+    parts2 = str(rid).split("_",1)
+    tid    = parts2[1] if len(parts2)==2 else ""
+    test   = await get_test_full(tid) if tid else {}
+    qs     = test.get("questions",[]) if test else []
+    title  = test.get("title","Test") if test else "Test"
+    PG     = 5
+    tot    = (len(det)+PG-1)//PG
+    page   = max(0, min(page, tot-1))
+    chunk  = det[page*PG:(page+1)*PG]
+    corr   = sum(1 for d in det if d.get("is_correct"))
+    text   = (
         f"📊 <b>{title.upper()} — TAHLIL</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"✅ {corr}/{len(detailed)} to'g'ri | Sahifa {page+1}/{total_p}\n"
-        f"<i>💡 Bu faqat OXIRGI yechilgan test tahlili</i>\n"
+        f"✅ {corr}/{len(det)} to'g'ri | {page+1}/{tot}\n"
+        f"<i>Faqat OXIRGI yechilgan test tahlili</i>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
     )
     for d in chunk:
-        i     = d.get("question_index", 0)
-        is_c  = d.get("is_correct", False)
-        u_ans = d.get("user_answer") or "Belgilanmagan"
-        c_ans = d.get("correct_answer","?")
-        q_obj = qs[i] if i < len(qs) else {}
-        q_txt = q_obj.get("question", q_obj.get("text", f"{i+1}-savol"))
-        expl  = q_obj.get("explanation","")
-        pts   = d.get("earned_points", 0)
-        max_p = d.get("max_points", 1)
-        text += (
-            f"{'✅' if is_c else '❌'} <b>Savol {i+1}</b> [{pts}/{max_p}]\n"
-            f"<i>{q_txt[:100]}{'...' if len(q_txt)>100 else ''}</i>\n"
-        )
+        i    = d.get("question_index",0)
+        is_c = d.get("is_correct",False)
+        u_a  = d.get("user_answer") or "Belgilanmagan"
+        c_a  = d.get("correct_answer","?")
+        q_o  = qs[i] if i<len(qs) else {}
+        q_t  = q_o.get("question",q_o.get("text",f"{i+1}-savol"))
+        expl = q_o.get("explanation","")
+        pts  = d.get("earned_points",0)
+        mp   = d.get("max_points",1)
+        text += f"{'✅' if is_c else '❌'} <b>Savol {i+1}</b> [{pts}/{mp}]\n"
+        text += f"<i>{q_t[:90]}{'...' if len(q_t)>90 else ''}</i>\n"
         if not is_c:
-            text += (
-                f"  👤 Siz: <code>{str(u_ans)[:50]}</code>\n"
-                f"  🎯 To'g'ri: <code>{str(c_ans)[:50]}</code>\n"
-            )
+            text += f"  👤 <code>{str(u_a)[:45]}</code>\n  🎯 <code>{str(c_a)[:45]}</code>\n"
         else:
-            text += f"  ✔️ <code>{str(c_ans)[:50]}</code>\n"
+            text += f"  ✔️ <code>{str(c_a)[:45]}</code>\n"
         if expl and expl not in ("Izoh kiritilmagan.","Izoh yo'q",""):
             text += f"  💡 <i>{expl[:80]}</i>\n"
         text += "\n"
-
     try:
-        await callback.message.edit_text(text, reply_markup=analysis_kb(rid, page, total_p))
+        await callback.message.edit_text(text, reply_markup=analysis_kb(rid,page,tot))
     except TelegramBadRequest:
-        await callback.message.answer(text, reply_markup=analysis_kb(rid, page, total_p))
+        await callback.message.answer(text, reply_markup=analysis_kb(rid,page,tot))
 
 
-# ══ 5. MENING TESTLARIM ════════════════════════════════════════
-
+# ══ MENING TESTLARIM — FANLAR BO'YICHA ═════════════════════════
 @router.message(F.text == "🗂 Mening testlarim")
-async def my_tests_handler(message: Message):
-    await _show_my_tests(message, message.from_user.id, page=0)
+async def my_tests_msg(message: Message):
+    await _show_mytest_cats(message, message.from_user.id)
 
-@router.callback_query(F.data.startswith("mytests_p"))
-async def my_tests_page(callback: CallbackQuery):
+@router.callback_query(F.data == "mytests_cats")
+async def mytests_cats_cb(callback: CallbackQuery):
     await callback.answer()
-    page = int(callback.data[9:])
-    await _show_my_tests(callback.message, callback.from_user.id, page=page, edit=True)
+    await _show_mytest_cats(callback.message, callback.from_user.id, edit=True)
 
-async def _show_my_tests(msg, uid, page=0, edit=False):
+@router.callback_query(F.data == "back_to_mytests")
+@router.callback_query(F.data == "back_to_mytests_cat")
+async def back_to_mytests(callback: CallbackQuery):
+    await callback.answer()
+    # Qaysi fanga qaytish kerakligini data dan olamiz agar bo'lsa
+    if callback.data == "back_to_mytests_cat":
+        # Oldingi cat sahifasiga qaytish
+        # FSM state dan cat_name olish imkoni yo'q — fanlar listiga qaytamiz
+        pass
+    await _show_mytest_cats(callback.message, callback.from_user.id, edit=True)
+
+async def _show_mytest_cats(msg, uid, edit=False):
     tests = get_my_tests(uid)
     if not tests:
         text = (
-            "📭 <b>MENING TESTLARIM</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            "Siz hali test yaratmagansiz.\n"
-            "➕ Test Yaratish bo'limidan boshlang!"
+            "📭 <b>MENING TESTLARIM</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Hali test yaratmagansiz.\n➕ Test Yaratish bo'limidan boshlang!"
         )
         b = InlineKeyboardBuilder()
         b.row(InlineKeyboardButton(text="🏠 Bosh sahifa", callback_data="main_menu"))
@@ -359,50 +284,28 @@ async def _show_my_tests(msg, uid, page=0, edit=False):
             await msg.answer(text, reply_markup=b.as_markup())
         return
 
-    total_pages = (len(tests) + PAGE_SIZE_TESTS - 1) // PAGE_SIZE_TESTS
-    page  = max(0, min(page, total_pages - 1))
-    chunk = tests[page * PAGE_SIZE_TESTS:(page + 1) * PAGE_SIZE_TESTS]
+    cats = {}
+    for t in tests:
+        c = t.get("category") or "Boshqa"
+        cats.setdefault(c, 0)
+        cats[c] += 1
 
+    sorted_cats = sorted(cats.items(), key=lambda x: x[1], reverse=True)
     text = (
-        f"🗂 <b>MENING TESTLARIM</b>\n"
+        f"🗂 <b>MENING TESTLARIM — FANLAR</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"<i>Sahifa {page+1}/{total_pages} | Jami: {len(tests)} ta</i>\n\n"
+        f"<i>Jami: {len(tests)} ta test | {len(cats)} ta fan</i>\n\n"
     )
     b = InlineKeyboardBuilder()
-    for t in chunk:
-        tid   = t.get("test_id","")
-        title = t.get("title","Nomsiz")
-        cat   = t.get("category","")
-        vis   = {"public":"🌍","link":"🔗","private":"🔒"}.get(t.get("visibility"),"")
-        sc    = t.get("solve_count", 0)
-        avg   = round(t.get("avg_score",0), 1)
-        qc    = t.get("question_count", len(t.get("questions",[])))
-        pause = "⏸ " if t.get("is_paused") else ""
-        text += (
-            f"{pause}{vis} <b>{title}</b> <code>[{tid}]</code>\n"
-            f"   📁 {cat} | 📋 {qc} savol | 👁 {sc} marta | ⭐ {avg}%\n\n"
-        )
-        b.row(
-            InlineKeyboardButton(text=f"🔍 Ko'rish",   callback_data=f"mytest_view_{tid}"),
-            InlineKeyboardButton(text="📤 Ulashish",    switch_inline_query=f"test_{tid}"),
-            InlineKeyboardButton(text="📄 TXT",         callback_data=f"mytest_txt_{tid}"),
-        )
-        b.row(
-            InlineKeyboardButton(
-                text="▶️ Davom et" if t.get("is_paused") else "⏸ To'xtat",
-                callback_data=f"{'test_resume' if t.get('is_paused') else 'test_pause'}_{tid}"
-            ),
-            InlineKeyboardButton(text="📊 Kim yechgan", callback_data=f"test_solvers_{tid}_0"),
-        )
-
-    nav = []
-    if page > 0:
-        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"mytests_p{page-1}"))
-    if page < total_pages - 1:
-        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"mytests_p{page+1}"))
-    if nav: b.row(*nav)
+    for cat, cnt in sorted_cats:
+        icon  = CAT_ICONS.get(cat,"📋")
+        text += f"{icon} <b>{cat}</b> — {cnt} ta\n"
+        b.row(InlineKeyboardButton(
+            text=f"{icon} {cat} — {cnt} ta",
+            callback_data=f"mycat_{cat[:30]}_0"
+        ))
+    b.row(InlineKeyboardButton(text="🌟 Hammasi",     callback_data="mycat_ALL_0"))
     b.row(InlineKeyboardButton(text="🏠 Bosh sahifa", callback_data="main_menu"))
-
     try:
         if edit: await msg.edit_text(text, reply_markup=b.as_markup())
         else:    await msg.answer(text, reply_markup=b.as_markup())
@@ -410,15 +313,143 @@ async def _show_my_tests(msg, uid, page=0, edit=False):
         await msg.answer(text, reply_markup=b.as_markup())
 
 
+# ── Fan ichidagi testlar (5 tadan, to'liq ma'lumot) ──────────
+@router.callback_query(F.data.startswith("mycat_"))
+async def mycat_cb(callback: CallbackQuery):
+    await callback.answer()
+    raw      = callback.data[6:]  # "Matematika_0" yoki "ALL_2"
+    parts    = raw.rsplit("_",1)
+    cat_name = parts[0]
+    page     = int(parts[1]) if len(parts)>1 and parts[1].isdigit() else 0
+    await _show_mycat_tests(callback.message, callback.from_user.id, cat_name, page, edit=True)
+
+async def _show_mycat_tests(msg, uid, cat_name, page=0, edit=False):
+    tests = get_my_tests(uid)
+    if cat_name != "ALL":
+        tests = [t for t in tests if t.get("category")==cat_name]
+    if not tests:
+        b = InlineKeyboardBuilder()
+        b.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_to_mytests"))
+        try: await msg.edit_text("📭 Bu fanda test yo'q.", reply_markup=b.as_markup())
+        except: pass
+        return
+
+    PG    = 5
+    total = (len(tests)+PG-1)//PG
+    page  = max(0, min(page, total-1))
+    chunk = tests[page*PG:(page+1)*PG]
+    title = "🌟 BARCHA TESTLAR" if cat_name=="ALL" else f"📚 {cat_name.upper()}"
+    vis_m = {"public":"🌍 Ommaviy","link":"🔗 Ssilka","private":"🔒 Shaxsiy"}
+    diff_m= {"easy":"🟢 Oson","medium":"🟡 O'rtacha","hard":"🔴 Qiyin","expert":"⚡ Ekspert"}
+
+    text = (
+        f"<b>{title}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"<i>{len(tests)} ta test | Sahifa {page+1}/{total}</i>\n\n"
+    )
+    b = InlineKeyboardBuilder()
+
+    for t in chunk:
+        tid    = t.get("test_id","")
+        t_t    = t.get("title","Nomsiz")
+        vis    = vis_m.get(t.get("visibility",""),"")
+        diff   = diff_m.get(t.get("difficulty",""),"")
+        qc     = t.get("question_count",len(t.get("questions",[])))
+        sc     = t.get("solve_count",0)
+        avg    = round(t.get("avg_score",0),1)
+        ps     = t.get("passing_score",60)
+        att_t  = f"{t.get('max_attempts',0)}x" if t.get("max_attempts",0) else "♾"
+        tl_t   = f"{t.get('time_limit',0)}daq" if t.get("time_limit",0) else "♾"
+        pt_t   = f"{t.get('poll_time',30)}s"
+        paused = "⏸ " if t.get("is_paused") else ""
+        created= t.get("created_at","")[:10]
+
+        text += (
+            f"{'━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'}\n"
+            f"{paused}<b>{t_t}</b> <code>[{tid}]</code>\n"
+            f"📁 {t.get('category','')} | {diff}\n"
+            f"🔒 {vis}\n"
+            f"📋 {qc} savol | ⏱ {tl_t} / Poll: {pt_t}\n"
+            f"🎯 O'tish: {ps}% | 🔄 {att_t}\n"
+            f"👥 {sc} yechgan | ⭐ {avg}% | 📅 {created}\n\n"
+        )
+        b.row(InlineKeyboardButton(
+            text=f"⚙️ Sozlamalar — {t_t[:20]}",
+            callback_data=f"mytest_settings_{tid}"
+        ))
+
+    # Navigatsiya
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️ Oldingi", callback_data=f"mycat_{cat_name}_{page-1}"))
+    if page < total-1:
+        nav.append(InlineKeyboardButton(text="Keyingi ▶️", callback_data=f"mycat_{cat_name}_{page+1}"))
+    if nav: b.row(*nav)
+    b.row(
+        InlineKeyboardButton(text="⬅️ Fanlar", callback_data="back_to_mytests"),
+        InlineKeyboardButton(text="🏠 Menyu",  callback_data="main_menu"),
+    )
+    try:
+        if edit: await msg.edit_text(text, reply_markup=b.as_markup())
+        else:    await msg.answer(text, reply_markup=b.as_markup())
+    except TelegramBadRequest:
+        await msg.answer(text, reply_markup=b.as_markup())
+
+
+# ══ TEST SOZLAMALARI ═══════════════════════════════════════════
+@router.callback_query(F.data.startswith("mytest_settings_"))
+async def mytest_settings_cb(callback: CallbackQuery):
+    await callback.answer()
+    tid  = callback.data[16:]
+    uid  = callback.from_user.id
+    meta = get_test_meta(tid)
+    if not meta:
+        return await callback.answer("❌ Test topilmadi.", show_alert=True)
+    from config import ADMIN_IDS
+    if uid != meta.get("creator_id") and uid not in ADMIN_IDS:
+        return await callback.answer("⚠️ Ruxsat yo'q!", show_alert=True)
+    await _show_test_settings(callback.message, meta, tid, edit=True)
+
+async def _show_test_settings(msg, meta, tid, edit=False):
+    vis_m  = {"public":"🌍 Ommaviy","link":"🔗 Ssilka orqali","private":"🔒 Shaxsiy"}
+    diff_m = {"easy":"🟢 Oson","medium":"🟡 O'rtacha","hard":"🔴 Qiyin","expert":"⚡ Ekspert"}
+    paused = meta.get("is_paused",False)
+    att_t  = f"{meta.get('max_attempts',0)} marta" if meta.get("max_attempts",0) else "Cheksiz"
+    tl_t   = f"{meta.get('time_limit',0)} daqiqa" if meta.get("time_limit",0) else "Cheksiz"
+    text = (
+        f"⚙️ <b>TEST SOZLAMALARI</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"{'⏸ <b>VAQTINCHA TO\'XTATILGAN</b>\n\n' if paused else ''}"
+        f"📝 <b>{meta.get('title','?')}</b>\n"
+        f"🆔 Kod: <code>{tid}</code>\n"
+        f"📁 Fan: {meta.get('category','')}\n"
+        f"📊 Qiyinlik: {diff_m.get(meta.get('difficulty',''),'')}\n"
+        f"🔒 Ko'rinish: {vis_m.get(meta.get('visibility',''),'')}\n"
+        f"📋 Savollar: <b>{meta.get('question_count',0)} ta</b>\n"
+        f"⏱ Vaqt limiti: {tl_t}\n"
+        f"⏱ Poll vaqti: {meta.get('poll_time',30)}s/savol\n"
+        f"🎯 O'tish foizi: <b>{meta.get('passing_score',60)}%</b>\n"
+        f"🔄 Urinishlar: {att_t}\n"
+        f"👥 Yechilgan: <b>{meta.get('solve_count',0)} marta</b>\n"
+        f"⭐ O'rtacha: <b>{round(meta.get('avg_score',0),1)}%</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    )
+    kb = mytest_settings_kb(tid, is_paused=paused)
+    try:
+        if edit: await msg.edit_text(text, reply_markup=kb)
+        else:    await msg.answer(text, reply_markup=kb)
+    except TelegramBadRequest:
+        await msg.answer(text, reply_markup=kb)
+
+
 @router.callback_query(F.data.startswith("mytest_view_"))
 async def my_test_view(callback: CallbackQuery):
     await callback.answer()
     tid  = callback.data[12:]
     uid  = callback.from_user.id
-    test = get_test_by_id(tid)
+    test = get_test_by_id(tid) or await get_test_full(tid)
     if not test:
         return await callback.message.answer("❌ Test topilmadi.")
-
     from handlers.start import _send_test_card
     await _send_test_card(callback, test, tid, viewer_uid=uid, edit=True)
 
@@ -434,35 +465,205 @@ async def my_test_to_txt(callback: CallbackQuery):
     doc = BufferedInputFile(txt.encode("utf-8"), filename=f"{test.get('title',tid)}.txt")
     await callback.message.answer_document(
         doc,
-        caption=(
-            f"📄 <b>{test.get('title')}</b>\n"
-            f"📋 {len(test.get('questions',[]))} savol | <code>{tid}</code>"
-        )
+        caption=f"📄 <b>{test.get('title')}</b>\n📋 {len(test.get('questions',[]))} savol | <code>{tid}</code>"
     )
 
-@router.callback_query(F.data.startswith("share_test_"))
-async def share_test(callback: CallbackQuery):
-    await callback.answer()
+
+# ── Test o'chirish (faqat mening testlarim dan) ───────────────
+@router.callback_query(F.data.startswith("del_mytest_"))
+async def del_mytest_confirm(callback: CallbackQuery):
     tid  = callback.data[11:]
-    test = get_test_by_id(tid)
-    if not test:
-        return await callback.message.answer("❌ Test topilmadi.")
-    bot_uname = (await callback.bot.me()).username
-    link      = f"https://t.me/{bot_uname}?start={tid}"
-    text      = (
-        f"📤 <b>TEST ULASHISH</b>\n"
+    uid  = callback.from_user.id
+    meta = get_test_meta(tid)
+    if not meta:
+        return await callback.answer("❌ Test topilmadi.", show_alert=True)
+    from config import ADMIN_IDS
+    if uid != meta.get("creator_id") and uid not in ADMIN_IDS:
+        return await callback.answer("⚠️ Faqat test egasi o'chira oladi!", show_alert=True)
+    b = InlineKeyboardBuilder()
+    b.row(
+        InlineKeyboardButton(text="✅ Ha, o'chirish", callback_data=f"del_mytest_ok_{tid}"),
+        InlineKeyboardButton(text="❌ Yo'q",          callback_data=f"mytest_settings_{tid}"),
+    )
+    try:
+        await callback.message.edit_text(
+            f"⚠️ <b>O'CHIRISH TASDIQLASH</b>\n\n"
+            f"📝 {meta.get('title','?')} [{tid}]\n\n"
+            f"Test RAMdan va TG bazadan <b>butunlay o'chiriladi</b>.\n"
+            f"Bu amalni qaytarib bo'lmaydi!",
+            reply_markup=b.as_markup()
+        )
+    except TelegramBadRequest:
+        await callback.message.answer(
+            f"⚠️ {meta.get('title','?')} [{tid}] ni o'chirilsinmi?",
+            reply_markup=b.as_markup()
+        )
+
+@router.callback_query(F.data.startswith("del_mytest_ok_"))
+async def del_mytest_exec(callback: CallbackQuery):
+    tid = callback.data[14:]
+    uid = callback.from_user.id
+    meta= get_test_meta(tid)
+    from config import ADMIN_IDS
+    if uid != (meta or {}).get("creator_id") and uid not in ADMIN_IDS:
+        return await callback.answer("⚠️ Ruxsat yo'q!", show_alert=True)
+    await callback.answer("⏳ O'chirilmoqda...")
+    from utils.db import delete_test
+    await delete_test(tid)
+    try:
+        await callback.message.edit_text(
+            f"✅ <b>{meta.get('title','?')} [{tid}]</b> muvaffaqiyatli o'chirildi.\n"
+            f"Backup TG ga yuborildi."
+        )
+    except: pass
+    # Fanlar sahifasiga qaytish
+    await _show_mytest_cats(callback.message, uid)
+
+
+# ── Kim yechgan ───────────────────────────────────────────────
+@router.callback_query(F.data.startswith("test_solvers_"))
+async def test_solvers_cb(callback: CallbackQuery):
+    await callback.answer()
+    parts = callback.data[13:].rsplit("_",1)
+    tid   = parts[0]
+    page  = int(parts[1]) if len(parts)>1 else 0
+    uid   = callback.from_user.id
+    meta  = get_test_meta(tid)
+    if not meta:
+        return await callback.answer("❌ Test topilmadi.", show_alert=True)
+    from config import ADMIN_IDS
+    if uid != meta.get("creator_id") and uid not in ADMIN_IDS:
+        return await callback.answer("⚠️ Ruxsat yo'q!", show_alert=True)
+
+    solvers = get_test_solvers(tid)
+    if not solvers:
+        b = InlineKeyboardBuilder()
+        b.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"mytest_settings_{tid}"))
+        try:
+            await callback.message.edit_text(
+                f"📊 <b>{meta.get('title','?')} — KIM YECHGAN</b>\n\n😔 Hali hech kim yechmagan.",
+                reply_markup=b.as_markup()
+            )
+        except TelegramBadRequest: pass
+        return
+
+    PG    = 5
+    total = (len(solvers)+PG-1)//PG
+    page  = max(0, min(page, total-1))
+    chunk = solvers[page*PG:(page+1)*PG]
+    text  = (
+        f"📊 <b>{meta.get('title','?')} — KIM YECHGAN</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👥 {len(solvers)} kishi | Sahifa {page+1}/{total}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"📝 <b>{test.get('title')}</b>\n"
-        f"🔑 Kod: <code>{tid}</code>\n"
-        f"🔗 Ssilka:\n<code>{link}</code>"
     )
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="📤 Inline orqali ulashish", switch_inline_query=f"test_{tid}"))
-    b.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"mytest_view_{tid}"))
+    for sv in chunk:
+        all_p = " → ".join(f"{p}%" for p in sv["all_pcts"])
+        uname = f"@{sv['username']}" if sv.get("username") else ""
+        text += (
+            f"👤 <b>{sv['name']}</b> {uname}\n"
+            f"   🔄 {sv['attempts']}x | ⭐ {sv['best_score']}%\n"
+            f"   📈 {all_p}\n\n"
+        )
+        b.row(InlineKeyboardButton(
+            text=f"🔍 {sv['name'][:20]} — {sv['best_score']}%",
+            callback_data=f"solver_detail_{tid}_{sv['uid']}"
+        ))
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"test_solvers_{tid}_{page-1}"))
+    if page < total-1:
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"test_solvers_{tid}_{page+1}"))
+    if nav: b.row(*nav)
+    b.row(
+        InlineKeyboardButton(text="📄 TXT",     callback_data=f"solvers_txt_{tid}"),
+        InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"mytest_settings_{tid}"),
+    )
     try:
         await callback.message.edit_text(text, reply_markup=b.as_markup())
     except TelegramBadRequest:
         await callback.message.answer(text, reply_markup=b.as_markup())
+
+
+@router.callback_query(F.data.startswith("solver_detail_"))
+async def solver_detail_cb(callback: CallbackQuery):
+    await callback.answer()
+    parts   = callback.data[14:].split("_",1)
+    tid     = parts[0]
+    uid_str = parts[1] if len(parts)>1 else ""
+    viewer  = callback.from_user.id
+    meta    = get_test_meta(tid)
+    from config import ADMIN_IDS
+    if viewer != meta.get("creator_id") and viewer not in ADMIN_IDS:
+        return await callback.answer("⚠️ Ruxsat yo'q!", show_alert=True)
+    solvers = get_test_solvers(tid)
+    sv      = next((s for s in solvers if s["uid"]==uid_str), None)
+    if not sv:
+        return await callback.answer("Topilmadi.", show_alert=True)
+    first    = sv.get("first_result") or {}
+    all_pcts = sv.get("all_pcts",[])
+    ps       = meta.get("passing_score",60)
+    att_txt  = "\n".join(
+        f"  {'✅' if p>=ps else '❌'} {i+1}-urinish: {p}%"
+        for i,p in enumerate(all_pcts)
+    )
+    text = (
+        f"👤 <b>{sv['name']}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🔄 {sv['attempts']} urinish | ⭐ {sv['best_score']}% | 📈 {sv['avg_score']}%\n\n"
+        f"<b>Barcha urinishlar:</b>\n<code>{att_txt}</code>\n\n"
+        f"<b>1-urinish:</b> {first.get('percentage',0)}% | "
+        f"✅{first.get('correct_count',0)} ❌{first.get('wrong_count',0)}"
+    )
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"test_solvers_{tid}_0"))
+    try:
+        await callback.message.edit_text(text, reply_markup=b.as_markup())
+    except TelegramBadRequest:
+        await callback.message.answer(text, reply_markup=b.as_markup())
+
+
+@router.callback_query(F.data.startswith("solvers_txt_"))
+async def solvers_txt_cb(callback: CallbackQuery):
+    await callback.answer("⏳ TXT tayyorlanmoqda...")
+    tid  = callback.data[12:]
+    uid  = callback.from_user.id
+    meta = get_test_meta(tid)
+    from config import ADMIN_IDS
+    if uid != meta.get("creator_id") and uid not in ADMIN_IDS:
+        return await callback.answer("⚠️ Ruxsat yo'q!", show_alert=True)
+    solvers = get_test_solvers(tid)
+    lines   = [f"TEST: {meta.get('title',tid)}", f"KOD: {tid}",
+               f"JAMI: {len(solvers)} kishi", "="*55, ""]
+    for i, sv in enumerate(solvers,1):
+        all_p = " → ".join(f"{p}%" for p in sv["all_pcts"])
+        lines.append(f"{i}. {sv['name']}")
+        if sv.get("username"): lines.append(f"   @{sv['username']}")
+        lines.append(f"   Urinishlar: {sv['attempts']}")
+        lines.append(f"   Foizlar: {all_p}")
+        lines.append(f"   Eng yaxshi: {sv['best_score']}%")
+        fr = sv.get("first_result") or {}
+        if fr:
+            lines.append(
+                f"   1-urinish: {fr.get('percentage',0)}% | "
+                f"To'g'ri:{fr.get('correct_count',0)} Xato:{fr.get('wrong_count',0)}"
+            )
+        lines.append("")
+    doc = BufferedInputFile(
+        "\n".join(lines).encode("utf-8"),
+        filename=f"solvers_{meta.get('title',tid)}.txt"
+    )
+    await callback.message.answer_document(
+        doc, caption=f"📊 <b>{meta.get('title',tid)}</b>\n👥 {len(solvers)} kishi"
+    )
+
+
+@router.callback_query(F.data == "go_tests")
+async def go_tests_cb(callback: CallbackQuery):
+    await callback.answer()
+    from handlers.tests import _show_categories
+    await _show_categories(callback.message, callback.from_user.id, edit=True)
 
 
 def _test_to_txt(test):
@@ -470,9 +671,7 @@ def _test_to_txt(test):
     lines = [
         f"# {test.get('title','Test')}",
         f"# Fan: {test.get('category','')}",
-        f"# Qiyinlik: {test.get('difficulty','')}",
-        f"# O'tish foizi: {test.get('passing_score',60)}%",
-        f"# Kod: {test.get('test_id','')}","",
+        f"# Kod: {test.get('test_id','')}",""
     ]
     for i, q in enumerate(test.get("questions",[]),1):
         t    = q.get("type","multiple_choice")
@@ -481,28 +680,18 @@ def _test_to_txt(test):
         corr = q.get("correct","")
         if t in ("multiple_choice","multi_select"):
             for opt in q.get("options",[]):
-                opt_str = str(opt)
-                m1 = re.match(r"^([A-Za-z])", opt_str.strip())
-                m2 = re.match(r"^([A-Za-z])", str(corr).strip())
+                opt_s = str(opt)
+                m1 = re.match(r"^([A-Za-z])",opt_s.strip())
+                m2 = re.match(r"^([A-Za-z])",str(corr).strip())
                 is_c = (m1 and m2 and m1.group(1).lower()==m2.group(1).lower()
-                        ) if m1 and m2 else opt_str.strip()==str(corr).strip()
-                lines.append(f"{'===' if is_c else ''}{opt_str}")
+                        ) if m1 and m2 else opt_s.strip()==str(corr).strip()
+                lines.append(f"{'===' if is_c else ''}{opt_s}")
         elif t == "true_false":
             lines.append(f"Javob: {'Ha' if 'Ha' in str(corr) else 'Yoq'}")
         else:
             lines.append(f"Javob: {corr}")
-            acc = q.get("accepted_answers",[])
-            if acc: lines.append(f"Qabul: {', '.join(str(a) for a in acc)}")
         expl = q.get("explanation","")
         if expl and expl not in ("Izoh kiritilmagan.","Izoh yo'q",""):
             lines.append(f"Izoh: {expl}")
         lines.append("")
     return "\n".join(lines)
-
-
-# go_tests compatibility
-@router.callback_query(F.data == "go_tests")
-async def go_tests_cb(callback: CallbackQuery):
-    await callback.answer()
-    from handlers.tests import show_catalog
-    await show_catalog(callback)
