@@ -84,17 +84,13 @@ def _make_result(test: dict, bot_username: str) -> InlineQueryResultArticle:
     )
 
     b = InlineKeyboardBuilder()
-    # Ulashgandan keyin 3 ta tugma:
     b.row(
-        InlineKeyboardButton(text="▶️ Inline test",  url=f"{base}?start={tid}"),
-        InlineKeyboardButton(text="📊 Quiz Poll",    url=f"{base}?start=poll_{tid}"),
+        InlineKeyboardButton(text="▶️ Inline test", url=f"{base}?start={tid}"),
+        InlineKeyboardButton(text="📊 Quiz Poll",   url=f"{base}?start=poll_{tid}"),
     )
     b.row(
-        InlineKeyboardButton(text="👥 Guruhda boshlash", callback_data=f"group_start_{tid}"),
-    )
-    b.row(
-        InlineKeyboardButton(text="📤 Ulashish",
-                             switch_inline_query=f"test_{tid}"),
+        InlineKeyboardButton(text="📤 Ulashish",      switch_inline_query=f"test_{tid}"),
+        InlineKeyboardButton(text="➕ Test yaratish", url=f"{base}?start=create"),
     )
 
     return InlineQueryResultArticle(
