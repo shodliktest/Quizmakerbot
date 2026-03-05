@@ -62,12 +62,6 @@ async def cmd_start(message: Message, state: FSMContext):
         # ?start=create — test yaratish
         if param.lower() == "create":
             await message.answer(welcome, reply_markup=main_kb(uid))
-            await message.answer(
-                "➕ <b>TEST YARATISH</b>\n"
-                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                "<b>Test Yaratish</b> tugmasini bosing 👇",
-                reply_markup=main_kb(uid)
-            )
             return
 
         # ?start=poll_TID — poll rejimi
@@ -75,14 +69,13 @@ async def cmd_start(message: Message, state: FSMContext):
             tid  = param[5:].upper()
             test = get_test_by_id(tid) or await _gtf(tid)
             if test:
-                # Link orqali kiruvchi
+                # Link visibility → via_link=True
                 via_link = test.get("visibility") == "link"
                 await message.answer(welcome, reply_markup=main_kb(uid))
                 b = InlineKeyboardBuilder()
                 b.row(InlineKeyboardButton(
                     text="📊 Poll rejimni boshlash",
-                    callback_data=f"start_poll_{tid}"
-                    + ("_link" if via_link else "")
+                    callback_data=f"start_poll_{tid}" + ("_link" if via_link else "")
                 ))
                 b.row(InlineKeyboardButton(text="▶️ Inline rejim", callback_data=f"start_test_{tid}"))
                 await message.answer(
@@ -121,18 +114,16 @@ async def _send_help(msg, edit: bool = False):
         "❓ <b>BOTDAN FOYDALANISH</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "1️⃣ <b>▶️ Inline test</b> — har savoldan keyin\n"
-        "   to'g'ri/noto'g'ri ko'rsatadi, 30s avto-o'tish\n\n"
+        "   to'g'ri/noto'g'ri ko'rsatadi\n\n"
         "2️⃣ <b>📊 Quiz Poll</b> — Telegram native quiz poll\n"
         "   vaqt tugasa keyingi savolga o'tadi, pauza bor\n\n"
-        "3️⃣ <b>👥 Guruhda yechish</b> — quiz poll rejimi\n"
-        "   guruhda jamoa bilan, oxirida leaderboard\n\n"
-        "4️⃣ <b>📤 Ulashish</b> — inline orqali yuborish\n"
-        "   3 ta rejimdan birini tanlab boshlash mumkin\n\n"
-        "5️⃣ <b>🔗 Link testlar</b> — maxsus ssilka testlar\n"
+        "3️⃣ <b>📤 Ulashish</b> — inline orqali yuborish\n"
+        "   guruhda ham boshlash mumkin\n\n"
+        "4️⃣ <b>🔗 Link testlar</b> — maxsus ssilka testlar\n"
         "   faqat havola orqali kirish, cheksiz urinish\n\n"
-        "6️⃣ <b>📊 Natijalarim</b> — barcha urinishlar foizi\n"
+        "5️⃣ <b>📊 Natijalarim</b> — barcha urinishlar foizi\n"
         "   faqat oxirgi test uchun batafsil tahlil\n\n"
-        "7️⃣ <b>Test kodi</b> — to'g'ridan kodni yuboring\n\n"
+        "6️⃣ <b>Test kodi</b> — to'g'ridan kodni yuboring\n\n"
         "💬 <i>Muammo bo'lsa adminga murojaat qiling:</i>"
     )
     b = InlineKeyboardBuilder()
@@ -174,7 +165,7 @@ async def _send_test_card(event, test, tid, viewer_uid=None, via_link=False, edi
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"▶️ <b>Inline</b> — savoldan keyin to'g'ri/noto'g'ri\n"
         f"📊 <b>Poll</b> — quiz poll, vaqt bilan\n"
-        f"👥 <b>Guruh</b> — jamoa bilan, leaderboard"
+        f"📤 <b>Ulashish</b> — guruhga yuboring, 3 ta tugma chiqadi"
     )
 
     creator_id = meta.get("creator_id")
@@ -210,7 +201,6 @@ async def test_pause_cb(callback: CallbackQuery):
     pause_test(tid, paused=True)
     await callback.answer("⏸ Test to'xtatildi", show_alert=True)
 
-    # Kartochkani yangilash
     from utils.db import get_test_full
     test = get_test_by_id(tid) or await get_test_full(tid)
     if test:
@@ -288,13 +278,17 @@ async def test_solvers_cb(callback: CallbackQuery):
     )
     b = InlineKeyboardBuilder()
     for sv in chunk:
-        all_p_str = " → ".join(f"{p}%" for p in sv["all_pcts"])
-        uname = sv.get("username", "")
-        uname_txt = f"@{uname} " if uname else ""
+        # Birinchi urinish natijasi + qolgan foizlar
+        all_p    = sv["all_pcts"]
+        first_p  = all_p[0] if all_p else 0
+        rest_p   = all_p[1:] if len(all_p) > 1 else []
+        rest_str = (" | boshqa: " + ", ".join(f"{p}%" for p in rest_p)) if rest_p else ""
+        uname    = sv.get("username", "")
+        uname_txt= f"@{uname} " if uname else ""
         text += (
             f"👤 <b>{sv['name']}</b> {uname_txt}\n"
-            f"   🔄 {sv['attempts']} urinish | ⭐ Eng yaxshi: {sv['best_score']}%\n"
-            f"   📈 Foizlar: {all_p_str}\n\n"
+            f"   1-urinish: <b>{first_p}%</b> | ⭐ Eng yaxshi: {sv['best_score']}%\n"
+            f"   🔄 {sv['attempts']} urinish{rest_str}\n\n"
         )
         b.row(InlineKeyboardButton(
             text=f"🔍 {sv['name'][:20]} — {sv['best_score']}%",
@@ -331,17 +325,19 @@ async def solver_detail_cb(callback: CallbackQuery):
         return await callback.answer("⚠️ Ruxsat yo'q!", show_alert=True)
 
     from utils.db import get_test_solvers
-    from utils.ram_cache import get_users
     solvers = get_test_solvers(tid)
     sv      = next((s for s in solvers if s["uid"] == uid_str), None)
     if not sv:
         return await callback.answer("Topilmadi.", show_alert=True)
 
-    first = sv.get("first_result") or {}
     all_p = sv.get("all_pcts", [])
+    # 1-urinish to'liq natijasi
+    first = sv.get("first_result") or {}
+    # Qolgan urinishlar faqat foiz
     attempts_txt = "\n".join(
-        f"  {'1-urinish (birinchi)' if i == 0 else f'{i+1}-urinish'}: "
+        f"  {'1-urinish' if i == 0 else f'{i+1}-urinish'}: "
         f"{'✅' if p >= meta.get('passing_score', 60) else '❌'} {p}%"
+        + (" (birinchi — to'liq)" if i == 0 else "")
         for i, p in enumerate(all_p)
     )
 
@@ -387,18 +383,22 @@ async def solvers_txt_cb(callback: CallbackQuery):
         "=" * 55, ""
     ]
     for i, sv in enumerate(solvers, 1):
-        all_p = " → ".join(f"{p}%" for p in sv["all_pcts"])
+        all_p    = sv["all_pcts"]
+        first_p  = all_p[0] if all_p else 0
+        rest_str = " | ".join(f"{p}%" for p in all_p[1:]) if len(all_p) > 1 else ""
         lines.append(f"{i}. {sv['name']}")
         un = sv.get("username","")
         if un: lines.append(f"   @{un}")
         lines.append(f"   Urinishlar: {sv['attempts']}")
-        lines.append(f"   Foizlar: {all_p}")
+        lines.append(f"   1-urinish: {first_p}%")
+        if rest_str:
+            lines.append(f"   Qolgan urinishlar (faqat foiz): {rest_str}")
         lines.append(f"   Eng yaxshi: {sv['best_score']}%")
         lines.append(f"   O'rtacha: {sv['avg_score']}%")
         fr = sv.get("first_result") or {}
         if fr:
             lines.append(
-                f"   1-urinish: {fr.get('percentage',0)}% | "
+                f"   1-urinish tafsilot: {fr.get('percentage',0)}% | "
                 f"To'g'ri: {fr.get('correct_count',0)} | "
                 f"Xato: {fr.get('wrong_count',0)}"
             )

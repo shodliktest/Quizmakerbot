@@ -1,4 +1,4 @@
-"""📤 INLINE MODE — Test ulashish: 3 ta tugma"""
+"""📤 INLINE MODE — Test ulashish: inline + poll + guruh tugmalari"""
 import logging
 from aiogram import Router, F
 from aiogram.types import (InlineQuery, InlineQueryResultArticle,
@@ -84,7 +84,7 @@ def _make_result(test: dict, bot_username: str) -> InlineQueryResultArticle:
     )
 
     b = InlineKeyboardBuilder()
-    # 3 ta asosiy tugma:
+    # Ulashgandan keyin 3 ta tugma:
     b.row(
         InlineKeyboardButton(text="▶️ Inline test",  url=f"{base}?start={tid}"),
         InlineKeyboardButton(text="📊 Quiz Poll",    url=f"{base}?start=poll_{tid}"),
@@ -93,8 +93,8 @@ def _make_result(test: dict, bot_username: str) -> InlineQueryResultArticle:
         InlineKeyboardButton(text="👥 Guruhda boshlash", callback_data=f"group_start_{tid}"),
     )
     b.row(
-        InlineKeyboardButton(text="➕ Shunga o'xshash test yarat",
-                             url=f"{base}?start=create"),
+        InlineKeyboardButton(text="📤 Ulashish",
+                             switch_inline_query=f"test_{tid}"),
     )
 
     return InlineQueryResultArticle(

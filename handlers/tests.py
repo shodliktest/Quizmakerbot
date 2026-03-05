@@ -10,6 +10,7 @@ from aiogram.fsm.context import FSMContext
 from utils.db import get_all_tests, get_test_full, get_user_results
 from utils.ram_cache import get_test_by_id, is_test_paused
 from keyboards.keyboards import main_kb, test_info_simple_kb
+from config import SUBJECTS
 
 log    = logging.getLogger(__name__)
 router = Router()
@@ -26,6 +27,14 @@ async def test_code_direct(message: Message, state: FSMContext):
     if not test:
         return
     uid = message.from_user.id
+
+    # Link testga to'g'ridan kirish — ruxsat yo'q
+    if test.get("visibility") == "link":
+        results  = get_user_results(uid)
+        solved   = {r.get("test_id") for r in results}
+        if tid not in solved:
+            return  # Kod bilan link testni yechib bo'lmaydi
+
     from handlers.start import _send_test_card
     await _send_test_card(message, test, tid, viewer_uid=uid)
 
@@ -49,11 +58,39 @@ async def catalog_page(callback: CallbackQuery):
     page = int(callback.data[9:])
     await _catalog(callback.message, uid=callback.from_user.id, page=page, edit=True)
 
+@router.callback_query(F.data.startswith("cat_filter_"))
+async def cat_filter_cb(callback: CallbackQuery):
+    await callback.answer()
+    cat = callback.data[11:]
+    if cat == "all":
+        await _catalog(callback.message, uid=callback.from_user.id, page=0, edit=True)
+    else:
+        await _catalog(callback.message, uid=callback.from_user.id, page=0, edit=True, cat_filter=cat)
+
+@router.callback_query(F.data == "cat_filter")
+async def cat_filter_menu(callback: CallbackQuery):
+    await callback.answer()
+    tests = get_all_tests()
+    cats  = list({t.get("category","Boshqa") for t in tests if t.get("visibility") == "public"})
+    cats.sort()
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="🌐 Barchasi", callback_data="cat_filter_all"))
+    for c in cats:
+        count = sum(1 for t in tests if t.get("category") == c and t.get("visibility") == "public")
+        b.add(InlineKeyboardButton(text=f"{c} ({count})", callback_data=f"cat_filter_{c}"))
+    b.adjust(2)
+    b.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data="go_tests"))
+    try:
+        await callback.message.edit_text("🗂 <b>KATEGORIYALAR</b>\n\nBirini tanlang:", reply_markup=b.as_markup())
+    except TelegramBadRequest:
+        await callback.message.answer("🗂 Kategoriyalar:", reply_markup=b.as_markup())
+
 async def _catalog(msg, uid, page=0, edit=False, cat_filter=None):
+    # Faqat ommaviy testlar
     tests = [t for t in get_all_tests()
              if not t.get("is_paused") and
-             t.get("visibility") in ("public",)]
-    if cat_filter:
+             t.get("visibility") == "public"]
+    if cat_filter and cat_filter != "all":
         tests = [t for t in tests if t.get("category") == cat_filter]
 
     # Link testlar — faqat yechganlarga ko'rinsin
@@ -64,8 +101,18 @@ async def _catalog(msg, uid, page=0, edit=False, cat_filter=None):
                     and t.get("test_id") in solved_tids
                     and not t.get("is_paused")]
 
-    all_tests = tests + link_tests
-    if not all_tests:
+    # Kategoriyalar bo'yicha guruhlash
+    if not cat_filter:
+        # Kategoriyalar bo'yicha ajratib ko'rsatish
+        all_tests = tests
+    else:
+        all_tests = tests
+
+    if link_tests and not cat_filter:
+        # Link testlar alohida bo'lim sifatida oxirida
+        pass
+
+    if not tests and not link_tests:
         text = (
             "📭 <b>TESTLAR</b>\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -82,16 +129,29 @@ async def _catalog(msg, uid, page=0, edit=False, cat_filter=None):
             await msg.answer(text, reply_markup=b.as_markup())
         return
 
-    total_pages = (len(all_tests) + PAGE - 1) // PAGE
+    # Kategoriya filtri bo'lsa oddiy list, bo'lmasa kategoriyalarga bo'lib
+    if cat_filter and cat_filter != "all":
+        display_tests = tests
+        section_title = f"📁 {cat_filter}"
+    else:
+        display_tests = tests
+        section_title = "📚 TESTLAR KATALOGI"
+
+    total_pages = (len(display_tests) + PAGE - 1) // PAGE
+    if total_pages == 0: total_pages = 1
     page  = max(0, min(page, total_pages - 1))
-    chunk = all_tests[page * PAGE:(page + 1) * PAGE]
+    chunk = display_tests[page * PAGE:(page + 1) * PAGE]
+
     diff_map = {"easy":"🟢","medium":"🟡","hard":"🔴","expert":"⚡"}
-    vis_map  = {"public":"🌍","link":"🔗","private":"🔒"}
+    total_public = len(display_tests)
+    link_count   = len(link_tests)
 
     text = (
-        f"📚 <b>TESTLAR KATALOGI</b>\n"
+        f"<b>{section_title}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"<i>Sahifa {page+1}/{total_pages} | Jami: {len(all_tests)} ta test</i>\n\n"
+        f"<i>Sahifa {page+1}/{total_pages} | Jami: {total_public} ta test"
+        + (f" | 🔗 {link_count} ta link test" if link_count and not cat_filter else "")
+        + "</i>\n\n"
     )
     b = InlineKeyboardBuilder()
     for t in chunk:
@@ -99,11 +159,25 @@ async def _catalog(msg, uid, page=0, edit=False, cat_filter=None):
         title = t.get("title","Nomsiz")
         cat   = t.get("category","")
         d_ico = diff_map.get(t.get("difficulty",""),"🟡")
-        v_ico = vis_map.get(t.get("visibility",""),"")
         sc    = t.get("solve_count",0)
         qc    = t.get("question_count", len(t.get("questions",[])))
-        text += f"{v_ico}{d_ico} <b>{title}</b> [{tid}]\n📁{cat} | 📋{qc}s | 👥{sc}\n\n"
-        b.row(InlineKeyboardButton(text=f"▶️ {title[:22]}", callback_data=f"view_test_{tid}"))
+        avg   = round(t.get("avg_score",0),1)
+        text += f"{d_ico} <b>{title}</b> [{tid}]\n📁{cat} | 📋{qc}s | 👥{sc} | ⭐{avg}%\n\n"
+        b.row(InlineKeyboardButton(text=f"▶️ {title[:25]}", callback_data=f"view_test_{tid}"))
+
+    # Link testlar bo'limi (agar kategoriya filtri yo'q bo'lsa)
+    if link_tests and not cat_filter and page == 0:
+        text += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        text += "🔗 <b>LINKLAR</b> (siz yechgan)\n\n"
+        for t in link_tests[:3]:
+            tid   = t.get("test_id","")
+            title = t.get("title","Nomsiz")
+            sc    = t.get("solve_count",0)
+            text += f"🔗 <b>{title}</b> [{tid}] | 👥{sc}\n"
+            b.row(InlineKeyboardButton(text=f"🔗 {title[:25]}", callback_data=f"view_test_{tid}"))
+        if len(link_tests) > 3:
+            text += f"<i>...va yana {len(link_tests)-3} ta</i>\n"
+        text += "\n"
 
     nav = []
     if page > 0:
@@ -140,14 +214,12 @@ async def view_test(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("start_test_"))
 async def start_inline_test(callback: CallbackQuery, state: FSMContext):
-    """Inline test boshlash — asosiy handler"""
+    """Inline test boshlash"""
     from utils.ram_cache import is_test_paused
     tid = callback.data[11:]
     if is_test_paused(tid):
         return await callback.answer("⚠️ Bu test vaqtincha to'xtatilgan!", show_alert=True)
-    # tests.py da inline test logikasi to'liq emas — asosiy handler bu faylda bo'lmaydi
-    # Bu callback_data profile/start yoki tests handler tomonidan tutilishi mumkin
-    # Lekin biz uni shu yerda handle qilamiz:
+
     await callback.answer()
     uid  = callback.from_user.id
     msg  = callback.message
@@ -328,14 +400,13 @@ async def answer_cb(callback: CallbackQuery, state: FSMContext):
     new_idx = idx + 1
     await state.update_data(ans=ans, idx=new_idx)
 
-    # Natijani ko'rsatish
     icon    = "✅" if is_c else "❌"
     expl    = q.get("explanation","") or ""
     if expl in ("Izoh kiritilmagan.","Izoh yo'q","Izoh kiritilmagan"):
         expl = ""
     expl_txt = f"\n\n💡 <i>{expl[:100]}</i>" if expl else ""
     qtxt     = q.get("question",q.get("text",""))
-    
+
     try:
         await callback.message.edit_text(
             f"{icon} <b>{'To\'g\'ri!' if is_c else 'Noto\'g\'ri!'}</b>\n\n"

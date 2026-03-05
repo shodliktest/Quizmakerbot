@@ -107,6 +107,75 @@ async def admin_stats(callback: CallbackQuery):
     except TelegramBadRequest: await callback.message.answer(text, reply_markup=b.as_markup())
 
 
+# ── Kunlik hisobot ────────────────────────────────────────────
+
+@router.callback_query(F.data == "adm_daily_report")
+@router.message(Command("daily"))
+async def adm_daily_report(event):
+    """Kunlik natijalar hisoboti — admin buyrug'i bilan"""
+    uid = event.from_user.id
+    if not is_admin(uid): return
+    await _send_daily_report(event.bot if hasattr(event, 'bot') else event.bot, uid)
+
+async def _send_daily_report(bot, send_to_uid):
+    """Kunlik hisobotni generatsiya qilish va yuborish"""
+    daily  = ram.get_daily()
+    users  = ram.get_users()
+    tests  = ram.get_tests_meta()
+    today  = datetime.now(UTC).strftime("%Y-%m-%d")
+    now    = datetime.now(UTC).strftime("%H:%M")
+
+    total_attempts = sum(
+        sum(e.get("attempts",0) for e in d.get("by_test",{}).values())
+        for d in daily.values()
+    )
+    active_users = sum(
+        1 for d in daily.values()
+        if any(e.get("attempts",0) > 0 for e in d.get("by_test",{}).values())
+    )
+
+    # Test bo'yicha statistika
+    test_stats = {}
+    for uid_str, data in daily.items():
+        for tid, entry in data.get("by_test",{}).items():
+            if entry.get("attempts",0) == 0: continue
+            if tid not in test_stats:
+                test_stats[tid] = {"count": 0, "pcts": []}
+            test_stats[tid]["count"] += entry.get("attempts",0)
+            test_stats[tid]["pcts"].extend(entry.get("all_pcts",[]))
+
+    top_tests = sorted(test_stats.items(), key=lambda x: x[1]["count"], reverse=True)[:5]
+
+    text = (
+        f"📊 <b>KUNLIK HISOBOT</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📅 {today} | ⏰ {now} UTC\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"👥 Faol foydalanuvchilar: <b>{active_users}</b>\n"
+        f"🔄 Jami urinishlar: <b>{total_attempts}</b>\n"
+        f"📋 Jami testlar: <b>{len(tests)}</b>\n\n"
+    )
+
+    if top_tests:
+        text += "<b>🔥 TOP TESTLAR (bugun):</b>\n"
+        for tid, stat in top_tests:
+            meta   = next((t for t in tests if t.get("test_id") == tid), {})
+            title  = meta.get("title", tid)[:20] if meta else tid
+            avg_p  = round(sum(stat["pcts"]) / len(stat["pcts"]), 1) if stat["pcts"] else 0
+            text  += f"  📝 {title}: {stat['count']} urinish | ⭐ {avg_p}%\n"
+        text += "\n"
+
+    text += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="⬅️ Admin Panel", callback_data="admin_panel"))
+    b.row(InlineKeyboardButton(text="💾 TG ga saqlash", callback_data="adm_flush"))
+    try:
+        await bot.send_message(send_to_uid, text, reply_markup=b.as_markup())
+    except Exception as e:
+        log.error(f"Daily report: {e}")
+
+
 # ── Userlar ───────────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("admin_users"))

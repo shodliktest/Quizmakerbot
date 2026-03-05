@@ -1,4 +1,4 @@
-"""📊 POLL TEST — private chat, sanash emoji bilan"""
+"""📊 POLL TEST — private chat, faqat emoji sanash"""
 import time, logging, re, asyncio
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, PollAnswer
@@ -18,6 +18,7 @@ LT     = ["A","B","C","D","E","F","G","H","I","J"]
 POLL_TYPES = ("multiple_choice", "true_false", "multi_select")
 _poll_timers: dict = {}
 
+# Faqat emoji countdown — test nomi, raketa shart emas
 COUNT_EMOJIS = ["3️⃣","2️⃣","1️⃣","🚀"]
 
 
@@ -59,7 +60,7 @@ async def start_poll(callback: CallbackQuery, state: FSMContext):
     if callback.message and callback.message.chat.type in ("group","supergroup"):
         return await callback.answer(
             "📊 Poll test private chatda ishlaydi.\n"
-            "👥 Guruh uchun → \"Guruhda yechish\" tugmasini ishlating.",
+            "👥 Guruh uchun → ulashish orqali yuboring.",
             show_alert=True
         )
 
@@ -71,11 +72,9 @@ async def start_poll(callback: CallbackQuery, state: FSMContext):
     msg    = callback.message
     chat_id= msg.chat.id if msg and msg.chat else uid
 
-    # Paused?
     if is_test_paused(tid):
         return await callback.answer("⚠️ Bu test vaqtincha to'xtatilgan!", show_alert=True)
 
-    # FSM tozalash
     from utils.states import TestSolving as _TS
     cur = await state.get_state()
     if cur in (_TS.answering.state, _TS.text_answer.state,
@@ -123,12 +122,9 @@ async def start_poll(callback: CallbackQuery, state: FSMContext):
     try: await msg.delete()
     except Exception: pass
 
-    # 🚀 Faqat emoji countdown (test nomi bilan)
-    countdown = await callback.bot.send_message(
-        chat_id,
-        f"📝 <b>{test.get('title')}</b>"
-    )
-    for emoji in COUNT_EMOJIS:
+    # Faqat emoji countdown (test nomi ko'rsatilmaydi — shart emas)
+    countdown = await callback.bot.send_message(chat_id, "3️⃣")
+    for emoji in COUNT_EMOJIS[1:]:
         await asyncio.sleep(0.8)
         try: await countdown.edit_text(emoji)
         except Exception: pass
