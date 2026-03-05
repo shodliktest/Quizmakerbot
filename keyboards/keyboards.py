@@ -30,8 +30,8 @@ def main_kb(uid=None, chat_type="private"):
 def test_info_kb(tid, creator_id=None, viewer_uid=None):
     """
     Test kartochkasi tugmalari.
-    - creator_id + viewer_uid → test egasi ko'rsa → qo'shimcha tugmalar
-    - is_paused → pause/resume tugmasi
+    - "Guruhda yechish" olib tashlandi — faqat ulashish orqali
+    - Ulashish → inline mode → 3 ta tugma (inline, poll, guruh)
     """
     from utils.ram_cache import get_test_meta
     from config import ADMIN_IDS
@@ -59,9 +59,8 @@ def test_info_kb(tid, creator_id=None, viewer_uid=None):
             InlineKeyboardButton(text="▶️ Inline test",  callback_data=f"start_test_{tid}"),
             InlineKeyboardButton(text="📊 Quiz Poll",    callback_data=f"start_poll_{tid}"),
         )
-        b.row(
-            InlineKeyboardButton(text="👥 Guruhda yechish", callback_data=f"group_start_{tid}"),
-        )
+
+    # Ulashish — faqat inline share
     b.row(InlineKeyboardButton(text="📤 Ulashish", switch_inline_query=f"test_{tid}"))
 
     if is_owner and not is_paused:
@@ -79,7 +78,7 @@ def test_info_kb(tid, creator_id=None, viewer_uid=None):
     return b.as_markup()
 
 def test_info_simple_kb(tid):
-    """Oddiy test kartochkasi (egasini bilmasa)"""
+    """Oddiy test kartochkasi"""
     b = InlineKeyboardBuilder()
     b.row(
         InlineKeyboardButton(text="▶️ Inline test", callback_data=f"start_test_{tid}"),
@@ -187,6 +186,9 @@ def admin_kb():
     b.row(
         InlineKeyboardButton(text="💾 JSON export", callback_data="adm_export_json"),
         InlineKeyboardButton(text="🗂 Backuplar",   callback_data="adm_backups"),
+    )
+    b.row(
+        InlineKeyboardButton(text="📊 Kunlik hisobot", callback_data="adm_daily_report"),
     )
     b.row(InlineKeyboardButton(text="🏠 Menyu", callback_data="main_menu"))
     return b.as_markup()
