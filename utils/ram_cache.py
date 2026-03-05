@@ -370,3 +370,29 @@ def stats():
         "mb":       round(total / 1024 / 1024, 2),
         "pct":      round(total / RAM_LIMIT * 100, 1),
     }
+
+
+# ══ FOYDALANUVCHI MAXSUS FANLARI ═══════════════════════════════
+
+def get_user_custom_subjects(uid):
+    """Foydalanuvchi qo'lda yozgan fan nomlari"""
+    return _get("user_custom_subjects", {}).get(str(uid), [])
+
+def add_user_custom_subject(uid, subject):
+    """Yangi maxsus fan nomini saqlash"""
+    from config import SUBJECTS
+    if subject in SUBJECTS:
+        return  # Standart fanda qo'shish shart emas
+    d = _get("user_custom_subjects", {})
+    lst = d.get(str(uid), [])
+    if subject not in lst:
+        lst.insert(0, subject)
+        lst = lst[:10]  # Max 10 ta
+    d[str(uid)] = lst
+    _set("user_custom_subjects", d)
+
+def get_all_custom_subjects():
+    return _get("user_custom_subjects", {})
+
+def set_all_custom_subjects(d):
+    _set("user_custom_subjects", d)
