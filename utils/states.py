@@ -1,31 +1,34 @@
 """📌 FSM States"""
 from aiogram.fsm.state import State, StatesGroup
 
-class Solve(StatesGroup):
+class TestSolving(StatesGroup):
     answering   = State()
     text_answer = State()
 
-class PollSolve(StatesGroup):
+class PollTest(StatesGroup):
     active = State()
     paused = State()
 
-class Create(StatesGroup):
-    method     = State()
-    polls      = State()
-    file       = State()
-    poll_time  = State()
-    subject    = State()
-    title      = State()
-    difficulty = State()
-    time_limit = State()
-    passing    = State()
-    attempts   = State()
-    visibility = State()
+class GroupTest(StatesGroup):
+    running = State()
 
-class Admin(StatesGroup):
+class CreateTest(StatesGroup):
+    choose_method  = State()
+    waiting_polls  = State()
+    set_poll_time  = State()
+    upload_file    = State()
+    set_subject    = State()
+    set_title      = State()
+    set_difficulty = State()
+    set_time_limit = State()
+    set_passing    = State()
+    set_attempts   = State()
+    set_visibility = State()
+
+class AdminPanel(StatesGroup):
     broadcast   = State()
     block_user  = State()
     delete_test = State()
 
-class Contact(StatesGroup):
-    writing = State()
+class ContactAdmin(StatesGroup):
+    waiting_message = State()
