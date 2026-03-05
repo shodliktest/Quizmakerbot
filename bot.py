@@ -70,7 +70,7 @@ async def main():
         except Exception: pass
 
     log.info("🚀 Bot ishga tushdi!")
-    await dp.start_polling(bot, drop_pending_updates=True)
+    await dp.start_polling(bot, drop_pending_updates=True, handle_signals=False)
 
 
 # ── MIDNIGHT FLUSH — kuniga 1 marta, 00:00 UTC ────────────────
@@ -173,13 +173,23 @@ def run_in_background():
     import threading
 
     def _run():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        import asyncio as _asyncio
+        loop = _asyncio.new_event_loop()
+        _asyncio.set_event_loop(loop)
+        # signal handler faqat main threadda ishlaydi, shuning uchun o'chirib qo'yamiz
         try:
             loop.run_until_complete(main())
         except Exception as e:
             log.error(f"Bot thread xato: {e}")
         finally:
+            try:
+                pending = _asyncio.all_tasks(loop)
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    loop.run_until_complete(_asyncio.gather(*pending, return_exceptions=True))
+            except Exception:
+                pass
             loop.close()
 
     t = threading.Thread(target=_run, daemon=True, name="bot-thread")
