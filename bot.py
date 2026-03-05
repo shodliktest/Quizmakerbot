@@ -70,22 +70,17 @@ async def main():
         except Exception: pass
 
     log.info("🚀 Bot ishga tushdi!")
-    await dp.start_polling(bot, drop_pending_updates=True, handle_signals=False)
+    await dp.start_polling(bot, drop_pending_updates=True)
 
 
-# ── MIDNIGHT FLUSH — kuniga 1 marta, 00:00 UTC ────────────────
+# ── MIDNIGHT FLUSH — kuniga 1 marta, faqat 00:00 ──────────────
 
 async def _midnight_flush_loop(bot):
     """
     Har kun 00:00 UTC da:
     1. Kecha kunlik natijalarni TG ga yuboradi (backup)
     2. Users va settings saqlaydi
-    3. RAM daily tozalanadi — yangi kun uchun
-    4. Admin ga xabar yuboriladi
-
-    MUHIM:
-    - Natijalar TG ga FAQAT shu yerda yuklanadi (har yechilganda emas)
-    - RAM daily faqat midnight da tozalanadi
+    3. RAM daily tozalanmaydi — testlar va users doim qoladi
     """
     flushed_date = None
     while True:
@@ -98,13 +93,14 @@ async def _midnight_flush_loop(bot):
                 log.info("🌙 Midnight flush boshlanmoqda...")
                 from utils import tg_db, ram_cache as ram
 
+                # Kecha sanasi (chunki 00:00 da kecha tugagan)
                 yesterday = str(today - timedelta(days=1))
                 daily     = ram.get_daily()
                 users     = ram.get_users()
                 settings  = ram.get_all_settings()
 
                 if tg_db.ready():
-                    # 1. Kunlik backup (bitta fayl)
+                    # 1. Kunlik backup
                     if daily:
                         mid = await tg_db.upload_backup(daily, yesterday)
                         log.info(f"✅ Backup yuborildi: {yesterday} msg={mid}")
@@ -113,9 +109,9 @@ async def _midnight_flush_loop(bot):
                     ram.clear_users_dirty()
                     # 3. Settings
                     await tg_db.save_settings(settings)
-                    # 4. RAM daily tozalash
+                    # 4. RAM daily tozalash (yangi kun uchun)
                     ram.clear_daily()
-                    log.info("✅ Midnight flush yakunlandi")
+                    log.info("✅ Midnight flush yakunlandi, daily RAM tozalandi")
 
                 # Admin ga xabar
                 for aid in ADMIN_IDS:
@@ -136,7 +132,6 @@ async def _midnight_flush_loop(bot):
 # ── USERS AUTO FLUSH — har 10 daqiqada (dirty bo'lsa) ─────────
 
 async def _users_auto_flush_loop(bot):
-    """Yangi user qo'shilsa users.json ni TG ga yuboradi"""
     await asyncio.sleep(600)
     while True:
         try:
@@ -166,36 +161,6 @@ async def _cache_cleanup_loop():
             break
         except Exception as e:
             log.error(f"Cache cleanup xato: {e}")
-
-
-def run_in_background():
-    """Streamlit app tomonidan chaqiriladi — botni background threadda ishga tushiradi"""
-    import threading
-
-    def _run():
-        import asyncio as _asyncio
-        loop = _asyncio.new_event_loop()
-        _asyncio.set_event_loop(loop)
-        # signal handler faqat main threadda ishlaydi, shuning uchun o'chirib qo'yamiz
-        try:
-            loop.run_until_complete(main())
-        except Exception as e:
-            log.error(f"Bot thread xato: {e}")
-        finally:
-            try:
-                pending = _asyncio.all_tasks(loop)
-                for task in pending:
-                    task.cancel()
-                if pending:
-                    loop.run_until_complete(_asyncio.gather(*pending, return_exceptions=True))
-            except Exception:
-                pass
-            loop.close()
-
-    t = threading.Thread(target=_run, daemon=True, name="bot-thread")
-    t.start()
-    log.info("✅ Bot background threadda ishga tushdi")
-    return t
 
 
 if __name__ == "__main__":
