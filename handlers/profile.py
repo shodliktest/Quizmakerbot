@@ -443,6 +443,43 @@ async def _show_test_settings(msg, meta, tid, edit=False):
         await msg.answer(text, reply_markup=kb)
 
 
+@router.callback_query(F.data.startswith("edit_att_"))
+async def edit_att_cb(callback: CallbackQuery):
+    await callback.answer()
+    tid = callback.data[9:]
+    b = InlineKeyboardBuilder()
+    for a in [1, 2, 3, 5, 10]:
+        b.add(InlineKeyboardButton(text=f"🔄 {a}x", callback_data=f"set_att_{tid}_{a}"))
+    b.adjust(3)
+    b.row(InlineKeyboardButton(text="♾ Cheksiz", callback_data=f"set_att_{tid}_0"))
+    b.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"mytest_settings_{tid}"))
+    await callback.message.edit_text(
+        "<b>🔄 Urinishlar sonini ozgartirish</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "Har foydalanuvchi necha marta ishlashi mumkin?",
+        reply_markup=b.as_markup()
+    )
+
+
+@router.callback_query(F.data.startswith("set_att_"))
+async def set_att_cb(callback: CallbackQuery):
+    await callback.answer()
+    parts   = callback.data.split("_")
+    new_att = int(parts[-1])
+    tid     = "_".join(parts[2:-1])
+    from utils.ram_cache import update_test_meta, get_test_meta
+    update_test_meta(tid, {"max_attempts": new_att})
+    att_t = f"{new_att} marta" if new_att else "Cheksiz"
+    meta  = get_test_meta(tid) or {}
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="Sozlamalar", callback_data=f"mytest_settings_{tid}"))
+    await callback.message.edit_text(
+        f"Urinishlar soni yangilandi: {att_t}\n"
+        f"Test: {meta.get('title', tid)}",
+        reply_markup=b.as_markup()
+    )
+
+
 @router.callback_query(F.data.startswith("mytest_view_"))
 async def my_test_view(callback: CallbackQuery):
     await callback.answer()
