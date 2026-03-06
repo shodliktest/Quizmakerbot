@@ -380,6 +380,8 @@ async def method_poll(callback: CallbackQuery, state: FSMContext):
         "<i>💡 Faqat 'Viktorina' (Quiz) turi qabul qilinadi!</i>",
         reply_markup=b.as_markup()
     )
+    # Shu xabarning id sini progress_msg_id sifatida saqlaymiz
+    await state.update_data(progress_msg_id=callback.message.message_id)
     await state.set_state(CreateTest.waiting_polls)
 
 
@@ -421,7 +423,7 @@ async def catch_poll(message: Message, state: FSMContext):
         f"<i>Davom ettiring yoki tayyor bo'lsa bosing:</i>"
     )
 
-    # Eski progress xabarini EDIT qilish — yangi xabar yuborilmaydi
+    # Eski progress xabarini EDIT qilish — yangi xabar HECH QACHON yuborilmaydi
     d2 = await state.get_data()
     old_pid = d2.get("progress_msg_id")
     if old_pid:
@@ -430,10 +432,10 @@ async def catch_poll(message: Message, state: FSMContext):
                 chat_id=message.chat.id, message_id=old_pid,
                 text=prog_text, reply_markup=b.as_markup()
             )
-            return
+            return  # Edit muvaffaqiyatli — xabar yuborilmaydi
         except Exception:
+            # Edit bo'lmadi — yangi xabar, id sini yangilaymiz
             pass
-    # Birinchi savol — yangi xabar
     prog = await message.answer(prog_text, reply_markup=b.as_markup())
     await state.update_data(progress_msg_id=prog.message_id)
 
@@ -620,6 +622,13 @@ async def save_test(callback: CallbackQuery, state: FSMContext):
     vis_map = {"public": "🌍 Ommaviy", "link": "🔗 Ssilka", "private": "🔒 Shaxsiy"}
     vis  = vis_map.get(td["visibility"], "")
 
+    # Barcha progress xabarlarini o'chirish (faqat progress, asosiy emas)
+    cid = callback.message.chat.id
+    for key in ("progress_msg_id", "text_progress_id"):
+        mid = d.get(key)
+        if mid and mid != callback.message.message_id:
+            await _del(callback.bot, cid, mid)
+
     await state.clear()
 
     # Kalit javoblar matni
@@ -661,8 +670,15 @@ async def save_test(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "cancel_create")
 async def cancel_create(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
     await callback.answer()
+    d   = await state.get_data()
+    cid = callback.message.chat.id
+    # Barcha progress xabarlarini o'chirish
+    for key in ("progress_msg_id", "text_progress_id"):
+        mid = d.get(key)
+        if mid and mid != callback.message.message_id:
+            await _del(callback.bot, cid, mid)
+    await state.clear()
     try:
         await callback.message.delete()
     except Exception:
