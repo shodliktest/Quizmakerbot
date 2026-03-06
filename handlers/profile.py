@@ -502,13 +502,13 @@ async def del_mytest_confirm(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("del_mytest_ok_"))
 async def del_mytest_exec(callback: CallbackQuery):
+    await callback.answer("⏳ O'chirilmoqda...")   # DARHOL javob
     tid = callback.data[14:]
     uid = callback.from_user.id
     meta= get_test_meta(tid)
     from config import ADMIN_IDS
     if uid != (meta or {}).get("creator_id") and uid not in ADMIN_IDS:
-        return await callback.answer("⚠️ Ruxsat yo'q!", show_alert=True)
-    await callback.answer("⏳ O'chirilmoqda...")
+        return
     from utils.db import delete_test
     await delete_test(tid)
     try:
