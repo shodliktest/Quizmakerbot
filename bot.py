@@ -1,3 +1,33 @@
+
+from aiogram import BaseMiddleware
+from aiogram.types import Message, CallbackQuery
+from utils import ram_cache as ram
+
+class ClearMenuMiddleware(BaseMiddleware):
+    """Har yangi xabar yoki callback kelganda asosiy menyu xabarini o'chiradi"""
+    async def __call__(self, handler, event, data):
+        uid = None
+        bot = None
+        if isinstance(event, Message):
+            uid = event.from_user.id if event.from_user else None
+            bot = event.bot
+        elif isinstance(event, CallbackQuery):
+            # main_menu o'zi — o'chirmasin (u o'zi delete qiladi)
+            if event.data == "main_menu":
+                return await handler(event, data)
+            uid = event.from_user.id if event.from_user else None
+            bot = event.bot
+
+        if uid and bot:
+            menu = ram.pop_menu_msg(uid)
+            if menu:
+                try:
+                    await bot.delete_message(menu["cid"], menu["mid"])
+                except Exception:
+                    pass
+
+        return await handler(event, data)
+
 """🤖 BOT — Asosiy ishga tushirish"""
 import asyncio, logging
 from datetime import datetime, timezone, date, timedelta
@@ -30,6 +60,8 @@ async def main():
     bot = Bot(token=BOT_TOKEN,
               default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp  = Dispatcher(storage=MemoryStorage())
+    dp.message.middleware(ClearMenuMiddleware())
+    dp.callback_query.middleware(ClearMenuMiddleware())
 
     dp.include_router(r_inline)
     dp.include_router(r_poll_router)
@@ -214,6 +246,8 @@ async def _main_no_signals():
     bot = Bot(token=BOT_TOKEN,
               default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp  = Dispatcher(storage=MemoryStorage())
+    dp.message.middleware(ClearMenuMiddleware())
+    dp.callback_query.middleware(ClearMenuMiddleware())
 
     dp.include_router(r_inline)
     dp.include_router(r_poll_router)
