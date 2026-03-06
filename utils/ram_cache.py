@@ -467,6 +467,18 @@ def get_last_result(uid, tid):
 
 # ══ STATS ══════════════════════════════════════════════════════
 
+
+def set_menu_msg(uid, cid, msg_id):
+    """Asosiy menyu xabarini saqlash — keyingi harakatda o'chiriladi"""
+    _set(f"menu_msg_{uid}", {"cid": cid, "mid": msg_id})
+
+def pop_menu_msg(uid):
+    """Asosiy menyu xabarini olish va o'chirish"""
+    with _lck:
+        key  = f"menu_msg_{uid}"
+        data = _RAM.pop(key, None)
+    return data  # {"cid":..., "mid":...} yoki None
+
 def stats():
     metas = _get("tests_meta", [])
     daily = get_daily()
