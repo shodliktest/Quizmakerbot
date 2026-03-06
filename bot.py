@@ -201,14 +201,20 @@ if __name__ == "__main__":
 
 # ── Streamlit uchun background thread ────────────────────────
 
+_bot_thread = None
+
 def run_in_background():
     """
     streamlit_app.py tomonidan chaqiriladi.
-    Botni alohida thread da ishga tushiradi.
-    Signal handler muammosini oldini olish uchun
-    dp.start_polling(..., handle_signals=False) ishlatiladi.
+    Allaqachon ishlaётgan bo'lsa — qayta ishga tushirmaydi (Conflict oldini olish).
     """
+    global _bot_thread
     import threading
+
+    # Allaqachon ishlaётgan thread bormi?
+    if _bot_thread is not None and _bot_thread.is_alive():
+        log.info("⚠️ Bot thread allaqachon ishlaёtibdi — qayta ishga tushirilmadi")
+        return _bot_thread
 
     def _run():
         import asyncio
@@ -224,10 +230,10 @@ def run_in_background():
             except Exception:
                 pass
 
-    t = threading.Thread(target=_run, daemon=True, name="TelegramBot")
-    t.start()
+    _bot_thread = threading.Thread(target=_run, daemon=True, name="TelegramBot")
+    _bot_thread.start()
     log.info("✅ Bot thread ishga tushdi")
-    return t
+    return _bot_thread
 
 
 async def _main_no_signals():
