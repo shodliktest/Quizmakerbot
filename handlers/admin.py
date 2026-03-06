@@ -347,8 +347,9 @@ async def adm_test_detail(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("del_test_"))
 async def del_test_confirm(callback: CallbackQuery):
+    await callback.answer()   # Telegram timeoutni oldini olish
     if not is_admin(callback.from_user.id):
-        return await callback.answer("🚫", show_alert=True)
+        return
     tid  = callback.data[9:]
     meta = ram.get_test_meta(tid) or {}
     if not meta:
@@ -369,11 +370,11 @@ async def del_test_confirm(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("del_confirm_"))
 async def del_test_exec(callback: CallbackQuery):
+    await callback.answer("⏳ O'chirilmoqda...")   # DARHOL javob
     if not is_admin(callback.from_user.id):
-        return await callback.answer("🚫", show_alert=True)
+        return
     tid  = callback.data[12:]
     meta = ram.get_test_meta(tid) or {}
-    await callback.answer("⏳")
     from utils.db import delete_test
     await delete_test(tid)
     try:
