@@ -60,6 +60,7 @@ async def main():
     asyncio.create_task(_midnight_flush_loop(bot))
     asyncio.create_task(_users_auto_flush_loop(bot))
     asyncio.create_task(_cache_cleanup_loop())
+    asyncio.create_task(tg_db.auto_flush_loop())
 
     # Admin ga xabar
     for aid in ADMIN_IDS:
