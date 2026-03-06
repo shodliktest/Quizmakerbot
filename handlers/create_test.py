@@ -192,24 +192,26 @@ async def upload_text(message: Message, state: FSMContext):
 
     # Debounce: eski taskni bekor qilib, yangi 0.8s task
     uid      = message.from_user.id
-    d2       = await state.get_data()
-    old_pid  = d2.get("text_progress_id")
     old_task = _text_debounce.pop(uid, None)
     if old_task:
         old_task.cancel()
     task = asyncio.create_task(
-        _flush_texts(message.bot, message.chat.id, uid, state, len(buf), old_pid)
+        _flush_texts(message.bot, message.chat.id, uid, state, len(buf))
     )
     _text_debounce[uid] = task
 
 
 # {uid: asyncio.Task} — matn debounce
 _text_debounce: dict = {}
+# {uid: msg_id} — matn progress xabar id si
+_text_progress: dict = {}
 
-async def _flush_texts(bot, cid, uid, state, count, old_pid):
+async def _flush_texts(bot, cid, uid, state, count):
     """0.8s kutib — eski progress o'chirib, pastga yangi count bilan yuboradi"""
     try:
         await asyncio.sleep(0.8)
+        d     = await state.get_data()
+        count = len(d.get("text_buffer", [])) or count
         if not count:
             return
         b = InlineKeyboardBuilder()
@@ -219,9 +221,11 @@ async def _flush_texts(bot, cid, uid, state, count, old_pid):
             f"📥 <b>{count} ta xabar qabul qilindi</b>\n\n"
             f"<i>Hammasi yuborgach — ✅ Tayyor bosing</i>"
         )
+        old_pid = _text_progress.pop(uid, None)
         if old_pid:
             await _del(bot, cid, old_pid)
         msg = await bot.send_message(cid, prog_text, reply_markup=b.as_markup())
+        _text_progress[uid] = msg.message_id
         await state.update_data(text_progress_id=msg.message_id)
     except asyncio.CancelledError:
         pass
@@ -403,11 +407,18 @@ async def method_poll(callback: CallbackQuery, state: FSMContext):
 
 # {uid: asyncio.Task} — debounce tasklari
 _poll_debounce: dict = {}
+# {uid: msg_id} — joriy progress xabar id si (tezkor, state kutmasdan)
+_poll_progress: dict = {}
+# {uid: msg_id} — joriy progress xabar id si (tezkor, state kutmasdan)
+_poll_progress: dict = {}
 
-async def _flush_polls(bot, cid, uid, state, count, old_pid):
+async def _flush_polls(bot, cid, uid, state, count):
     """0.8s kutib — eski progress o'chirib, pastga yangi count bilan yuboradi"""
     try:
         await asyncio.sleep(0.8)
+        # 0.8s da count ni state dan qayta olamiz (eng oxirgi)
+        d     = await state.get_data()
+        count = len(d.get("questions", [])) or count
         if not count:
             return
         b = InlineKeyboardBuilder()
@@ -417,9 +428,12 @@ async def _flush_polls(bot, cid, uid, state, count, old_pid):
             f"📥 <b>Qabul qilindi: {count} ta savol</b>\n\n"
             f"<i>Davom ettiring yoki tayyor bo'lsa bosing:</i>"
         )
+        # Global dict dan old_pid — state dan tezroq
+        old_pid = _poll_progress.pop(uid, None)
         if old_pid:
             await _del(bot, cid, old_pid)
         prog = await bot.send_message(cid, prog_text, reply_markup=b.as_markup())
+        _poll_progress[uid] = prog.message_id
         await state.update_data(progress_msg_id=prog.message_id)
     except asyncio.CancelledError:
         pass
@@ -458,13 +472,11 @@ async def catch_poll(message: Message, state: FSMContext):
     # Debounce: eski taskni bekor qilib, yangi 0.8s task ishlatamiz
     # count va old_pid to'g'ridan uzatiladi — state.get_data() task ichida chaqirilmaydi
     uid     = message.from_user.id
-    d2      = await state.get_data()
-    old_pid = d2.get("progress_msg_id")
     old_task = _poll_debounce.pop(uid, None)
     if old_task:
         old_task.cancel()
     task = asyncio.create_task(
-        _flush_polls(message.bot, message.chat.id, uid, state, len(qs), old_pid)
+        _flush_polls(message.bot, message.chat.id, uid, state, len(qs))
     )
     _poll_debounce[uid] = task
 
