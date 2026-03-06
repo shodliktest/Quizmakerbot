@@ -389,16 +389,13 @@ async def method_poll(callback: CallbackQuery, state: FSMContext):
     b.row(InlineKeyboardButton(text="✅ Tayyor", callback_data="finish_polls"))
     b.row(InlineKeyboardButton(text="❌ Bekor",  callback_data="cancel_create"))
     await callback.message.edit_text(
-        "<b>📊 QUIZBOT FORWARD</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "1️⃣ @QuizBot ga o'ting\n"
-        "2️⃣ Quiz savollarini bu yerga forward qiling\n"
-        "3️⃣ Hammasi yuborilgach — <b>✅ Tayyor</b> bosing\n\n"
-        "<i>💡 Faqat 'Viktorina' (Quiz) turi qabul qilinadi!</i>",
+        "📥 <b>Qabul qilindi: 0 ta savol</b>\n\n"
+        "<i>@QuizBot dan savollarni forward qiling...\n"
+        "Hammasi yuborilgach — ✅ Tayyor bosing</i>",
         reply_markup=b.as_markup()
     )
-    # Shu xabarning id sini progress_msg_id sifatida saqlaymiz
-    await state.update_data(progress_msg_id=callback.message.message_id)
+    # Shu xabar progress_msg_id — polllar kelganda soni yangilanadi
+    await state.update_data(questions=[], progress_msg_id=callback.message.message_id)
     await state.set_state(CreateTest.waiting_polls)
 
 
@@ -406,7 +403,7 @@ async def method_poll(callback: CallbackQuery, state: FSMContext):
 _poll_debounce: dict = {}
 
 async def _flush_polls(bot, cid, uid, state):
-    """0.8s kutib, to'plangan polllarni bir marta ko'rsatadi"""
+    """0.8s kutib, progress xabarni yangilaydi"""
     try:
         await asyncio.sleep(0.8)
         d   = await state.get_data()
@@ -422,7 +419,14 @@ async def _flush_polls(bot, cid, uid, state):
         )
         old_pid = d.get("progress_msg_id")
         if old_pid:
-            await _del(bot, cid, old_pid)
+            try:
+                await bot.edit_message_text(
+                    chat_id=cid, message_id=old_pid,
+                    text=prog_text, reply_markup=b.as_markup()
+                )
+                return
+            except Exception:
+                await _del(bot, cid, old_pid)
         prog = await bot.send_message(cid, prog_text, reply_markup=b.as_markup())
         await state.update_data(progress_msg_id=prog.message_id)
     except asyncio.CancelledError:
@@ -658,13 +662,8 @@ async def save_test(callback: CallbackQuery, state: FSMContext):
     vis_map = {"public": "🌍 Ommaviy", "link": "🔗 Ssilka", "private": "🔒 Shaxsiy"}
     vis  = vis_map.get(td["visibility"], "")
 
-    # Barcha progress xabarlarini o'chirish (faqat progress, asosiy emas)
-    cid = callback.message.chat.id
-    for key in ("progress_msg_id", "text_progress_id"):
-        mid = d.get(key)
-        if mid and mid != callback.message.message_id:
-            await _del(callback.bot, cid, mid)
-
+    # Progress xabarlar chatda qoladi (foydalanuvchi ko'rishi uchun)
+    # Faqat joriy (callback) xabar test ma'lumoti bilan almashtiriladi
     await state.clear()
 
     # Kalit javoblar matni
@@ -709,12 +708,8 @@ async def cancel_create(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     d   = await state.get_data()
     cid = callback.message.chat.id
-    # Barcha progress xabarlarini o'chirish
-    for key in ("progress_msg_id", "text_progress_id"):
-        mid = d.get(key)
-        if mid and mid != callback.message.message_id:
-            await _del(callback.bot, cid, mid)
     await state.clear()
+    # Progress xabar chatda qolsin, faqat callback xabarni o'chirish
     try:
         await callback.message.delete()
     except Exception:
