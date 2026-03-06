@@ -201,18 +201,10 @@ async def upload_text(message: Message, state: FSMContext):
         f"📥 <b>{len(buf)} ta xabar qabul qilindi</b>\n\n"
         f"<i>Hammasi yuborgach — ✅ Tayyor bosing</i>"
     )
+    # Eski progress xabarini o'chirib, pastga yangi yuborish
+    # (edit qilsak xabar yuqorida qolib ketadi — Telegram cheklovi)
     if old_pid:
-        try:
-            await message.bot.edit_message_text(
-                chat_id=message.chat.id,
-                message_id=old_pid,
-                text=prog_text,
-                reply_markup=b.as_markup()
-            )
-            return  # Edit muvaffaqiyatli — yangi xabar yo'q
-        except:
-            # Edit bo'lmadi — o'chirib yangi yuborish
-            await _del(message.bot, message.chat.id, old_pid)
+        await _del(message.bot, message.chat.id, old_pid)
     new_msg = await message.answer(prog_text, reply_markup=b.as_markup())
     await state.update_data(text_progress_id=new_msg.message_id)
 
@@ -498,25 +490,31 @@ async def set_subj(callback: CallbackQuery, state: FSMContext):
 @router.message(F.text, CreateTest.set_subject)
 async def subj_text(message: Message, state: FSMContext):
     subj = message.text.strip()
-    await state.update_data(category=subj)
+    d    = await state.get_data()
     await _del(message.bot, message.chat.id, message.message_id)
-    # Maxsus fan nomini RAM ga saqlash
+    await _del(message.bot, message.chat.id, d.get("prev_bot_msg_id"))
     from utils.ram_cache import add_user_custom_subject
     add_user_custom_subject(message.from_user.id, subj)
-    await message.answer("<b>🏷 Test nomini yozing:</b>")
+    await state.update_data(category=subj)
+    msg = await message.answer("<b>🏷 Test nomini yozing:</b>")
+    await state.update_data(prev_bot_msg_id=msg.message_id)
     await state.set_state(CreateTest.set_title)
 
 
 @router.message(F.text, CreateTest.set_title)
 async def set_title(message: Message, state: FSMContext):
-    await state.update_data(title=message.text.strip())
+    title = message.text.strip()
+    d     = await state.get_data()
     await _del(message.bot, message.chat.id, message.message_id)
-    await message.answer(
+    await _del(message.bot, message.chat.id, d.get("prev_bot_msg_id"))
+    await state.update_data(title=title)
+    msg = await message.answer(
         f"<b>📊 QIYINLIK DARAJASI</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"Mavzu: <b>{message.text.strip()}</b>",
+        f"Mavzu: <b>{title}</b>",
         reply_markup=difficulty_kb()
     )
+    await state.update_data(prev_bot_msg_id=msg.message_id)
     await state.set_state(CreateTest.set_difficulty)
 
 
