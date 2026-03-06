@@ -121,15 +121,26 @@ async def create_test(creator_id, data):
     return tid
 
 async def delete_test(tid):
-    """Test o'chirishdan avval TG ga yuboriladi (backup), keyin o'chiriladi"""
+    """
+    Test o'chirish tartibi:
+      1. RAMda mavjud test — backup (lazy load YO'Q, faqat cache dan)
+      2. RAMdan o'chirish
+      3. TG indexda is_active=False
+    Lazy load QILINMAYDI — sekin va timeout beradi.
+    """
     from utils import tg_db
-    # Avval full testni backup sifatida TG ga jo'nat
-    test = await get_test_full(tid)
-    if test and tg_db.ready():
+
+    # Faqat RAM/cache dan olish — TGga bormaslik
+    test = ram.get_cached_questions(tid) or ram.get_test_meta(tid) or {}
+
+    # Backup — agar savollar RAM da bo'lsa yuboramiz, bo'lmasa faqat meta
+    if tg_db.ready() and test:
         await tg_db.save_deleted_test_backup(test)
+
     # RAMdan o'chirish
     ram.delete_test_from_ram(tid)
-    # TG index da is_active=False
+
+    # TG indexda is_active=False (saqlaydi)
     if tg_db.ready():
         await tg_db.delete_test_tg(tid)
 
