@@ -22,6 +22,48 @@ ANSWER_SHOW_SEC = 30   # Javob ko'rsatilgandan keyin keyingi savolga o'tish
 QUESTION_SEC    = 30   # Savol chiqgandan so'ng javobsiz kutish
 
 
+
+
+async def _show_next_question(bot, cid, msg_id, qs, idx, state, uid):
+    """Keyingi savolni edit orqali ko'rsatib, to'g'ri state o'rnatadi va timer ishlatadi"""
+    text, kb, is_text = _build_question_content(qs, idx)
+    try:
+        await bot.edit_message_text(chat_id=cid, message_id=msg_id, text=text, reply_markup=kb)
+        new_msg_id = msg_id
+    except TelegramBadRequest:
+        msg = await bot.send_message(cid, text, reply_markup=kb)
+        new_msg_id = msg.message_id
+
+    await state.update_data(q_msg_id=new_msg_id, answered_this=False)
+    if is_text:
+        await state.set_state(TestSolving.text_answer)
+    else:
+        await state.set_state(TestSolving.answering)
+
+    _cancel_timer(uid)
+    task = asyncio.create_task(
+        _question_timeout(bot, cid, state, uid, idx, QUESTION_SEC)
+    )
+    _inline_timers[uid] = task
+
+def _check_text_answer(user_ans: str, correct: str, accepted: list = None) -> bool:
+    """Matn javobni tekshirish — katta-kichik harf farq qilmaydi, bo'sh joy kesadi"""
+    u = user_ans.strip().lower()
+    c = str(correct).strip().lower()
+    if u == c:
+        return True
+    # Qabul qilinadigan alternativ javoblar
+    for alt in (accepted or []):
+        if u == str(alt).strip().lower():
+            return True
+    # Raqamli javoblar uchun (masalan "42" == "42.0")
+    try:
+        if float(u.replace(",", ".")) == float(c.replace(",", ".")):
+            return True
+    except Exception:
+        pass
+    return False
+
 def _cancel_timer(uid):
     t = _inline_timers.pop(uid, None)
     if t:
@@ -278,9 +320,14 @@ async def _send_question_new(bot, cid, state, uid):
         await _finish_inline(bot, cid, state, d)
         return
 
-    text, kb = _build_question_content(qs, idx)
+    text, kb, is_text = _build_question_content(qs, idx)
     msg = await bot.send_message(cid, text, reply_markup=kb)
     await state.update_data(q_msg_id=msg.message_id, answered_this=False)
+
+    if is_text:
+        await state.set_state(TestSolving.text_answer)
+    else:
+        await state.set_state(TestSolving.answering)
 
     _cancel_timer(uid)
     task = asyncio.create_task(
@@ -298,7 +345,7 @@ async def _edit_question(bot, cid, msg_id, state, uid):
         await _finish_inline(bot, cid, state, d)
         return
 
-    text, kb = _build_question_content(qs, idx)
+    text, kb, is_text = _build_question_content(qs, idx)
     try:
         await bot.edit_message_text(
             chat_id=cid, message_id=msg_id, text=text, reply_markup=kb
@@ -364,12 +411,14 @@ def _build_question_content(qs, idx):
         text = (
             f"✏️ <b>{idx+1}/{total} — Matn javob</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"{qtxt}\n\n<i>Javobingizni yozing:</i>"
+            f"{qtxt}\n\n"
+            f"<i>✍️ Javobingizni yozing (xabaringiz avtomatik o'chiriladi):</i>"
         )
         b.row(InlineKeyboardButton(text="⏭ O'tkazish", callback_data="skip_q"))
         b.row(pause_btn)
+        return text, b.as_markup(), True   # is_text=True
 
-    return text, b.as_markup()
+    return text, b.as_markup(), False   # is_text=False
 
 
 async def _question_timeout(bot, cid, state, uid, expected_idx, wait_sec):
@@ -377,7 +426,7 @@ async def _question_timeout(bot, cid, state, uid, expected_idx, wait_sec):
     try:
         await asyncio.sleep(wait_sec)
         cur = await state.get_state()
-        if cur not in (TestSolving.answering.state,): return
+        if cur not in (TestSolving.answering.state, TestSolving.text_answer.state): return
         d = await state.get_data()
         if d.get("idx") != expected_idx: return
         if d.get("answered_this"): return
@@ -530,7 +579,7 @@ async def _auto_next(bot, cid, state, uid, expected_new_idx, wait_sec, msg_id=No
     try:
         await asyncio.sleep(wait_sec)
         cur = await state.get_state()
-        if cur not in (TestSolving.answering.state,): return
+        if cur not in (TestSolving.answering.state, TestSolving.text_answer.state): return
         d = await state.get_data()
         if d.get("idx") != expected_new_idx: return
 
@@ -538,22 +587,7 @@ async def _auto_next(bot, cid, state, uid, expected_new_idx, wait_sec, msg_id=No
         q_msg_id = msg_id or d.get("q_msg_id")
 
         if expected_new_idx < len(qs):
-            # Mavjud xabarni edit qilish
-            text, kb = _build_question_content(qs, expected_new_idx)
-            try:
-                await bot.edit_message_text(
-                    chat_id=cid, message_id=q_msg_id, text=text, reply_markup=kb
-                )
-                await state.update_data(q_msg_id=q_msg_id, answered_this=False)
-            except TelegramBadRequest:
-                msg = await bot.send_message(cid, text, reply_markup=kb)
-                await state.update_data(q_msg_id=msg.message_id, answered_this=False)
-
-            _cancel_timer(uid)
-            task = asyncio.create_task(
-                _question_timeout(bot, cid, state, uid, expected_new_idx, QUESTION_SEC)
-            )
-            _inline_timers[uid] = task
+            await _show_next_question(bot, cid, q_msg_id, qs, expected_new_idx, state, uid)
         else:
             d_fresh = await state.get_data()
             await _finish_inline(bot, cid, state, d_fresh)
@@ -574,20 +608,7 @@ async def next_q_now_cb(callback: CallbackQuery, state: FSMContext):
     idx = d.get("idx", 0)
 
     if idx < len(qs):
-        text, kb = _build_question_content(qs, idx)
-        try:
-            await callback.message.edit_text(text, reply_markup=kb)
-            await state.update_data(answered_this=False)
-        except TelegramBadRequest:
-            msg = await callback.bot.send_message(cid, text, reply_markup=kb)
-            msg_id = msg.message_id
-            await state.update_data(q_msg_id=msg_id, answered_this=False)
-
-        _cancel_timer(uid)
-        task = asyncio.create_task(
-            _question_timeout(callback.bot, cid, state, uid, idx, QUESTION_SEC)
-        )
-        _inline_timers[uid] = task
+        await _show_next_question(callback.bot, cid, msg_id, qs, idx, state, uid)
     else:
         d_fresh = await state.get_data()
         await _finish_inline(callback.bot, cid, state, d_fresh)
@@ -596,46 +617,78 @@ async def next_q_now_cb(callback: CallbackQuery, state: FSMContext):
 # ── Matn javob ────────────────────────────────────────────────
 @router.message(StateFilter(TestSolving.text_answer))
 async def text_answer_handler(message: Message, state: FSMContext):
-    uid = message.from_user.id
+    uid      = message.from_user.id
+    user_ans = message.text.strip()
     _cancel_timer(uid)
-    d   = await state.get_data()
-    idx = d.get("idx", 0)
-    qs  = d.get("qs", [])
-    if idx >= len(qs): return
-    ans = d.get("ans", {})
-    ans[str(idx)] = message.text.strip()
-    new_idx = idx + 1
-    await state.update_data(ans=ans, idx=new_idx, answered_this=True, no_ans_streak=0)
-    await state.set_state(TestSolving.answering)
-    cid    = message.chat.id
-    q_msg  = d.get("q_msg_id")
 
+    # Foydalanuvchi xabarini o'chirish
     try: await message.delete()
     except: pass
 
-    if new_idx < len(qs):
-        text, kb = _build_question_content(qs, new_idx)
-        try:
-            if q_msg:
-                await message.bot.edit_message_text(
-                    chat_id=cid, message_id=q_msg, text=text, reply_markup=kb
-                )
-                await state.update_data(answered_this=False)
-            else:
-                msg = await message.bot.send_message(cid, text, reply_markup=kb)
-                await state.update_data(q_msg_id=msg.message_id, answered_this=False)
-        except TelegramBadRequest:
-            msg = await message.bot.send_message(cid, text, reply_markup=kb)
-            await state.update_data(q_msg_id=msg.message_id, answered_this=False)
+    d     = await state.get_data()
+    idx   = d.get("idx", 0)
+    qs    = d.get("qs", [])
+    if idx >= len(qs): return
+    ans   = d.get("ans", {})
+    q     = qs[idx]
+    cid   = message.chat.id
+    q_msg = d.get("q_msg_id")
 
-        _cancel_timer(uid)
-        task = asyncio.create_task(
-            _question_timeout(message.bot, cid, state, uid, new_idx, QUESTION_SEC)
+    # Javobni tekshirish
+    corr      = q.get("correct", "")
+    accepted  = q.get("accepted_answers", [])
+    is_c      = _check_text_answer(user_ans, corr, accepted)
+
+    ans[str(idx)] = user_ans
+    new_idx       = idx + 1
+    await state.update_data(ans=ans, idx=new_idx, answered_this=True, no_ans_streak=0)
+    await state.set_state(TestSolving.answering)
+
+    # Natija xabarini ko'rsatish (edit)
+    expl = q.get("explanation", "") or ""
+    if expl in ("Izoh kiritilmagan.", "Izoh yo'q", "Izoh kiritilmagan"): expl = ""
+    expl_txt = f"\n💡 <i>{expl[:120]}</i>" if expl else ""
+    qtxt     = re.sub(r'^\[\d+/\d+\]\s*', '', q.get("question", q.get("text",""))).strip()
+
+    next_kb = InlineKeyboardBuilder()
+    next_kb.row(InlineKeyboardButton(text="➡️ Keyingi savol", callback_data="next_q_now"))
+
+    icon_ok  = "✅" if is_c else "❌"
+    label_ok = "To'g'ri!" if is_c else "Noto'g'ri!"
+    qtxt_s   = qtxt[:80] + ("..." if len(qtxt) > 80 else "")
+    result_text = (
+        f"{icon_ok} <b>{idx+1}/{len(qs)} — {label_ok}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"<i>{qtxt_s}</i>\n\n"
+        f"✍️ Sizning: <code>{user_ans[:60]}</code>\n"
+        f"✔️ To'g'ri: <b>{str(corr)[:80]}</b>{expl_txt}\n\n"
+        f"<i>{ANSWER_SHOW_SEC}s da avtomatik keyingiga o'tadi</i>"
+    )
+    try:
+        if q_msg:
+            await message.bot.edit_message_text(
+                chat_id=cid, message_id=q_msg,
+                text=result_text, reply_markup=next_kb.as_markup()
+            )
+        else:
+            msg = await message.bot.send_message(
+                cid, result_text, reply_markup=next_kb.as_markup()
+            )
+            await state.update_data(q_msg_id=msg.message_id)
+    except TelegramBadRequest:
+        msg = await message.bot.send_message(
+            cid, result_text, reply_markup=next_kb.as_markup()
         )
-        _inline_timers[uid] = task
-    else:
-        d_fresh = await state.get_data()
-        await _finish_inline(message.bot, cid, state, d_fresh)
+        await state.update_data(q_msg_id=msg.message_id)
+
+    # 30s keyingi savol
+    _cancel_timer(uid)
+    task = asyncio.create_task(
+        _auto_next(bot=message.bot, cid=cid, state=state, uid=uid,
+                   expected_new_idx=new_idx, wait_sec=ANSWER_SHOW_SEC,
+                   msg_id=q_msg)
+    )
+    _inline_timers[uid] = task
 
 
 # ── Skip ──────────────────────────────────────────────────────
@@ -655,19 +708,7 @@ async def skip_q_cb(callback: CallbackQuery, state: FSMContext):
     await state.set_state(TestSolving.answering)
     qs = d.get("qs", [])
     if new_idx < len(qs):
-        text, kb = _build_question_content(qs, new_idx)
-        try:
-            await callback.message.edit_text(text, reply_markup=kb)
-            await state.update_data(answered_this=False)
-        except TelegramBadRequest:
-            msg = await callback.bot.send_message(cid, text, reply_markup=kb)
-            msg_id = msg.message_id
-            await state.update_data(q_msg_id=msg_id, answered_this=False)
-        _cancel_timer(uid)
-        task = asyncio.create_task(
-            _question_timeout(callback.bot, cid, state, uid, new_idx, QUESTION_SEC)
-        )
-        _inline_timers[uid] = task
+        await _show_next_question(callback.bot, cid, msg_id, qs, new_idx, state, uid)
     else:
         d_fresh = await state.get_data()
         await _finish_inline(callback.bot, cid, state, d_fresh)
@@ -701,18 +742,7 @@ async def resume_inline(callback: CallbackQuery, state: FSMContext):
     qs  = d.get("qs", [])
     idx = d.get("idx", 0)
     if idx < len(qs):
-        text, kb = _build_question_content(qs, idx)
-        try:
-            await callback.message.edit_text(text, reply_markup=kb)
-            await state.update_data(q_msg_id=msg_id, answered_this=False)
-        except TelegramBadRequest:
-            msg = await callback.bot.send_message(cid, text, reply_markup=kb)
-            await state.update_data(q_msg_id=msg.message_id, answered_this=False)
-        _cancel_timer(uid)
-        task = asyncio.create_task(
-            _question_timeout(callback.bot, cid, state, uid, idx, QUESTION_SEC)
-        )
-        _inline_timers[uid] = task
+        await _show_next_question(callback.bot, cid, msg_id, qs, idx, state, uid)
     else:
         d_fresh = await state.get_data()
         await _finish_inline(callback.bot, cid, state, d_fresh)
