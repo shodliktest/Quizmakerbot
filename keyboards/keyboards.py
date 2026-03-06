@@ -99,6 +99,16 @@ def analysis_kb(rid, page, total):
     return b.as_markup()
 
 
+
+def answer_kb(letters):
+    """Inline test javob tugmalari"""
+    b = InlineKeyboardBuilder()
+    for i, l in enumerate(letters):
+        icon = COLORS[i] if i < len(COLORS) else "▫️"
+        b.add(InlineKeyboardButton(text=f"{icon} {l}", callback_data=f"ans_{l}"))
+    b.adjust(len(letters))
+    return b.as_markup()
+
 def poll_pause_kb():
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="▶️ Davom etish",     callback_data="resume_poll"))
