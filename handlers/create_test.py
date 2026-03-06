@@ -165,8 +165,11 @@ async def method_text(callback: CallbackQuery, state: FSMContext):
         "Hammasi yuborgach — <b>✅ Tayyor</b> bosing</i>",
         reply_markup=b.as_markup()
     )
-    # Matn bufferini tozalash
-    await state.update_data(text_buffer=[], text_msg_ids=[])
+    # Matn bufferini tozalash + instruktsia xabarini progress id sifatida saqlash
+    await state.update_data(
+        text_buffer=[], text_msg_ids=[],
+        text_progress_id=callback.message.message_id
+    )
     await state.set_state(CreateTest.upload_file)
 
 
@@ -206,9 +209,10 @@ async def upload_text(message: Message, state: FSMContext):
                 text=prog_text,
                 reply_markup=b.as_markup()
             )
-            return
+            return  # Edit muvaffaqiyatli — yangi xabar yo'q
         except:
-            pass
+            # Edit bo'lmadi — o'chirib yangi yuborish
+            await _del(message.bot, message.chat.id, old_pid)
     new_msg = await message.answer(prog_text, reply_markup=b.as_markup())
     await state.update_data(text_progress_id=new_msg.message_id)
 
@@ -423,19 +427,13 @@ async def catch_poll(message: Message, state: FSMContext):
         f"<i>Davom ettiring yoki tayyor bo'lsa bosing:</i>"
     )
 
-    # Eski progress xabarini EDIT qilish — yangi xabar HECH QACHON yuborilmaydi
+    # Eski progress xabarini O'CHIRIB yangi yuborish
+    # (poll xabarini edit_message_text bilan edit qilib bo'lmaydi — Telegram cheklovi)
     d2 = await state.get_data()
     old_pid = d2.get("progress_msg_id")
     if old_pid:
-        try:
-            await message.bot.edit_message_text(
-                chat_id=message.chat.id, message_id=old_pid,
-                text=prog_text, reply_markup=b.as_markup()
-            )
-            return  # Edit muvaffaqiyatli — xabar yuborilmaydi
-        except Exception:
-            # Edit bo'lmadi — yangi xabar, id sini yangilaymiz
-            pass
+        await _del(message.bot, message.chat.id, old_pid)
+
     prog = await message.answer(prog_text, reply_markup=b.as_markup())
     await state.update_data(progress_msg_id=prog.message_id)
 
