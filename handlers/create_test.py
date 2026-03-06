@@ -1,5 +1,5 @@
 """➕ TEST YARATISH — Fayl yoki QuizBot forward"""
-import os, logging, tempfile
+import os, logging, tempfile, asyncio
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, FSInputFile, BufferedInputFile
 from aiogram.fsm.context import FSMContext
@@ -108,6 +108,68 @@ async def _del(bot, cid, mid):
         pass
 
 
+# ── Debounce uchun global dictlar ──────────────────────────
+# Poll (QuizBot forward)
+_poll_debounce: dict = {}  # {uid: asyncio.Task}
+_poll_progress: dict = {}  # {uid: progress_msg_id}
+_poll_count:    dict = {}  # {uid: savol soni}
+
+# Matn (chat orqali)
+_text_debounce: dict = {}  # {uid: asyncio.Task}
+_text_progress: dict = {}  # {uid: progress_msg_id}
+_text_count:    dict = {}  # {uid: xabar soni}
+
+
+async def _flush_polls(bot, cid, uid):
+    """0.8s kutib — eski progress xabarni o'chirib, yangi sanoqli xabar yuboradi"""
+    try:
+        await asyncio.sleep(0.8)
+        count = _poll_count.get(uid, 0)
+        if not count:
+            return
+        b = InlineKeyboardBuilder()
+        b.row(InlineKeyboardButton(text="✅ Tayyor",  callback_data="finish_polls"))
+        b.row(InlineKeyboardButton(text="❌ Bekor",   callback_data="cancel_create"))
+        prog_text = (
+            f"📥 <b>Qabul qilindi: {count} ta savol</b>\n\n"
+            f"<i>Davom ettiring yoki tayyor bo'lsa bosing:</i>"
+        )
+        old_pid = _poll_progress.pop(uid, None)
+        if old_pid:
+            await _del(bot, cid, old_pid)
+        prog = await bot.send_message(cid, prog_text, reply_markup=b.as_markup())
+        _poll_progress[uid] = prog.message_id
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        log.error(f"flush_polls: {e}")
+
+
+async def _flush_texts(bot, cid, uid):
+    """0.8s kutib — eski progress xabarni o'chirib, yangi sanoqli xabar yuboradi"""
+    try:
+        await asyncio.sleep(0.8)
+        count = _text_count.get(uid, 0)
+        if not count:
+            return
+        b = InlineKeyboardBuilder()
+        b.row(InlineKeyboardButton(text="✅ Tayyor (parse qilish)", callback_data="finish_text"))
+        b.row(InlineKeyboardButton(text="❌ Bekor", callback_data="cancel_create"))
+        prog_text = (
+            f"📥 <b>{count} ta xabar qabul qilindi</b>\n\n"
+            f"<i>Hammasi yuborgach — ✅ Tayyor bosing</i>"
+        )
+        old_pid = _text_progress.pop(uid, None)
+        if old_pid:
+            await _del(bot, cid, old_pid)
+        msg = await bot.send_message(cid, prog_text, reply_markup=b.as_markup())
+        _text_progress[uid] = msg.message_id
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        log.error(f"flush_texts: {e}")
+
+
 # ═══════════════════════════════════════════════════════════
 # 1. BOSHLASH
 # ═══════════════════════════════════════════════════════════
@@ -135,17 +197,13 @@ async def create_start(message: Message, state: FSMContext):
 
 
 # ═══════════════════════════════════════════════════════════
-# 2. FAYL YUKLASH
+# 2. MATN ORQALI YUKLASH
 # ═══════════════════════════════════════════════════════════
 
 @router.callback_query(F.data == "method_text", CreateTest.choose_method)
 async def method_text(callback: CallbackQuery, state: FSMContext):
     """Chat orqali matn — ko'p xabar bo'lsa ham hammasi yig'iladi"""
     await callback.answer()
-    uid = callback.from_user.id
-    cid = callback.message.chat.id
-
-    # Yo'riqnomani alohida xabar sifatida yuborish (o'chirilmaydi)
     example = (
         "1. O'zbekiston poytaxti?\n"
         "===A) Toshkent\n"
@@ -156,94 +214,53 @@ async def method_text(callback: CallbackQuery, state: FSMContext):
         "===B) 3.14\n"
         "C) 4.14"
     )
-    try:
-        await callback.message.edit_text(
-            "<b>💬 MATN ORQALI YUKLASH</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            "Savollarni <b>ketma-ket yuboring</b>\n\n"
-            f"<code>{example}</code>\n\n"
-            "<i>💡 To'g'ri javob oldiga <b>===</b> qo'ying</i>"
-        )
-    except: pass
-
-    # Darhol progress xabar yuborish (pastda turadi, yangilanib boradi)
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="✅ Tayyor (parse qilish)", callback_data="finish_text"))
-    b.row(InlineKeyboardButton(text="❌ Bekor", callback_data="cancel_create"))
-    prog = await callback.bot.send_message(
-        cid,
-        "📥 <b>Qabul qilindi: 0 ta xabar</b>\n\n"
-        "<i>Savollarni yuboring...</i>",
+    b.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data="method_file"))
+    b.row(InlineKeyboardButton(text="❌ Bekor",  callback_data="cancel_create"))
+    await callback.message.edit_text(
+        "<b>💬 MATN ORQALI YUKLASH</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "Savollarni <b>ketma-ket yuboring</b> (ko'p xabar bo'lsa ham yig'ib oladi)\n\n"
+        f"<code>{example}</code>\n\n"
+        "<i>💡 To'g'ri javob oldiga <b>===</b> qo'ying\n"
+        "Hammasi yuborgach — <b>✅ Tayyor</b> bosing</i>",
         reply_markup=b.as_markup()
     )
-    _text_progress[uid] = prog.message_id
-    await state.update_data(
-        text_buffer=[], text_msg_ids=[],
-        text_progress_id=prog.message_id,
-        instruction_msg_id=callback.message.message_id  # Tayyor bosilganda o'chiriladi
-    )
+    # Yo'riqnoma xabarini progress sifatida saqlash (birinchi matn kelganda o'chiriladi)
+    uid = callback.from_user.id
+    _text_progress[uid] = callback.message.message_id
+    _text_count[uid] = 0
+    await state.update_data(text_buffer=[], text_msg_ids=[])
     await state.set_state(CreateTest.upload_file)
 
 
 @router.message(F.text, CreateTest.upload_file)
 async def upload_text(message: Message, state: FSMContext):
-    """Kelgan matn xabarlarini bufferga yig'ish — debounce bilan"""
+    """Kelgan matn xabarlarini bufferga yig'ish"""
     text = message.text.strip()
     if len(text) < 3:
         return
 
-    d       = await state.get_data()
+    d = await state.get_data()
     buf     = d.get("text_buffer", [])
     msg_ids = d.get("text_msg_ids", [])
+
     buf.append(text)
     msg_ids.append(message.message_id)
     await state.update_data(text_buffer=buf, text_msg_ids=msg_ids)
 
-    # Foydalanuvchi xabarini darhol o'chirish
+    # Foydalanuvchi xabarini o'chirish
     await _del(message.bot, message.chat.id, message.message_id)
 
-    # Global counter + debounce
+    # Debounce: 0.8s kutib, oxirgi sanoq bilan bitta progress xabar yuboradi
     uid = message.from_user.id
     _text_count[uid] = len(buf)
     old_task = _text_debounce.pop(uid, None)
     if old_task:
         old_task.cancel()
-    task = asyncio.create_task(
-        _flush_texts(message.bot, message.chat.id, uid)
-    )
+    task = asyncio.create_task(_flush_texts(message.bot, message.chat.id, uid))
     _text_debounce[uid] = task
-
-
-# {uid: asyncio.Task} — matn debounce
-_text_debounce: dict = {}
-# {uid: msg_id} — matn progress xabar id si
-_text_progress: dict = {}
-# {uid: int} — matn xabar soni
-_text_count: dict = {}
-
-async def _flush_texts(bot, cid, uid):
-    """0.8s kutib — eski progress o'chirib, pastga yangi count bilan yuboradi"""
-    try:
-        await asyncio.sleep(0.8)
-        count = _text_count.get(uid, 0)
-        if not count:
-            return
-        b = InlineKeyboardBuilder()
-        b.row(InlineKeyboardButton(text="✅ Tayyor (parse qilish)", callback_data="finish_text"))
-        b.row(InlineKeyboardButton(text="❌ Bekor", callback_data="cancel_create"))
-        prog_text = (
-            f"📥 <b>{count} ta xabar qabul qilindi</b>\n\n"
-            f"<i>Hammasi yuborgach — ✅ Tayyor bosing</i>"
-        )
-        old_pid = _text_progress.pop(uid, None)
-        if old_pid:
-            await _del(bot, cid, old_pid)
-        msg = await bot.send_message(cid, prog_text, reply_markup=b.as_markup())
-        _text_progress[uid] = msg.message_id
-    except asyncio.CancelledError:
-        pass
-    except Exception as e:
-        log.error(f"flush_texts: {e}")
 
 
 @router.callback_query(F.data == "finish_text", CreateTest.upload_file)
@@ -255,11 +272,6 @@ async def finish_text(callback: CallbackQuery, state: FSMContext):
 
     if not buf:
         return await callback.answer("❌ Hali matn yuborilmadi!", show_alert=True)
-
-    # Yo'riqnoma xabarini o'chirish
-    instr_id = d.get("instruction_msg_id")
-    if instr_id:
-        await _del(callback.bot, callback.message.chat.id, instr_id)
 
     # Hammasini birlashtirish
     full_text = "\n\n".join(buf)
@@ -405,72 +417,24 @@ async def upload_file(message: Message, state: FSMContext):
 @router.callback_query(F.data == "method_poll", CreateTest.choose_method)
 async def method_poll(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
-    uid = callback.from_user.id
-    cid = callback.message.chat.id
-
-    # Yo'riqnomani edit qilib tugmalarni olib tashlash (Tayyor bosilguncha qoladi)
-    try:
-        await callback.message.edit_text(
-            "<b>📊 QUIZBOT FORWARD</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            "1️⃣ @QuizBot ga o'ting\n"
-            "2️⃣ Quiz savollarini bu yerga forward qiling\n\n"
-            "<i>💡 Faqat 'Viktorina' (Quiz) turi qabul qilinadi!</i>"
-        )
-    except: pass
-
-    # Pastga darhol progress xabar (Tayyor/Bekor tugmalari bilan)
+    await state.update_data(questions=[], poll_time=30)
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="✅ Tayyor", callback_data="finish_polls"))
     b.row(InlineKeyboardButton(text="❌ Bekor",  callback_data="cancel_create"))
-    prog = await callback.bot.send_message(
-        cid,
-        "📥 <b>Qabul qilindi: 0 ta savol</b>\n\n"
-        "<i>Savollar kelishini kuting...</i>",
+    await callback.message.edit_text(
+        "<b>📊 QUIZBOT FORWARD</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "1️⃣ @QuizBot ga o'ting\n"
+        "2️⃣ Quiz savollarini bu yerga forward qiling\n"
+        "3️⃣ Hammasi yuborilgach — <b>✅ Tayyor</b> bosing\n\n"
+        "<i>💡 Faqat 'Viktorina' (Quiz) turi qabul qilinadi!</i>",
         reply_markup=b.as_markup()
     )
-    _poll_progress[uid] = prog.message_id
-    await state.update_data(
-        questions=[],
-        progress_msg_id=prog.message_id,
-        instruction_msg_id=callback.message.message_id  # Tayyor bosilganda o'chiriladi
-    )
+    # Yo'riqnoma xabarini progress sifatida saqlash (birinchi poll kelganda o'chiriladi)
+    uid = callback.from_user.id
+    _poll_progress[uid] = callback.message.message_id
+    _poll_count[uid] = 0
     await state.set_state(CreateTest.waiting_polls)
-
-
-# {uid: asyncio.Task} — debounce tasklari
-_poll_debounce: dict = {}
-# {uid: msg_id} — joriy progress xabar id si
-_poll_progress: dict = {}
-# {uid: int} — joriy savol soni (state kutmasdan)
-_poll_count: dict = {}
-# {uid: int} — joriy savol soni (state kutmasdan)
-_poll_count: dict = {}
-
-async def _flush_polls(bot, cid, uid):
-    """0.8s kutib — eski progress o'chirib, pastga yangi count bilan yuboradi"""
-    try:
-        await asyncio.sleep(0.8)
-        # Global dict dan — state kutmasdan
-        count = _poll_count.get(uid, 0)
-        if not count:
-            return
-        b = InlineKeyboardBuilder()
-        b.row(InlineKeyboardButton(text="✅ Tayyor",  callback_data="finish_polls"))
-        b.row(InlineKeyboardButton(text="❌ Bekor",   callback_data="cancel_create"))
-        prog_text = (
-            f"📥 <b>Qabul qilindi: {count} ta savol</b>\n\n"
-            f"<i>Davom ettiring yoki tayyor bo'lsa bosing:</i>"
-        )
-        old_pid = _poll_progress.pop(uid, None)
-        if old_pid:
-            await _del(bot, cid, old_pid)
-        prog = await bot.send_message(cid, prog_text, reply_markup=b.as_markup())
-        _poll_progress[uid] = prog.message_id
-    except asyncio.CancelledError:
-        pass
-    except Exception as e:
-        log.error(f"flush_polls: {e}")
 
 
 @router.message(F.poll, CreateTest.waiting_polls)
@@ -483,12 +447,10 @@ async def catch_poll(message: Message, state: FSMContext):
     p    = message.poll
     lts  = ["A)", "B)", "C)", "D)", "E)", "F)"]
     opts = [f"{lts[i]} {op.text}" for i, op in enumerate(p.options)]
+
+    # QuizBot [N/N] raqamlarini olib tashlash
     clean_q = _re.sub(r"^\[\d+/\d+\]\s*", "", p.question).strip()
 
-    # Poll xabarini darhol o'chirish
-    await _del(message.bot, message.chat.id, message.message_id)
-
-    # Savolni RAMga qo'shamiz
     d  = await state.get_data()
     qs = d.get("questions", [])
     qs.append({
@@ -501,17 +463,16 @@ async def catch_poll(message: Message, state: FSMContext):
     })
     await state.update_data(questions=qs)
 
-    # Global counter — state kutmasdan tezkor
+    # Poll xabarini o'chirish
+    await _del(message.bot, message.chat.id, message.message_id)
+
+    # Debounce: 0.8s kutib, oxirgi sanoq bilan bitta progress xabar yuboradi
     uid = message.from_user.id
     _poll_count[uid] = len(qs)
-
-    # Debounce: eski taskni bekor qilib, yangi 0.8s task
     old_task = _poll_debounce.pop(uid, None)
     if old_task:
         old_task.cancel()
-    task = asyncio.create_task(
-        _flush_polls(message.bot, message.chat.id, uid)
-    )
+    task = asyncio.create_task(_flush_polls(message.bot, message.chat.id, uid))
     _poll_debounce[uid] = task
 
 
@@ -521,14 +482,6 @@ async def finish_polls(callback: CallbackQuery, state: FSMContext):
     if not d.get("questions"):
         return await callback.answer("❌ Hali savol yo'q!", show_alert=True)
     await callback.answer()
-    uid = callback.from_user.id
-    cid = callback.message.chat.id
-
-    # Yo'riqnoma xabarini o'chirish (u progress xabardan yuqorida edi)
-    instr_id = d.get("instruction_msg_id")
-    if instr_id:
-        await _del(callback.bot, cid, instr_id)
-
     b = InlineKeyboardBuilder()
     for s in POLL_TIMES:
         b.add(InlineKeyboardButton(text=f"⏱ {s}s", callback_data=f"ptime_{s}"))
@@ -583,31 +536,25 @@ async def set_subj(callback: CallbackQuery, state: FSMContext):
 @router.message(F.text, CreateTest.set_subject)
 async def subj_text(message: Message, state: FSMContext):
     subj = message.text.strip()
-    d    = await state.get_data()
+    await state.update_data(category=subj)
     await _del(message.bot, message.chat.id, message.message_id)
-    await _del(message.bot, message.chat.id, d.get("prev_bot_msg_id"))
+    # Maxsus fan nomini RAM ga saqlash
     from utils.ram_cache import add_user_custom_subject
     add_user_custom_subject(message.from_user.id, subj)
-    await state.update_data(category=subj)
-    msg = await message.answer("<b>🏷 Test nomini yozing:</b>")
-    await state.update_data(prev_bot_msg_id=msg.message_id)
+    await message.answer("<b>🏷 Test nomini yozing:</b>")
     await state.set_state(CreateTest.set_title)
 
 
 @router.message(F.text, CreateTest.set_title)
 async def set_title(message: Message, state: FSMContext):
-    title = message.text.strip()
-    d     = await state.get_data()
+    await state.update_data(title=message.text.strip())
     await _del(message.bot, message.chat.id, message.message_id)
-    await _del(message.bot, message.chat.id, d.get("prev_bot_msg_id"))
-    await state.update_data(title=title)
-    msg = await message.answer(
+    await message.answer(
         f"<b>📊 QIYINLIK DARAJASI</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"Mavzu: <b>{title}</b>",
+        f"Mavzu: <b>{message.text.strip()}</b>",
         reply_markup=difficulty_kb()
     )
-    await state.update_data(prev_bot_msg_id=msg.message_id)
     await state.set_state(CreateTest.set_difficulty)
 
 
@@ -711,8 +658,6 @@ async def save_test(callback: CallbackQuery, state: FSMContext):
     vis_map = {"public": "🌍 Ommaviy", "link": "🔗 Ssilka", "private": "🔒 Shaxsiy"}
     vis  = vis_map.get(td["visibility"], "")
 
-    # Progress xabarlar chatda qoladi (foydalanuvchi ko'rishi uchun)
-    # Faqat joriy (callback) xabar test ma'lumoti bilan almashtiriladi
     await state.clear()
 
     # Kalit javoblar matni
@@ -754,11 +699,8 @@ async def save_test(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "cancel_create")
 async def cancel_create(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    d   = await state.get_data()
-    cid = callback.message.chat.id
     await state.clear()
-    # Progress xabar chatda qolsin, faqat callback xabarni o'chirish
+    await callback.answer()
     try:
         await callback.message.delete()
     except Exception:
