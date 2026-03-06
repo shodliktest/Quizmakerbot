@@ -205,7 +205,7 @@ async def upload_text(message: Message, state: FSMContext):
 _text_debounce: dict = {}
 
 async def _flush_texts(bot, cid, uid, state):
-    """0.8s kutib, to'plangan matnlarni bir marta ko'rsatadi"""
+    """0.8s kutib — eski progress o'chirib, pastga yangi yuboradi"""
     try:
         await asyncio.sleep(0.8)
         d   = await state.get_data()
@@ -219,9 +219,11 @@ async def _flush_texts(bot, cid, uid, state):
             f"📥 <b>{len(buf)} ta xabar qabul qilindi</b>\n\n"
             f"<i>Hammasi yuborgach — ✅ Tayyor bosing</i>"
         )
+        # Eski progress xabarini o'chirish
         old_pid = d.get("text_progress_id")
         if old_pid:
             await _del(bot, cid, old_pid)
+        # Pastga yangi yuborish
         msg = await bot.send_message(cid, prog_text, reply_markup=b.as_markup())
         await state.update_data(text_progress_id=msg.message_id)
     except asyncio.CancelledError:
@@ -389,13 +391,16 @@ async def method_poll(callback: CallbackQuery, state: FSMContext):
     b.row(InlineKeyboardButton(text="✅ Tayyor", callback_data="finish_polls"))
     b.row(InlineKeyboardButton(text="❌ Bekor",  callback_data="cancel_create"))
     await callback.message.edit_text(
-        "📥 <b>Qabul qilindi: 0 ta savol</b>\n\n"
-        "<i>@QuizBot dan savollarni forward qiling...\n"
-        "Hammasi yuborilgach — ✅ Tayyor bosing</i>",
+        "<b>📊 QUIZBOT FORWARD</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "1️⃣ @QuizBot ga o'ting\n"
+        "2️⃣ Quiz savollarini bu yerga forward qiling\n"
+        "3️⃣ Hammasi yuborilgach — <b>✅ Tayyor</b> bosing\n\n"
+        "<i>💡 Faqat 'Viktorina' (Quiz) turi qabul qilinadi!</i>",
         reply_markup=b.as_markup()
     )
-    # Shu xabar progress_msg_id — polllar kelganda soni yangilanadi
-    await state.update_data(questions=[], progress_msg_id=callback.message.message_id)
+    # progress_msg_id = None — birinchi poll kelganda yangi progress xabar chiqadi
+    await state.update_data(questions=[], progress_msg_id=None)
     await state.set_state(CreateTest.waiting_polls)
 
 
@@ -403,7 +408,7 @@ async def method_poll(callback: CallbackQuery, state: FSMContext):
 _poll_debounce: dict = {}
 
 async def _flush_polls(bot, cid, uid, state):
-    """0.8s kutib, progress xabarni yangilaydi"""
+    """0.8s kutib — eski progress o'chirib, pastga yangi yuboradi"""
     try:
         await asyncio.sleep(0.8)
         d   = await state.get_data()
@@ -417,16 +422,11 @@ async def _flush_polls(bot, cid, uid, state):
             f"📥 <b>Qabul qilindi: {len(qs)} ta savol</b>\n\n"
             f"<i>Davom ettiring yoki tayyor bo'lsa bosing:</i>"
         )
+        # Eski progress xabarini o'chirish
         old_pid = d.get("progress_msg_id")
         if old_pid:
-            try:
-                await bot.edit_message_text(
-                    chat_id=cid, message_id=old_pid,
-                    text=prog_text, reply_markup=b.as_markup()
-                )
-                return
-            except Exception:
-                await _del(bot, cid, old_pid)
+            await _del(bot, cid, old_pid)
+        # Pastga yangi yuborish
         prog = await bot.send_message(cid, prog_text, reply_markup=b.as_markup())
         await state.update_data(progress_msg_id=prog.message_id)
     except asyncio.CancelledError:
