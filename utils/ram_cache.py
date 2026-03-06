@@ -20,7 +20,6 @@ _lck = threading.Lock()
 _RAM: dict = {}
 
 RAM_LIMIT             = 450 * 1024 * 1024
-QUESTIONS_CACHE_HOURS = 12
 DEFAULT_SETTINGS      = "uz_1_1"
 LANGS  = ["uz", "ru", "en"]
 THEMES = ["light", "dark"]
@@ -146,27 +145,73 @@ def refresh_tests():
 
 # ══ SAVOLLAR CACHE (12 soat) ══════════════════════════════════
 
+# ══ SAVOLLAR CACHE ════════════════════════════════════════════
+#
+# Qoidalar:
+#   - Bot start: faqat oxirgi backup dagi testlar yuklanadi
+#   - Birinchi so'rov: TGdan yuklab, RAMda ABADIY saqlaydi (o'chmaydi)
+#   - 2 kun (48 soat) hech kim yechmasa: RAMdan o'chadi (TGda qoladi)
+#   - Yangi yechish: last_access yangilanadi (yana 48 soat)
+#
+CACHE_TTL_HOURS = 48   # 2 kun
+
 def cache_questions(tid, test_full):
-    exp = datetime.now(UTC) + timedelta(hours=QUESTIONS_CACHE_HOURS)
-    _set(f"qcache_{tid}", {"test": test_full, "expires": exp})
+    """Test RAMga yuklanadi — last_access bilan"""
+    now = datetime.now(UTC)
+    _set(f"qcache_{tid}", {
+        "test":        test_full,
+        "loaded_at":   now,
+        "last_access": now,
+    })
+    log.debug(f"RAM cache: {tid} yuklandi")
 
 def get_cached_questions(tid):
+    """RAMdan o'qish + last_access yangilash"""
     e = _get(f"qcache_{tid}")
     if not e:
         return None
-    if datetime.now(UTC) > e["expires"]:
-        with _lck:
-            _RAM.pop(f"qcache_{tid}", None)
-        return None
+    # last_access yangilash (har o'qishda)
+    e["last_access"] = datetime.now(UTC)
+    _set(f"qcache_{tid}", e)
     return e["test"]
 
+def touch_test_access(tid):
+    """Test yechilganda last_access yangilanadi"""
+    e = _get(f"qcache_{tid}")
+    if e:
+        e["last_access"] = datetime.now(UTC)
+        _set(f"qcache_{tid}", e)
+
 def clear_expired_cache():
-    now = datetime.now(UTC)
+    """2 kun yechilmagan testlarni RAMdan o'chirish (TGda qoladi)"""
+    now      = datetime.now(UTC)
+    deadline = now - timedelta(hours=CACHE_TTL_HOURS)
+    removed  = []
     with _lck:
-        keys = [k for k in list(_RAM)
-                if k.startswith("qcache_") and _RAM[k].get("expires", now) < now]
+        keys = [
+            k for k in list(_RAM)
+            if k.startswith("qcache_")
+            and _RAM[k].get("last_access", now) < deadline
+        ]
         for k in keys:
             del _RAM[k]
+            removed.append(k.replace("qcache_", ""))
+    if removed:
+        log.info(f"RAM expired: {len(removed)} test o'chirildi — {removed}")
+    return removed
+
+def get_cache_stats():
+    """Admin uchun — RAM holatini ko'rish"""
+    now   = datetime.now(UTC)
+    items = []
+    with _lck:
+        for k, v in _RAM.items():
+            if not k.startswith("qcache_"): continue
+            tid  = k.replace("qcache_", "")
+            la   = v.get("last_access", now)
+            ago  = int((now - la).total_seconds() / 3600)
+            items.append({"tid": tid, "last_access_hours_ago": ago})
+    return items
 
 
 # ══ USERLAR ════════════════════════════════════════════════════

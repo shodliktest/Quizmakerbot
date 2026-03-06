@@ -144,6 +144,8 @@ def get_all_tests_admin():
 # ══ NATIJALAR ══════════════════════════════════════════════════
 
 def save_result(user_id, test_id, result, via_link=False):
+    # Test yechildi — last_access yangilanadi (48h TTL uzayadi)
+    ram.touch_test_access(test_id)
     """
     Natija RAMga saqlanadi (TG ga YUKLANMAYDI).
     TG upload faqat: midnight flush yoki admin buyruq.
