@@ -142,6 +142,10 @@ async def create_start(message: Message, state: FSMContext):
 async def method_text(callback: CallbackQuery, state: FSMContext):
     """Chat orqali matn — ko'p xabar bo'lsa ham hammasi yig'iladi"""
     await callback.answer()
+    uid = callback.from_user.id
+    cid = callback.message.chat.id
+
+    # Yo'riqnomani alohida xabar sifatida yuborish (o'chirilmaydi)
     example = (
         "1. O'zbekiston poytaxti?\n"
         "===A) Toshkent\n"
@@ -152,26 +156,30 @@ async def method_text(callback: CallbackQuery, state: FSMContext):
         "===B) 3.14\n"
         "C) 4.14"
     )
+    try:
+        await callback.message.edit_text(
+            "<b>💬 MATN ORQALI YUKLASH</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Savollarni <b>ketma-ket yuboring</b>\n\n"
+            f"<code>{example}</code>\n\n"
+            "<i>💡 To'g'ri javob oldiga <b>===</b> qo'ying</i>"
+        )
+    except: pass
+
+    # Darhol progress xabar yuborish (pastda turadi, yangilanib boradi)
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="✅ Tayyor (parse qilish)", callback_data="finish_text"))
-    b.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data="method_file"))
-    b.row(InlineKeyboardButton(text="❌ Bekor",  callback_data="cancel_create"))
-    await callback.message.edit_text(
-        "<b>💬 MATN ORQALI YUKLASH</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "Savollarni <b>ketma-ket yuboring</b> (ko'p xabar bo'lsa ham yig'ib oladi)\n\n"
-        f"<code>{example}</code>\n\n"
-        "<i>💡 To'g'ri javob oldiga <b>===</b> qo'ying\n"
-        "Hammasi yuborgach — <b>✅ Tayyor</b> bosing</i>",
+    b.row(InlineKeyboardButton(text="❌ Bekor", callback_data="cancel_create"))
+    prog = await callback.bot.send_message(
+        cid,
+        "📥 <b>Qabul qilindi: 0 ta xabar</b>\n\n"
+        "<i>Savollarni yuboring...</i>",
         reply_markup=b.as_markup()
     )
-    # Instruktsia xabarini _text_progress ga solish
-    # Birinchi matn kelganda shu xabar o'chiriladi, o'rniga progress chiqadi
-    uid = callback.from_user.id
-    _text_progress[uid] = callback.message.message_id
+    _text_progress[uid] = prog.message_id
     await state.update_data(
         text_buffer=[], text_msg_ids=[],
-        text_progress_id=callback.message.message_id
+        text_progress_id=prog.message_id
     )
     await state.set_state(CreateTest.upload_file)
 
@@ -390,32 +398,31 @@ async def upload_file(message: Message, state: FSMContext):
 @router.callback_query(F.data == "method_poll", CreateTest.choose_method)
 async def method_poll(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
-    await state.update_data(questions=[], poll_time=30)
+    uid = callback.from_user.id
+    cid = callback.message.chat.id
+
+    # Oldingi xabarni o'chirish
+    try: await callback.message.delete()
+    except: pass
+
+    # Darhol progress xabar yuborish — poll kutmasdan
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="✅ Tayyor", callback_data="finish_polls"))
     b.row(InlineKeyboardButton(text="❌ Bekor",  callback_data="cancel_create"))
-    await callback.message.edit_text(
-        "<b>📊 QUIZBOT FORWARD</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "1️⃣ @QuizBot ga o'ting\n"
-        "2️⃣ Quiz savollarini bu yerga forward qiling\n"
-        "3️⃣ Hammasi yuborilgach — <b>✅ Tayyor</b> bosing\n\n"
-        "<i>💡 Faqat 'Viktorina' (Quiz) turi qabul qilinadi!</i>",
+    prog = await callback.bot.send_message(
+        cid,
+        "📥 <b>Qabul qilindi: 0 ta savol</b>\n\n"
+        "<i>@QuizBot dan savollarni forward qiling...</i>",
         reply_markup=b.as_markup()
     )
-    # Instruktsia xabarini progress sifatida saqlash
-    # Birinchi poll kelganda shu xabar o'chiriladi, o'rniga progress xabar chiqadi
-    uid = callback.from_user.id
-    _poll_progress[uid] = callback.message.message_id
-    await state.update_data(questions=[], progress_msg_id=callback.message.message_id)
+    _poll_progress[uid] = prog.message_id
+    await state.update_data(questions=[], progress_msg_id=prog.message_id)
     await state.set_state(CreateTest.waiting_polls)
 
 
 # {uid: asyncio.Task} — debounce tasklari
 _poll_debounce: dict = {}
-# {uid: msg_id} — joriy progress xabar id si (tezkor, state kutmasdan)
-_poll_progress: dict = {}
-# {uid: msg_id} — joriy progress xabar id si (tezkor, state kutmasdan)
+# {uid: msg_id} — joriy progress xabar id si
 _poll_progress: dict = {}
 
 async def _flush_polls(bot, cid, uid, state, count):
