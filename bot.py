@@ -70,7 +70,7 @@ async def main():
         except Exception: pass
 
     log.info("🚀 Bot ishga tushdi!")
-    await dp.start_polling(bot, drop_pending_updates=True)
+    await dp.start_polling(bot, drop_pending_updates=True, allowed_updates=["message","callback_query","poll_answer","inline_query","my_chat_member"])
 
 
 # ── MIDNIGHT FLUSH — kuniga 1 marta, faqat 00:00 ──────────────
@@ -250,4 +250,4 @@ async def _main_no_signals():
 
     log.info("🚀 Bot ishga tushdi!")
     # handle_signals=False — thread dan ishga tushirilganda signal xatosini oldini oladi
-    await dp.start_polling(bot, drop_pending_updates=True, handle_signals=False)
+    await dp.start_polling(bot, drop_pending_updates=True, handle_signals=False, allowed_updates=["message","callback_query","poll_answer","inline_query","my_chat_member"])
