@@ -2,16 +2,22 @@
 TG_DB — Telegram kanal storage
 =================================
 ARXITEKTURA:
-  - Bot ishga tushganda:  barcha testlar + users RAM ga yuklanadi (1 marta)
-  - Test so'ralganda:     RAM dan o'qiladi (0 API call)
-  - Yangi test:           TG ga yoziladi + index yangilanadi
-  - Midnight:             backup + users yuklanadi
+  Index (pinned):      test_ids, msg_ids, meta
+  tests_stats.json:    har test: solve_count, avg_score, is_paused, solvers
+  users_full.json:     har user: statistika + per-test history
+  test_XXX.json:       to'liq savol ma'lumotlari (lazy load)
+  backup_DATE.json:    kunlik natijalar
 
-API CALL HISOBI:
-  Bot start:   get_chat(1) + tests o'qish(N*3) + users(3) + settings(3)
-  Test o'qish: 0 call (RAM dan)
-  Yangi test:  send_document(1) + save_index(1) = 2 call
-  Midnight:    send_document(3) + save_index(1) = 4 call
+SAQLASH JADVALI:
+  Test yechildi    → RAM dirty flag → 5 daqiqada tests_stats + users_full TG ga
+  Yangi test       → test_XXX.json darhol
+  Midnight         → backup + users_full + tests_stats
+  Admin flush      → hammasi
+
+BOT QAYTA YONGANDA:
+  tests_stats.json → RAM (solve_count, avg_score, is_paused, solvers)
+  users_full.json  → RAM (user statistikalar + history)
+  Hot testlar      → backup dan lazy preload
 """
 import json, logging, io, asyncio
 from datetime import datetime, timezone
@@ -22,24 +28,21 @@ _bot     = None
 _cid     = None
 _index:  dict = {}
 _can_pin = True
+_tests_cache: dict = {}   # {tid: test_dict} — savollar bilan
 
-# RAM cache — barcha testlar to'liq saqlangan
-_tests_cache: dict = {}   # {tid: test_dict}
+# Dirty flaglar
+_stats_dirty  = False
+_users_dirty  = False
 
 
 async def init(bot, channel_id):
-    """
-    Bot start arxitekturasi:
-      1. Index yuklash (pinned)
-      2. Oxirgi backup faylidan — faqat shu kunda yechilgan testlar RAMga
-      3. Qolgan testlar — birinchi so'rovda lazy load
-    """
-    global _bot, _cid, _index, _tests_cache
+    global _bot, _cid, _index, _tests_cache, _stats_dirty, _users_dirty
     _bot, _cid = bot, int(channel_id)
     _index = {}
     _tests_cache = {}
+    _stats_dirty = False
+    _users_dirty = False
 
-    # 1. Index yuklash
     _index = await _load_index()
     if not _index:
         _index = {"tests_meta": [], "backups": {}}
@@ -48,83 +51,196 @@ async def init(bot, channel_id):
 
     log.info(f"✅ Index: {len(_index.get('tests_meta', []))} meta")
 
-    # 2. Oxirgi backup dan — kechagi aktiv testlarni RAMga yukla
+    # 1. tests_stats.json — solve_count, avg, is_paused, solvers
+    await _load_tests_stats()
+
+    # 2. users_full.json — user statistikalar + history
+    await _load_users_full()
+
+    # 3. Hot testlar — oxirgi backup dan
     await _preload_from_last_backup()
 
 
 def ready():
     return _bot is not None and bool(_cid)
 
-def get_cached_test(tid):
-    """RAM dan to'liq test — 0 API call"""
-    return _tests_cache.get(tid, {})
+def mark_stats_dirty():
+    global _stats_dirty
+    _stats_dirty = True
 
-def cache_test(tid, test):
-    """RAMga qo'shish"""
-    _tests_cache[tid] = test
+def mark_users_dirty_tg():
+    global _users_dirty
+    _users_dirty = True
+
+def is_dirty():
+    return _stats_dirty or _users_dirty
+
+
+# ══ TESTS STATS — doimiy saqlanadigan ══════════════════════════
+
+async def _load_tests_stats():
+    """tests_stats.json dan solve_count, avg, is_paused, solvers yuklash"""
+    mid = _index.get("tests_stats_msg_id")
+    if not mid:
+        log.info("ℹ️ tests_stats yo'q")
+        return
+    data = await _download_doc(mid)
+    if not data:
+        return
+    from utils import ram_cache as ram
+    stats = data.get("stats", {})
+    loaded = 0
+    for tid, s in stats.items():
+        ram.update_test_meta(tid, {
+            "solve_count": s.get("solve_count", 0),
+            "avg_score":   s.get("avg_score", 0.0),
+            "is_paused":   s.get("is_paused", False),
+            "is_active":   s.get("is_active", True),
+        })
+        # Solvers ham RAMga
+        if s.get("solvers"):
+            ram.load_solvers_to_ram(tid, s["solvers"])
+        loaded += 1
+    log.info(f"✅ tests_stats: {loaded} test statistikasi yuklandi")
+
+async def save_tests_stats():
+    """Barcha test statistikasini TG ga saqlash"""
+    global _stats_dirty
+    if not ready(): return False
+    from utils import ram_cache as ram
+    metas   = ram.get_all_tests_meta()
+    daily   = ram.get_daily()
+    stats   = {}
+    for m in metas:
+        tid = m.get("test_id", "")
+        if not tid: continue
+        # Solvers: daily_results dan yig'amiz
+        solvers = {}
+        for uid_str, udata in daily.items():
+            entry = udata.get("by_test", {}).get(tid)
+            if entry and entry.get("attempts", 0) > 0:
+                solvers[uid_str] = {
+                    "attempts":   entry["attempts"],
+                    "best_score": entry["best_score"],
+                    "avg_score":  entry["avg_score"],
+                    "all_pcts":   entry["all_pcts"],
+                    "first_pct":  entry["all_pcts"][0] if entry["all_pcts"] else 0,
+                    "last_at":    entry.get("last_at", ""),
+                }
+        stats[tid] = {
+            "solve_count": m.get("solve_count", 0),
+            "avg_score":   m.get("avg_score", 0.0),
+            "is_paused":   m.get("is_paused", False),
+            "is_active":   m.get("is_active", True),
+            "solvers":     solvers,
+        }
+    ts  = datetime.now(UTC).strftime("%Y-%m-%d %H:%M")
+    try:
+        msg = await _bot.send_document(_cid,
+            document=_buf({"stats": stats, "saved_at": ts}, "tests_stats.json"),
+            caption=f"📊 TESTS_STATS | {len(stats)} test | {ts}")
+        _index["tests_stats_msg_id"] = msg.message_id
+        await _save_index()
+        _stats_dirty = False
+        log.info(f"✅ tests_stats saqlandi: {len(stats)} test")
+        return True
+    except Exception as e:
+        log.error(f"save_tests_stats: {e}")
+        return False
+
+
+# ══ USERS FULL — doimiy saqlanadigan ══════════════════════════
+
+async def _load_users_full():
+    """users_full.json dan user statistikalar + history yuklash"""
+    mid = _index.get("users_full_msg_id")
+    if not mid:
+        # Eski users.json bor bo'lsa
+        mid = _index.get("users_msg_id")
+        if not mid:
+            log.info("ℹ️ users_full yo'q")
+            return
+    data = await _download_doc(mid)
+    if not data:
+        return
+    from utils import ram_cache as ram
+    # Users
+    users = data.get("users", {})
+    if users:
+        ram.set_users(users)
+    # Per-user history (results)
+    history = data.get("history", {})
+    if history:
+        ram.load_history_to_ram(history)
+    log.info(f"✅ users_full: {len(users)} user, {len(history)} history yuklandi")
+
+async def save_users_full():
+    """Users + barcha history ni TG ga saqlash"""
+    global _users_dirty
+    if not ready(): return False
+    from utils import ram_cache as ram
+    users   = ram.get_users()
+    daily   = ram.get_daily()
+    # History: har user uchun by_test (tahlilsiz, yengil)
+    history = {}
+    for uid_str, udata in daily.items():
+        by_test = {}
+        for tid, entry in udata.get("by_test", {}).items():
+            by_test[tid] = {
+                "attempts":   entry["attempts"],
+                "best_score": entry["best_score"],
+                "avg_score":  entry["avg_score"],
+                "all_pcts":   entry["all_pcts"],
+                "last_at":    entry.get("last_at", ""),
+                "first_pct":  entry["all_pcts"][0] if entry["all_pcts"] else 0,
+                # Oxirgi tahlil ham saqlanadi
+                "last_analysis": entry.get("last_analysis", []),
+                "last_result": entry.get("last_result", {}),
+                "first_result": entry.get("first_result", {}),
+            }
+        if by_test:
+            history[uid_str] = by_test
+    ts = datetime.now(UTC).strftime("%Y-%m-%d %H:%M")
+    try:
+        msg = await _bot.send_document(_cid,
+            document=_buf({
+                "users":   users,
+                "history": history,
+                "count":   len(users),
+                "saved_at": ts,
+            }, "users_full.json"),
+            caption=f"👥 USERS_FULL | {len(users)} user | {ts}")
+        _index["users_full_msg_id"] = msg.message_id
+        await _save_index()
+        _users_dirty = False
+        log.info(f"✅ users_full saqlandi: {len(users)} user, {len(history)} history")
+        return True
+    except Exception as e:
+        log.error(f"save_users_full: {e}")
+        return False
+
+
+# ══ AUTO-FLUSH (5 daqiqada dirty bo'lsa) ══════════════════════
+
+async def auto_flush_loop():
+    """Har 5 daqiqada dirty bo'lsa TG ga yuboradi"""
+    while True:
+        try:
+            await asyncio.sleep(300)   # 5 daqiqa
+            if _stats_dirty:
+                await save_tests_stats()
+            if _users_dirty:
+                await save_users_full()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            log.error(f"auto_flush: {e}")
 
 
 # ══ INDEX ══════════════════════════════════════════════════════
 
-async def _preload_from_last_backup():
-    """
-    Oxirgi backup faylidan test ID larni olib, ularni RAMga yuklaydi.
-    Backup struktura: {"data": {uid: {"by_test": {tid: {...}}}}}
-    Faqat kechagi kunda yechilgan testlar — bot start da minimal yuklanadi.
-    """
-    backups = _index.get("backups", {})
-    if not backups:
-        log.info("ℹ️ Backup yo'q — testlar lazy load bo'ladi")
-        return
-
-    # Oxirgi backup
-    last_date = sorted(backups.keys(), reverse=True)[0]
-    # _manual backup bo'lsa skip
-    clean_dates = [d for d in backups.keys() if "_manual" not in d]
-    if not clean_dates:
-        log.info("ℹ️ Faqat manual backup bor — lazy load")
-        return
-
-    last_date  = sorted(clean_dates, reverse=True)[0]
-    msg_id     = backups[last_date]
-    log.info(f"📥 Oxirgi backup: {last_date} (msg={msg_id})")
-
-    backup_data = await _download_doc(msg_id)
-    if not backup_data:
-        log.warning("⚠️ Backup yuklanmadi — lazy load")
-        return
-
-    daily = backup_data.get("data", {})
-    # Kechagi kunda qaysi testlar yechilgan — TID larini yig'ish
-    hot_tids = set()
-    for uid_data in daily.values():
-        for tid in uid_data.get("by_test", {}).keys():
-            hot_tids.add(tid)
-
-    log.info(f"🔥 Hot testlar: {len(hot_tids)} ta — RAMga yuklanmoqda...")
-    loaded = 0
-    for tid in hot_tids:
-        msg_id = _index.get(f"test_{tid}")
-        if not msg_id:
-            continue
-        data = await _download_doc(msg_id)
-        if data and data.get("questions"):
-            _tests_cache[tid] = data
-            # ram_cache ga ham qo'shamiz
-            from utils import ram_cache as ram
-            ram.cache_questions(tid, data)
-            loaded += 1
-        await asyncio.sleep(0.08)
-
-    log.info(f"✅ {loaded}/{len(hot_tids)} hot test RAM ga yuklandi. "
-             f"Qolgan {len(_index.get('tests_meta', [])) - loaded} ta — lazy load.")
-
-
 async def _load_index():
-    """Pinned xabardan yoki oxirgi index.json dan yuklash"""
-    if not ready():
-        return {}
-    # 1. Pinned xabar
+    if not ready(): return {}
     try:
         chat = await _bot.get_chat(_cid)
         pin  = getattr(chat, "pinned_message", None)
@@ -137,8 +253,7 @@ async def _load_index():
                     return data
     except Exception as e:
         log.warning(f"Pin o'qish: {e}")
-
-    # 2. Oxirgi xabarlarda qidirish (faqat 50 ta)
+    # Oxirgi 50 xabardan qidirish
     try:
         probe = await _bot.send_message(_cid, ".")
         cur   = probe.message_id
@@ -196,44 +311,37 @@ def get_test_meta(tid):
                  if t.get("test_id") == tid and t.get("is_active", True)), {})
 
 async def get_test_full(tid):
-    """
-    Lazy load arxitekturasi:
-      - RAM da bor → 0 API call, last_access yangilanadi
-      - RAM da yo'q → TGdan yuklab RAMga saqlaydi (o'chmaydi)
-      - 2 kun yechilmasa → clear_expired_cache() o'chiradi (TGda qoladi)
-    """
-    # 1. tg_db ichki cache
+    from utils import ram_cache as ram
     if tid in _tests_cache:
-        from utils import ram_cache as ram
         ram.touch_test_access(tid)
         return _tests_cache[tid]
-
-    # 2. ram_cache da bor (qcache_*)
-    from utils import ram_cache as ram
     cached = ram.get_cached_questions(tid)
     if cached:
         _tests_cache[tid] = cached
         return cached
-
-    # 3. TGdan lazy load
     msg_id = _index.get(f"test_{tid}")
     if not msg_id:
         return {}
-
     log.info(f"⬇️ Lazy load: {tid} (msg={msg_id})")
     data = await _download_doc(msg_id)
     if data and data.get("questions"):
         _tests_cache[tid] = data
-        ram.cache_questions(tid, data)   # RAMda, o'chmas (last_access bilan)
+        ram.cache_questions(tid, data)
         log.info(f"✅ {tid} RAMga yuklandi")
-    return data
+        return data
+    if not data:
+        log.warning(f"⚠️ {tid} TGdan yuklanmadi")
+        for m in _index.get("tests_meta", []):
+            if m.get("test_id") == tid:
+                m["is_active"] = False
+                break
+        ram.update_test_meta(tid, {"is_active": False})
+    return {}
 
 async def get_tests():
-    """Bot start uchun — barcha test meta (index dan)"""
     return _index.get("tests_meta", [])
 
 async def save_test_full(test):
-    """Yangi test yaratilganda — TG + index"""
     if not ready(): return False
     tid = test.get("test_id", "")
     try:
@@ -242,9 +350,7 @@ async def save_test_full(test):
             document=_buf(test, f"test_{tid}.json"),
             caption=f"📝 {test.get('title','?')} | {test.get('category','')} | {qc} savol | {tid}")
         _index[f"test_{tid}"] = msg.message_id
-        # RAM ga ham saqla
         _tests_cache[tid] = test
-        # Meta ro'yxat yangilash
         meta  = {k: v for k, v in test.items() if k != "questions"}
         meta["question_count"] = qc
         metas = [m for m in _index.get("tests_meta", []) if m.get("test_id") != tid]
@@ -274,6 +380,8 @@ async def delete_test_tg(tid):
             break
     _tests_cache.pop(tid, None)
     await _save_index()
+    # Stats ham yangilash
+    mark_stats_dirty()
 
 async def update_test_meta_tg(tid, updates):
     for m in _index.get("tests_meta", []):
@@ -283,27 +391,17 @@ async def update_test_meta_tg(tid, updates):
     await _save_index()
 
 
-# ══ USERS ══════════════════════════════════════════════════════
+# ══ USERS (eski moslik) ════════════════════════════════════════
 
 async def get_users():
-    mid = _index.get("users_msg_id")
+    mid = _index.get("users_full_msg_id") or _index.get("users_msg_id")
     if not mid: return {}
     data = await _download_doc(mid)
     return data.get("users", {}) if isinstance(data, dict) else {}
 
 async def save_users(users):
-    if not ready(): return False
-    try:
-        ts  = datetime.now(UTC).strftime("%Y-%m-%d %H:%M")
-        msg = await _bot.send_document(_cid,
-            document=_buf({"users": users, "count": len(users), "saved_at": ts}, "users.json"),
-            caption=f"👥 USERS | {len(users)} ta | {ts}")
-        _index["users_msg_id"] = msg.message_id
-        await _save_index()
-        return True
-    except Exception as e:
-        log.error(f"save_users: {e}")
-        return False
+    """Eski users.json — moslik uchun, save_users_full ishlatish tavsiya"""
+    return await save_users_full()
 
 
 # ══ SETTINGS ═══════════════════════════════════════════════════
@@ -363,18 +461,53 @@ def get_backup_dates():
     return sorted(_index.get("backups", {}).keys(), reverse=True)
 
 
-# ══ ADMIN FLUSH ════════════════════════════════════════════════
+# ══ PRELOAD ════════════════════════════════════════════════════
+
+async def _preload_from_last_backup():
+    backups = _index.get("backups", {})
+    clean_dates = [d for d in backups.keys() if "_manual" not in d]
+    if not clean_dates:
+        log.info("ℹ️ Backup yo'q — lazy load")
+        return
+    last_date = sorted(clean_dates, reverse=True)[0]
+    msg_id    = backups[last_date]
+    log.info(f"📥 Oxirgi backup: {last_date} (msg={msg_id})")
+    backup_data = await _download_doc(msg_id)
+    if not backup_data:
+        return
+    daily    = backup_data.get("data", {})
+    hot_tids = set()
+    for uid_data in daily.values():
+        for tid in uid_data.get("by_test", {}).keys():
+            hot_tids.add(tid)
+    log.info(f"🔥 Hot testlar: {len(hot_tids)} ta — RAMga yuklanmoqda...")
+    loaded = 0
+    for tid in hot_tids:
+        msg_id = _index.get(f"test_{tid}")
+        if not msg_id: continue
+        data = await _download_doc(msg_id)
+        if data and data.get("questions"):
+            _tests_cache[tid] = data
+            from utils import ram_cache as ram
+            ram.cache_questions(tid, data)
+            loaded += 1
+        await asyncio.sleep(0.08)
+    log.info(f"✅ {loaded}/{len(hot_tids)} hot test RAMga yuklandi")
+
+
+# ══ MANUAL FLUSH ══════════════════════════════════════════════
 
 async def manual_flush(daily_data, users, settings=None):
     results = []
     if not ready():
         return ["❌ TG kanal ulanmagan"]
-    if users:
-        ok = await save_users(users)
-        results.append(f"{'✅' if ok else '❌'} Users: {len(users)} ta")
+    ok = await save_tests_stats()
+    results.append(f"{'✅' if ok else '❌'} Tests stats")
+    ok = await save_users_full()
+    results.append(f"{'✅' if ok else '❌'} Users full: {len(users)} ta")
     if settings:
         ok = await save_settings(settings)
-        results.append(f"{'✅' if ok else '❌'} Settings: {len(settings)} ta")
+        results.append(f"{'✅' if ok else '❌'} Settings")
     if daily_data:
         from datetime import date
         today = str(date.today())
@@ -386,22 +519,18 @@ def get_index_info():
     return {
         "tests_count":  len(_index.get("tests_meta", [])),
         "cached_tests": len(_tests_cache),
-        "users_msg_id": _index.get("users_msg_id"),
+        "users_msg_id": _index.get("users_full_msg_id"),
         "backups":      len(_index.get("backups", {})),
         "can_pin":      _can_pin,
+        "stats_dirty":  _stats_dirty,
+        "users_dirty":  _users_dirty,
     }
 
 
 # ══ YORDAMCHILAR ═══════════════════════════════════════════════
 
 async def _download_doc(msg_id):
-    """
-    Xabardan document yuklab o'qish.
-    forward emas — to'g'ridan getMessages ishlatadi (1 API call kam).
-    """
     try:
-        # forward_message ishlatmasdan file_id ni olish imkoni yo'q
-        # Lekin bot kanalda admin bo'lsa copyMessage ishlatish mumkin
         fwd = await _bot.forward_message(_cid, _cid, msg_id)
         doc = getattr(fwd, "document", None)
         try: await _bot.delete_message(_cid, fwd.message_id)

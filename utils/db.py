@@ -146,6 +146,8 @@ async def delete_test(tid):
 
 def pause_test(tid, paused: bool):
     ram.update_test_meta(tid, {"is_paused": paused})
+    from utils import tg_db
+    tg_db.mark_stats_dirty()
 
 def get_all_tests_admin():
     """Admin uchun — o'chirilganlarni ham ko'rsatadi"""
@@ -183,6 +185,10 @@ def save_result(user_id, test_id, result, via_link=False):
             "total_score": ts,
             "avg_score":   round(ts / tt, 1),
         })
+    # Dirty flag — 5 daqiqada TG ga yuklanadi
+    from utils import tg_db
+    tg_db.mark_stats_dirty()
+    tg_db.mark_users_dirty_tg()
     return rid
 
 def get_user_results(user_id):

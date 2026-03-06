@@ -111,18 +111,23 @@ def is_test_paused(tid):
 # Eski moslik
 def get_tests():       return get_tests_meta()
 def get_test_by_id(tid):
+    # O'chirilgan test bo'lsa None qaytarsin
+    meta = get_test_meta(tid)
+    if meta and not meta.get("is_active", True):
+        return {}
     full = get_cached_questions(tid)
     if full is not None:
         return full
-    return get_test_meta(tid) or {}
+    return meta or {}
 
 def set_tests(tests):
     metas = []
     for t in tests:
+        # is_active=False bo'lsa meta listga qo'shiladi lekin cache qilinmaydi
         meta = {k: v for k, v in t.items() if k != "questions"}
         meta["question_count"] = len(t.get("questions", []))
         metas.append(meta)
-        if t.get("questions"):
+        if t.get("is_active", True) and t.get("questions"):
             cache_questions(t["test_id"], t)
     _set("tests_meta", metas)
 
@@ -392,6 +397,69 @@ def get_all_solvers_for_test(tid):
         })
     result.sort(key=lambda x: x["best_score"], reverse=True)
     return result
+
+def load_solvers_to_ram(tid, solvers_dict):
+    """TG dan yuklangan solvers ma'lumotlarini daily_results ga joylash"""
+    daily = _get("daily_results", {})
+    for uid_str, s in solvers_dict.items():
+        if uid_str not in daily:
+            daily[uid_str] = {"by_test": {}, "history": []}
+        bt = daily[uid_str]["by_test"]
+        if tid not in bt:
+            bt[tid] = {
+                "attempts":      s.get("attempts", 0),
+                "all_pcts":      s.get("all_pcts", []),
+                "best_score":    s.get("best_score", 0.0),
+                "avg_score":     s.get("avg_score", 0.0),
+                "first_result":  None,
+                "last_result":   None,
+                "last_analysis": [],
+                "accessed_link": False,
+                "last_at":       s.get("last_at", ""),
+            }
+    _set("daily_results", daily)
+
+
+def load_history_to_ram(history_dict):
+    """TG users_full.json dan history ni RAMga yuklash"""
+    daily = _get("daily_results", {})
+    for uid_str, by_test in history_dict.items():
+        if uid_str not in daily:
+            daily[uid_str] = {"by_test": {}, "history": []}
+        bt = daily[uid_str]["by_test"]
+        for tid, entry in by_test.items():
+            if tid not in bt:
+                bt[tid] = {
+                    "attempts":      entry.get("attempts", 0),
+                    "all_pcts":      entry.get("all_pcts", []),
+                    "best_score":    entry.get("best_score", 0.0),
+                    "avg_score":     entry.get("avg_score", 0.0),
+                    "first_result":  entry.get("first_result", {}),
+                    "last_result":   entry.get("last_result", {}),
+                    "last_analysis": entry.get("last_analysis", []),
+                    "accessed_link": False,
+                    "last_at":       entry.get("last_at", ""),
+                }
+        # History ro'yxatini ham tiklash
+        h = []
+        for tid, entry in bt.items():
+            if entry.get("attempts", 0) > 0:
+                pcts = entry.get("all_pcts", [])
+                h.append({
+                    "test_id":       tid,
+                    "result_id":     f"{uid_str}_{tid}",
+                    "last_pct":      pcts[-1] if pcts else 0,
+                    "best_pct":      entry.get("best_score", 0),
+                    "attempts":      entry["attempts"],
+                    "all_pcts":      pcts,
+                    "passed":        entry.get("best_score", 0) >= 60,
+                    "accessed_link": entry.get("accessed_link", False),
+                    "completed_at":  entry.get("last_at", ""),
+                })
+        h.sort(key=lambda x: x.get("completed_at", ""), reverse=True)
+        daily[uid_str]["history"] = h[:200]
+    _set("daily_results", daily)
+
 
 def get_last_result(uid, tid):
     return get_test_entry(uid, tid).get("last_result", {})
