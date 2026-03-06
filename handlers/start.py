@@ -209,8 +209,10 @@ async def back_main(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     try: await callback.message.delete()
     except: pass
-    uid = callback.from_user.id
-    await callback.bot.send_message(uid, "🏠 <b>Asosiy menyu</b> 👇", reply_markup=main_kb(uid))
+    uid  = callback.from_user.id
+    from utils import ram_cache as ram
+    msg  = await callback.bot.send_message(uid, "🏠 <b>Asosiy menyu</b> 👇", reply_markup=main_kb(uid))
+    ram.set_menu_msg(uid, uid, msg.message_id)
 
 @router.callback_query(F.data == "noop")
 async def noop(callback: CallbackQuery):
