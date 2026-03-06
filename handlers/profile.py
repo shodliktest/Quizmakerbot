@@ -1,3 +1,4 @@
+import asyncio
 """👤 PROFIL — Natijalar, Tahlil, Mening testlarim (fan bo'yicha)"""
 import logging
 from aiogram import Router, F

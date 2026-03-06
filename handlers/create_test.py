@@ -412,20 +412,29 @@ async def catch_poll(message: Message, state: FSMContext):
     # Poll xabarini o'chirish
     await _del(message.bot, message.chat.id, message.message_id)
 
-    # Eski progress xabarini o'chirish, bitta yangi xabar ko'rsatish
-    d2 = await state.get_data()
-    old_progress_id = d2.get("progress_msg_id")
-    if old_progress_id:
-        await _del(message.bot, message.chat.id, old_progress_id)
-
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="✅ Tayyor",  callback_data="finish_polls"))
     b.row(InlineKeyboardButton(text="❌ Bekor",   callback_data="cancel_create"))
-    prog = await message.answer(
+
+    prog_text = (
         f"📥 <b>Qabul qilindi: {len(qs)} ta savol</b>\n\n"
-        f"<i>Davom ettiring yoki tayyor bo'lsa bosing:</i>",
-        reply_markup=b.as_markup()
+        f"<i>Davom ettiring yoki tayyor bo'lsa bosing:</i>"
     )
+
+    # Eski progress xabarini EDIT qilish — yangi xabar yuborilmaydi
+    d2 = await state.get_data()
+    old_pid = d2.get("progress_msg_id")
+    if old_pid:
+        try:
+            await message.bot.edit_message_text(
+                chat_id=message.chat.id, message_id=old_pid,
+                text=prog_text, reply_markup=b.as_markup()
+            )
+            return
+        except Exception:
+            pass
+    # Birinchi savol — yangi xabar
+    prog = await message.answer(prog_text, reply_markup=b.as_markup())
     await state.update_data(progress_msg_id=prog.message_id)
 
 
