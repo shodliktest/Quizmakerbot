@@ -165,7 +165,10 @@ async def method_text(callback: CallbackQuery, state: FSMContext):
         "Hammasi yuborgach — <b>✅ Tayyor</b> bosing</i>",
         reply_markup=b.as_markup()
     )
-    # Matn bufferini tozalash + instruktsia xabarini progress id sifatida saqlash
+    # Instruktsia xabarini _text_progress ga solish
+    # Birinchi matn kelganda shu xabar o'chiriladi, o'rniga progress chiqadi
+    uid = callback.from_user.id
+    _text_progress[uid] = callback.message.message_id
     await state.update_data(
         text_buffer=[], text_msg_ids=[],
         text_progress_id=callback.message.message_id
@@ -400,8 +403,11 @@ async def method_poll(callback: CallbackQuery, state: FSMContext):
         "<i>💡 Faqat 'Viktorina' (Quiz) turi qabul qilinadi!</i>",
         reply_markup=b.as_markup()
     )
-    # progress_msg_id = None — birinchi poll kelganda yangi progress xabar chiqadi
-    await state.update_data(questions=[], progress_msg_id=None)
+    # Instruktsia xabarini progress sifatida saqlash
+    # Birinchi poll kelganda shu xabar o'chiriladi, o'rniga progress xabar chiqadi
+    uid = callback.from_user.id
+    _poll_progress[uid] = callback.message.message_id
+    await state.update_data(questions=[], progress_msg_id=callback.message.message_id)
     await state.set_state(CreateTest.waiting_polls)
 
 
