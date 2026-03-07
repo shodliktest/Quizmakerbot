@@ -18,6 +18,7 @@ import re
 from typing import Dict, Optional
 
 from aiogram import Router, F
+from aiogram.filters import Command
 from aiogram.types import (
     Message, CallbackQuery, PollAnswer,
     InlineKeyboardButton, ChatMemberUpdated
@@ -841,6 +842,199 @@ async def _send_text_leaderboard(
         ),
     )
     await bot.send_message(chat_id, text, reply_markup=b.as_markup())
+
+
+
+# ══════════════════════════════════════════════════════════════
+# /quiz_start — GURUHDA BUYRUQ ORQALI TEST BOSHLASH
+# ══════════════════════════════════════════════════════════════
+
+@router.message(Command("quiz_start"))
+async def cmd_quiz_start(message: Message):
+    """
+    Guruhda: /quiz_start <test_kodi>
+    Misol:   /quiz_start 3D46D269
+    Misol:   /quiz_start 3D46D269 poll   (poll usuli)
+    Misol:   /quiz_start 3D46D269 inline (inline usuli)
+    """
+    chat    = message.chat
+    chat_id = chat.id
+    uid     = message.from_user.id
+
+    if chat.type not in ("group", "supergroup"):
+        return await message.answer(
+            "⚠️ Bu buyruq faqat guruhlarda ishlaydi!\n"
+            "Guruhda yozing: <code>/quiz_start &lt;test_kodi&gt;</code>"
+        )
+
+    # Argument ajratish: /quiz_start KOD [poll|inline]
+    args = message.text.split()
+    if len(args) < 2:
+        return await message.answer(
+            "❌ <b>Foydalanish:</b>\n"
+            "<code>/quiz_start &lt;test_kodi&gt;</code>\n"
+            "<code>/quiz_start &lt;test_kodi&gt; poll</code>\n"
+            "<code>/quiz_start &lt;test_kodi&gt; inline</code>\n\n"
+            "Misol: <code>/quiz_start 3D46D269</code>"
+        )
+
+    tid  = args[1].strip().upper()
+    mode = args[2].strip().lower() if len(args) > 2 else "poll"
+
+    if is_test_paused(tid):
+        return await message.answer("⚠️ Bu test vaqtincha to\'xtatilgan!")
+
+    if chat_id in _group_sessions:
+        return await message.answer("⚠️ Guruhda allaqachon poll testi ketmoqda!\nAvval uni tugating: /quiz_stop")
+    if chat_id in _inline_sessions:
+        return await message.answer("⚠️ Guruhda allaqachon inline test ketmoqda!\nAvval uni tugating: /quiz_stop")
+
+    # Testni yuklash
+    test = await _load_test(message.bot, chat_id, tid)
+    if not test:
+        return await message.answer(
+            f"❌ <code>{tid}</code> kodli test topilmadi.\n"
+            "Test kodini tekshiring."
+        )
+
+    if mode == "inline":
+        # Inline usuli
+        qs            = test.get("questions", [])
+        poll_time     = test.get("poll_time", 30) or 30
+        passing_score = float(test.get("passing_score", 60))
+
+        if not qs:
+            return await message.answer("⚠️ Bu testda savollar yo'q!")
+
+        _inline_sessions[chat_id] = {
+            "tid":           tid,
+            "test":          test,
+            "questions":     qs,
+            "answers":       {},
+            "names":         {},
+            "host_id":       uid,
+            "poll_time":     poll_time,
+            "passing_score": passing_score,
+            "cur_q":         0,
+            "q_msg_id":      None,
+            "task":          None,
+            "locked":        False,
+        }
+
+        # Countdown
+        cdown = await message.answer(f"📝 <b>{test.get('title')}</b>")
+        for emoji in COUNT_EMOJIS:
+            import asyncio as _a; await _a.sleep(0.8)
+            try: await cdown.edit_text(emoji)
+            except: pass
+        await _a.sleep(0.5)
+        try: await cdown.delete()
+        except: pass
+
+        b = InlineKeyboardBuilder()
+        b.row(InlineKeyboardButton(text="⏹ To\'xtatish", callback_data=f"gi_stop_{uid}"))
+        await message.answer(
+            f"🚀 <b>INLINE TEST BOSHLANDI!</b>\n"
+            f"📝 {test.get('title')} | {len(qs)} savol | ⏱{poll_time}s\n"
+            f"📢 Tugmalar orqali javob bering!",
+            reply_markup=b.as_markup()
+        )
+        task = asyncio.create_task(
+            _run_inline_session(message.bot, chat_id, tid, qs, poll_time, passing_score)
+        )
+        _inline_sessions[chat_id]["task"] = task
+
+    else:
+        # Poll usuli (default)
+        qs = [q for q in test.get("questions", [])
+              if q.get("type", "multiple_choice") in ("multiple_choice", "true_false")]
+        if not qs:
+            return await message.answer("⚠️ Bu testda poll uchun savollar yo'q!")
+
+        poll_time = test.get("poll_time", 30) or 30
+        _group_sessions[chat_id] = {
+            "tid": tid, "test": test, "questions": qs,
+            "answers": {}, "names": {}, "poll_map": {},
+            "host_id": uid, "poll_time": poll_time, "task": None,
+        }
+
+        # Countdown
+        cdown = await message.answer(f"📝 <b>{test.get('title')}</b>")
+        for emoji in COUNT_EMOJIS:
+            import asyncio as _a2; await _a2.sleep(0.8)
+            try: await cdown.edit_text(emoji)
+            except: pass
+        await _a2.sleep(0.5)
+        try: await cdown.delete()
+        except: pass
+
+        b = InlineKeyboardBuilder()
+        b.row(InlineKeyboardButton(text="⏹ To\'xtatish", callback_data=f"gstop_{uid}"))
+        skipped  = len(test.get("questions", [])) - len(qs)
+        skip_txt = f"\n⚠️ <i>{skipped} ta matn savol o\'tkazildi</i>" if skipped else ""
+        await message.answer(
+            f"🚀 <b>TEST BOSHLANDI!</b> | {len(qs)} savol | ⏱{poll_time}s{skip_txt}\n"
+            f"📢 Hamma qatnashing!",
+            reply_markup=b.as_markup()
+        )
+        task = asyncio.create_task(
+            _run_group_polls(message.bot, chat_id, tid, qs, poll_time)
+        )
+        _group_sessions[chat_id]["task"] = task
+
+
+@router.message(Command("quiz_stop"))
+async def cmd_quiz_stop(message: Message):
+    """Guruhda: /quiz_stop — joriy testni to\'xtatish"""
+    chat_id = message.chat.id
+    uid     = message.from_user.id
+
+    if message.chat.type not in ("group", "supergroup"):
+        return await message.answer("⚠️ Bu buyruq faqat guruhlarda ishlaydi!")
+
+    # Admin yoki host tekshiruvi
+    stopped = False
+
+    if chat_id in _inline_sessions:
+        session = _inline_sessions[chat_id]
+        if uid == session.get("host_id") or await _is_admin(message.bot, chat_id, uid):
+            task = session.get("task")
+            if task and not task.done():
+                task.cancel()
+            await _show_group_leaderboard(
+                message.bot, chat_id, session["tid"],
+                session=session, mode="inline", stopped_early=True
+            )
+            _inline_sessions.pop(chat_id, None)
+            stopped = True
+        else:
+            return await message.answer("⚠️ Faqat test boshlovchi yoki admin to\'xtatishi mumkin!")
+
+    if chat_id in _group_sessions:
+        session = _group_sessions[chat_id]
+        if uid == session.get("host_id") or await _is_admin(message.bot, chat_id, uid):
+            task = session.get("task")
+            if task and not task.done():
+                task.cancel()
+            await _show_group_leaderboard(
+                message.bot, chat_id, session["tid"],
+                stopped_early=True
+            )
+            _group_sessions.pop(chat_id, None)
+            stopped = True
+        else:
+            return await message.answer("⚠️ Faqat test boshlovchi yoki admin to\'xtatishi mumkin!")
+
+    if not stopped:
+        await message.answer("ℹ️ Hozir guruhda faol test yo\'q.")
+
+
+async def _is_admin(bot, chat_id: int, uid: int) -> bool:
+    try:
+        member = await bot.get_chat_member(chat_id, uid)
+        return member.status in ("administrator", "creator")
+    except Exception:
+        return False
 
 
 # ══════════════════════════════════════════════════════════════
