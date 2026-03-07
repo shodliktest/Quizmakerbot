@@ -100,10 +100,19 @@ async def _load_test(bot, chat_id: int, tid: str) -> Optional[dict]:
 @router.callback_query(F.data.startswith("group_start_"))
 async def group_start_poll(callback: CallbackQuery):
     await callback.answer()
-    tid     = callback.data[12:]
+    tid = callback.data[12:]
+    uid = callback.from_user.id
+
+    # Inline message dan kelganda callback.message = None
+    if callback.message is None:
+        return await callback.answer(
+            "⚠️ Bu tugma faqat guruhda ishlaydi!\n"
+            "Testni guruhga yuboring va o'sha yerda bosing.",
+            show_alert=True
+        )
+
     chat    = callback.message.chat
     chat_id = chat.id
-    uid     = callback.from_user.id
 
     if chat.type not in ("group","supergroup"):
         return await callback.answer(
@@ -255,10 +264,19 @@ async def _run_group_polls(bot, chat_id: int, tid: str, qs: list, poll_time: int
 @router.callback_query(F.data.startswith("group_inline_"))
 async def group_start_inline(callback: CallbackQuery):
     await callback.answer()
-    tid     = callback.data[13:]
+    tid = callback.data[13:]
+    uid = callback.from_user.id
+
+    # Inline message dan kelganda callback.message = None
+    if callback.message is None:
+        return await callback.answer(
+            "⚠️ Bu tugma faqat guruhda ishlaydi!\n"
+            "Testni guruhga yuboring va o'sha yerda bosing.",
+            show_alert=True
+        )
+
     chat    = callback.message.chat
     chat_id = chat.id
-    uid     = callback.from_user.id
 
     if chat.type not in ("group","supergroup"):
         return await callback.answer(
