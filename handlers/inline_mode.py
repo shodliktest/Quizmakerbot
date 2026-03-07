@@ -73,14 +73,15 @@ def _make_result(test: dict, bot_username: str) -> InlineQueryResultArticle:
         f"👇 <b>Qanday boshlash?</b>"
     )
     b = InlineKeyboardBuilder()
+    # Private chat uchun
     b.row(
         InlineKeyboardButton(text="▶️ Inline test", url=f"{base}?start={tid}"),
         InlineKeyboardButton(text="📊 Quiz Poll",   url=f"{base}?start=poll_{tid}"),
     )
-    # Guruhda ulashilganda ko'rinadigan tugmalar
+    # Guruhda ishlash - callback orqali bot o'zi chatga buyruq yozadi
     b.row(
-        InlineKeyboardButton(text="👥 Guruhda (Poll)",   callback_data=f"group_start_{tid}"),
-        InlineKeyboardButton(text="👥 Guruhda (Inline)", callback_data=f"group_inline_{tid}"),
+        InlineKeyboardButton(text="👥 Guruhda Poll",   callback_data=f"gsend_poll_{tid}"),
+        InlineKeyboardButton(text="👥 Guruhda Inline", callback_data=f"gsend_inline_{tid}"),
     )
     b.row(InlineKeyboardButton(text="➕ Shunga o'xshash test yarat",
                                url=f"{base}?start=create"))

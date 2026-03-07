@@ -21,7 +21,7 @@ from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import (
     Message, CallbackQuery, PollAnswer,
-    InlineKeyboardButton, ChatMemberUpdated
+    InlineKeyboardButton, InlineKeyboardMarkup, ChatMemberUpdated
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
@@ -391,8 +391,7 @@ async def _run_inline_session(
             )
 
         # ── Klaviatura ──
-        def _build_kb() -> InlineKeyboardMarkup:
-            from aiogram.types import InlineKeyboardMarkup
+        def _build_kb():
             labels = ["🅐","🅑","🅒","🅓","🅔","🅕"]
             btns   = []
             for j, opt in enumerate(opts[:6]):
@@ -403,7 +402,6 @@ async def _run_inline_session(
                 )])
             return InlineKeyboardMarkup(inline_keyboard=btns)
 
-        from aiogram.types import InlineKeyboardMarkup
         kb = _build_kb()
 
         try:
@@ -843,6 +841,50 @@ async def _send_text_leaderboard(
     )
     await bot.send_message(chat_id, text, reply_markup=b.as_markup())
 
+
+
+# ══════════════════════════════════════════════════════════════
+# GURUHDA ISHLASH TUGMASI — bot o'zi /quiz_start yozadi
+# ══════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data.startswith("gsend_poll_"))
+async def gsend_poll(callback: CallbackQuery):
+    """Tugma bosilganda bot guruhga /quiz_start KOD poll buyrug'ini yuboradi."""
+    tid     = callback.data[11:]
+    chat_id = callback.message.chat.id if callback.message else None
+
+    if not chat_id or (callback.message and callback.message.chat.type not in ("group","supergroup")):
+        return await callback.answer(
+            "⚠️ Bu tugmani guruhda bosing!\n"
+            f"Yoki guruhda yozing:\n/quiz_start {tid} poll",
+            show_alert=True
+        )
+
+    await callback.answer("✅ Test boshlanmoqda...")
+    await callback.bot.send_message(
+        chat_id,
+        f"/quiz_start {tid} poll"
+    )
+
+
+@router.callback_query(F.data.startswith("gsend_inline_"))
+async def gsend_inline(callback: CallbackQuery):
+    """Tugma bosilganda bot guruhga /quiz_start KOD inline buyrug'ini yuboradi."""
+    tid     = callback.data[13:]
+    chat_id = callback.message.chat.id if callback.message else None
+
+    if not chat_id or (callback.message and callback.message.chat.type not in ("group","supergroup")):
+        return await callback.answer(
+            "⚠️ Bu tugmani guruhda bosing!\n"
+            f"Yoki guruhda yozing:\n/quiz_start {tid} inline",
+            show_alert=True
+        )
+
+    await callback.answer("✅ Test boshlanmoqda...")
+    await callback.bot.send_message(
+        chat_id,
+        f"/quiz_start {tid} inline"
+    )
 
 
 # ══════════════════════════════════════════════════════════════
