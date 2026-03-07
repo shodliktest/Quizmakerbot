@@ -134,7 +134,7 @@ def generate_leaderboard_image(
     if not results:
         return None
 
-    top10    = results[:10]
+    top10    = results[:15]
     top3     = top10[:3]
     rest     = top10[3:]
 
