@@ -214,7 +214,7 @@ async def _run_group_polls(bot, chat_id: int, tid: str, qs: list, poll_time: int
             expl = expl[:195] + "..."
 
         qtxt = q.get("question", q.get("text","Savol"))
-        qtxt = re.sub(r'^\[\d+/\d+\]\s*','',qtxt).strip()
+        qtxt = re.sub(r'^\[\d+/\d+\]\s*', '', qtxt).strip()
         hdr  = f"{i+1}/{len(qs)}. "
         if len(hdr+qtxt) > 295:
             qtxt = qtxt[:295-len(hdr)] + "..."
@@ -352,12 +352,39 @@ async def group_start_inline(callback: CallbackQuery):
     _inline_sessions[chat_id]["task"] = task
 
 
+async def _flood_safe_send(bot, chat_id: int, text: str,
+                            reply_markup=None, max_retries: int = 4):
+    """Flood control ni hisobga olgan holda xabar yuboradi."""
+    for attempt in range(max_retries):
+        try:
+            return await bot.send_message(
+                chat_id, text,
+                parse_mode="HTML", reply_markup=reply_markup
+            )
+        except TelegramBadRequest as e:
+            log.error(f"Bad request: {e}")
+            return None
+        except Exception as e:
+            err = str(e).lower()
+            if "retry after" in err or "flood" in err or "too many" in err:
+                m    = re.search(r"retry after (\d+)", err)
+                wait = int(m.group(1)) + 2 if m else 25
+                log.warning(f"⏳ Flood control — {wait}s (urinish {attempt+1}/{max_retries})")
+                await asyncio.sleep(wait)
+            else:
+                log.error(f"SendMessage xato: {e}")
+                return None
+    log.error(f"Flood: {max_retries} urinishdan keyin ham yuborilmadi")
+    return None
+
+
 async def _run_inline_session(
     bot, chat_id: int, tid: str,
     qs: list, poll_time: int, passing_score: float
 ):
     """Inline sessiya: har savol uchun tugmalar + countdown."""
     for i, q in enumerate(qs):
+        # Sessiya hali ham aktiv ekanligini tekshirish
         if chat_id not in _inline_sessions:
             return
 
@@ -365,12 +392,12 @@ async def _run_inline_session(
         session["cur_q"]  = i
         session["locked"] = False
 
-        opts    = q.get("options", [])
-        qtype   = q.get("type","multiple_choice")
+        opts  = q.get("options", [])
+        qtype = q.get("type","multiple_choice")
         if qtype == "true_false":
             opts = ["Ha","Yo'q"]
         qtxt = q.get("question", q.get("text","Savol"))
-        qtxt = re.sub(r'^\[\d+/\d+\]\s*','',qtxt).strip()
+        qtxt = re.sub(r'^\[\d+/\d+\]\s*', '', qtxt).strip()
 
         # ── Savol xabarini yasash ──
         def _q_text(remaining: int) -> str:
@@ -402,17 +429,16 @@ async def _run_inline_session(
                 )])
             return InlineKeyboardMarkup(inline_keyboard=btns)
 
-        kb = _build_kb()
+        kb  = _build_kb()
+        msg = await _flood_safe_send(bot, chat_id, _q_text(poll_time), reply_markup=kb)
 
-        try:
-            msg = await bot.send_message(
-                chat_id, _q_text(poll_time),
-                parse_mode="HTML", reply_markup=kb
-            )
-            session["q_msg_id"] = msg.message_id
-        except Exception as e:
-            log.error(f"Inline savol yuborishda xato: {e}")
-            continue
+        if not msg:
+            # Yuborib bo'lmadi — sessiyani tugatish
+            log.error(f"Savol {i+1} yuborilmadi — sessiya tugatilmoqda")
+            _inline_sessions.pop(chat_id, None)
+            return
+
+        session["q_msg_id"] = msg.message_id
 
         # ── Countdown timer ──
         for remaining in range(poll_time, 0, -1):
