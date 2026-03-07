@@ -76,6 +76,106 @@ async def cmd_start(message: Message, state: FSMContext):
                 )
                 return
 
+        # ── GURUHDA ISHLASH — deep link orqali ──────────────────
+        if param.lower().startswith("gpoll_"):
+            tid  = param[6:].upper()
+            chat = message.chat
+            if chat.type in ("group", "supergroup"):
+                # Guruhda bosilgan — to'g'ridan poll boshlash
+                from handlers.group import _group_sessions, _inline_sessions, _load_test, _run_group_polls, COUNT_EMOJIS
+                import asyncio as _asyncio
+                from aiogram.utils.keyboard import InlineKeyboardBuilder as _IKB
+                from aiogram.types import InlineKeyboardButton as _IKBtn
+                if chat.id in _group_sessions or chat.id in _inline_sessions:
+                    return await message.answer("⚠️ Guruhda allaqachon test ketmoqda!")
+                test = await _load_test(message.bot, chat.id, tid)
+                if not test:
+                    return await message.answer(f"❌ Test topilmadi: {tid}")
+                qs = [q for q in test.get("questions",[])
+                      if q.get("type","multiple_choice") in ("multiple_choice","true_false")]
+                if not qs:
+                    return await message.answer("⚠️ Poll uchun savollar yo'q!")
+                poll_time = test.get("poll_time", 30) or 30
+                _group_sessions[chat.id] = {
+                    "tid": tid, "test": test, "questions": qs,
+                    "answers": {}, "names": {}, "poll_map": {},
+                    "host_id": uid, "poll_time": poll_time, "task": None,
+                }
+                cdown = await message.answer(f"📝 <b>{test.get('title')}</b>")
+                for emoji in COUNT_EMOJIS:
+                    await _asyncio.sleep(0.8)
+                    try: await cdown.edit_text(emoji)
+                    except: pass
+                await _asyncio.sleep(0.5)
+                try: await cdown.delete()
+                except: pass
+                b2 = _IKB()
+                b2.row(_IKBtn(text="⏹ To'xtatish", callback_data=f"gstop_{uid}"))
+                skipped = len(test.get("questions",[])) - len(qs)
+                skip_txt = f"\n⚠️ {skipped} ta matn savol o'tkazildi" if skipped else ""
+                await message.answer(
+                    f"🚀 <b>TEST BOSHLANDI!</b> | {len(qs)} savol | ⏱{poll_time}s{skip_txt}\n📢 Hamma qatnashing!",
+                    reply_markup=b2.as_markup()
+                )
+                task = _asyncio.create_task(_run_group_polls(message.bot, chat.id, tid, qs, poll_time))
+                _group_sessions[chat.id]["task"] = task
+            else:
+                # Private chatda bosilgan — test kartochkasini ko'rsat
+                test = get_test_by_id(tid) or await _gtf(tid)
+                if test:
+                    await message.answer(welcome, reply_markup=main_kb(uid))
+                    await _send_test_card(message, test, tid, viewer_uid=uid)
+            return
+
+        if param.lower().startswith("ginline_"):
+            tid  = param[8:].upper()
+            chat = message.chat
+            if chat.type in ("group", "supergroup"):
+                # Guruhda bosilgan — to'g'ridan inline boshlash
+                from handlers.group import _group_sessions, _inline_sessions, _load_test, _run_inline_session, COUNT_EMOJIS
+                import asyncio as _asyncio
+                from aiogram.utils.keyboard import InlineKeyboardBuilder as _IKB
+                from aiogram.types import InlineKeyboardButton as _IKBt
+                if chat.id in _group_sessions or chat.id in _inline_sessions:
+                    return await message.answer("⚠️ Guruhda allaqachon test ketmoqda!")
+                test = await _load_test(message.bot, chat.id, tid)
+                if not test:
+                    return await message.answer(f"❌ Test topilmadi: {tid}")
+                qs            = test.get("questions", [])
+                poll_time     = test.get("poll_time", 30) or 30
+                passing_score = float(test.get("passing_score", 60))
+                if not qs:
+                    return await message.answer("⚠️ Savollar yo'q!")
+                _inline_sessions[chat.id] = {
+                    "tid": tid, "test": test, "questions": qs,
+                    "answers": {}, "names": {}, "host_id": uid,
+                    "poll_time": poll_time, "passing_score": passing_score,
+                    "cur_q": 0, "q_msg_id": None, "task": None, "locked": False,
+                }
+                cdown = await message.answer(f"📝 <b>{test.get('title')}</b>")
+                for emoji in COUNT_EMOJIS:
+                    await _asyncio.sleep(0.8)
+                    try: await cdown.edit_text(emoji)
+                    except: pass
+                await _asyncio.sleep(0.5)
+                try: await cdown.delete()
+                except: pass
+                b2 = _IKB()
+                b2.row(_IKBt(text="⏹ To'xtatish", callback_data=f"gi_stop_{uid}"))
+                await message.answer(
+                    f"🚀 <b>INLINE TEST BOSHLANDI!</b>\n📝 {test.get('title')} | {len(qs)} savol | ⏱{poll_time}s\n📢 Tugmalar orqali javob bering!",
+                    reply_markup=b2.as_markup()
+                )
+                task = _asyncio.create_task(_run_inline_session(message.bot, chat.id, tid, qs, poll_time, passing_score))
+                _inline_sessions[chat.id]["task"] = task
+            else:
+                # Private chatda bosilgan — test kartochkasini ko'rsat
+                test = get_test_by_id(tid) or await _gtf(tid)
+                if test:
+                    await message.answer(welcome, reply_markup=main_kb(uid))
+                    await _send_test_card(message, test, tid, viewer_uid=uid)
+            return
+
         tid  = param.upper()
         test = get_test_by_id(tid) or await _gtf(tid)
         if test:
