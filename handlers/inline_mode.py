@@ -77,6 +77,11 @@ def _make_result(test: dict, bot_username: str) -> InlineQueryResultArticle:
         InlineKeyboardButton(text="▶️ Inline test", url=f"{base}?start={tid}"),
         InlineKeyboardButton(text="📊 Quiz Poll",   url=f"{base}?start=poll_{tid}"),
     )
+    # Guruhda ulashilganda ko'rinadigan tugmalar
+    b.row(
+        InlineKeyboardButton(text="👥 Guruhda (Poll)",   callback_data=f"group_start_{tid}"),
+        InlineKeyboardButton(text="👥 Guruhda (Inline)", callback_data=f"group_inline_{tid}"),
+    )
     b.row(InlineKeyboardButton(text="➕ Shunga o'xshash test yarat",
                                url=f"{base}?start=create"))
 
