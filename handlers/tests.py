@@ -21,12 +21,22 @@ _inline_timers: dict = {}
 ANSWER_SHOW_SEC = 30   # Javob ko'rsatilgandan keyin keyingi savolga o'tish
 QUESTION_SEC    = 30   # Savol chiqgandan so'ng javobsiz kutish
 
+_CIRCLE = {"A":"🅐","B":"🅑","C":"🅒","D":"🅓","E":"🅔","F":"🅕","G":"🅖","H":"🅗"}
+def _cl(l): return _CIRCLE.get(str(l).upper(), f"[{str(l).upper()}]")
+
+def _timer_bar(remaining, total_sec, width=15):
+    """●●●○○ — kamayib boradi"""
+    if total_sec <= 0: return "○" * width
+    filled = round(remaining * width / total_sec)
+    filled = max(0, min(width, filled))
+    return "●" * filled + "○" * (width - filled)
+
 
 
 
 async def _show_next_question(bot, cid, msg_id, qs, idx, state, uid):
     """Keyingi savolni edit orqali ko'rsatib, to'g'ri state o'rnatadi va timer ishlatadi"""
-    text, kb, is_text = _build_question_content(qs, idx)
+    text, kb, is_text = _build_question_content(qs, idx, time_left=QUESTION_SEC)
     try:
         await bot.edit_message_text(chat_id=cid, message_id=msg_id, text=text, reply_markup=kb)
         new_msg_id = msg_id
@@ -320,7 +330,7 @@ async def _send_question_new(bot, cid, state, uid):
         await _finish_inline(bot, cid, state, d)
         return
 
-    text, kb, is_text = _build_question_content(qs, idx)
+    text, kb, is_text = _build_question_content(qs, idx, time_left=QUESTION_SEC)
     msg = await bot.send_message(cid, text, reply_markup=kb)
     await state.update_data(q_msg_id=msg.message_id, answered_this=False)
 
@@ -345,7 +355,7 @@ async def _edit_question(bot, cid, msg_id, state, uid):
         await _finish_inline(bot, cid, state, d)
         return
 
-    text, kb, is_text = _build_question_content(qs, idx)
+    text, kb, is_text = _build_question_content(qs, idx, time_left=QUESTION_SEC)
     try:
         await bot.edit_message_text(
             chat_id=cid, message_id=msg_id, text=text, reply_markup=kb
@@ -364,19 +374,21 @@ async def _edit_question(bot, cid, msg_id, state, uid):
     _inline_timers[uid] = task
 
 
-def _build_question_content(qs, idx):
+def _build_question_content(qs, idx, time_left=None):
     """Savol matni va klaviaturasini qurish"""
-    total = len(qs)
-    q     = qs[idx]
-    qtype = q.get("type", "multiple_choice")
-    qtxt  = re.sub(r'^\[\d+/\d+\]\s*', '', q.get("question", q.get("text", "Savol"))).strip()
+    total    = len(qs)
+    q        = qs[idx]
+    qtype    = q.get("type", "multiple_choice")
+    qtxt     = re.sub(r'^\[\d+/\d+\]\s*', '', q.get("question", q.get("text", "Savol"))).strip()
+    rem      = time_left if time_left is not None else QUESTION_SEC
+    tbar     = _timer_bar(rem, QUESTION_SEC)
 
     pause_btn = InlineKeyboardButton(text="⏸ Pauza", callback_data="inline_pause_menu")
     b = InlineKeyboardBuilder()
 
     if qtype in ("multiple_choice", "multi_select"):
-        opts    = q.get("options", [])
-        letters = []
+        opts      = q.get("options", [])
+        letters   = []
         opt_lines = ""
         for i, opt in enumerate(opts):
             raw = str(opt)
@@ -384,27 +396,27 @@ def _build_question_content(qs, idx):
             l   = m.group(1).upper() if m else chr(65+i)
             ot  = raw[m.end():].strip() if m else raw.strip()
             letters.append(l)
-            opt_lines += f"  <b>{l})</b>  {ot}\n"
+            opt_lines += f"{_cl(l)}  {ot}\n"
         text = (
             f"<b>[{idx+1}/{total}]</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱\n\n"
             f"{qtxt}\n\n"
             f"{opt_lines}\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"<i>⏱ {QUESTION_SEC}s</i>"
+            f"▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱\n"
+            f"   {tbar}⌛"
         )
         for l in letters:
-            b.add(InlineKeyboardButton(text=l, callback_data=f"ans_{l}"))
+            b.add(InlineKeyboardButton(text=_cl(l), callback_data=f"ans_{l}"))
         b.adjust(len(letters))
         b.row(pause_btn)
 
     elif qtype == "true_false":
         text = (
             f"<b>[{idx+1}/{total}]</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱\n\n"
             f"{qtxt}\n\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"<i>⏱ {QUESTION_SEC}s</i>"
+            f"▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱\n"
+            f"   {tbar}⌛"
         )
         b.row(
             InlineKeyboardButton(text="✅ Ha",   callback_data="ans_Ha"),
@@ -415,11 +427,11 @@ def _build_question_content(qs, idx):
     else:
         text = (
             f"<b>[{idx+1}/{total}]</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱\n\n"
             f"{qtxt}\n\n"
             f"<i>✍️ Javobingizni yozing (xabaringiz avtomatik o'chiriladi)</i>\n\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"<i>⏱ {QUESTION_SEC}s</i>"
+            f"▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱\n"
+            f"   {tbar}⌛"
         )
         b.row(InlineKeyboardButton(text="⏭ O'tkazish", callback_data="skip_q"))
         b.row(pause_btn)
@@ -429,9 +441,32 @@ def _build_question_content(qs, idx):
 
 
 async def _question_timeout(bot, cid, state, uid, expected_idx, wait_sec):
-    """Javobsiz QUESTION_SEC soniya o'tsa — xato deb belgilab keyingiga o'tish"""
+    """Javobsiz QUESTION_SEC soniya o'tsa — har 5s timer yangilab, 0 da timeout"""
     try:
-        await asyncio.sleep(wait_sec)
+        tick   = 5
+        elapsed = 0
+        while elapsed < wait_sec:
+            await asyncio.sleep(tick)
+            elapsed += tick
+            cur = await state.get_state()
+            if cur not in (TestSolving.answering.state, TestSolving.text_answer.state): return
+            d = await state.get_data()
+            if d.get("idx") != expected_idx: return
+            if d.get("answered_this"): return
+            # Timer yangilash (flood safe — har 5s)
+            remaining = max(0, wait_sec - elapsed)
+            msg_id_t  = d.get("q_msg_id")
+            qs_t      = d.get("qs", [])
+            if msg_id_t and elapsed < wait_sec:
+                try:
+                    t2, kb2, _ = _build_question_content(qs_t, expected_idx, time_left=remaining)
+                    await bot.edit_message_text(chat_id=cid, message_id=msg_id_t,
+                                                text=t2, reply_markup=kb2)
+                except TelegramBadRequest:
+                    pass
+                except Exception:
+                    pass
+
         cur = await state.get_state()
         if cur not in (TestSolving.answering.state, TestSolving.text_answer.state): return
         d = await state.get_data()
@@ -478,14 +513,27 @@ async def _question_timeout(bot, cid, state, uid, expected_idx, wait_sec):
             next_kb = InlineKeyboardBuilder()
             next_kb.row(InlineKeyboardButton(text="➡️ Keyingi", callback_data="next_q_now"))
 
+            # Timeout — strikethrough variantlar
+            opts_t = ""
+            m_ct   = re.match(r"^([A-Za-z])", str(corr).strip())
+            c_lt   = m_ct.group(1).upper() if m_ct else ""
+            for i3, opt3 in enumerate(q.get("options", [])):
+                raw3 = str(opt3)
+                mo3  = re.match(r"^([A-Za-z])\s*[).]\s*", raw3)
+                l3   = mo3.group(1).upper() if mo3 else chr(65+i3)
+                ot3  = raw3[mo3.end():].strip() if mo3 else raw3.strip()
+                if l3 == c_lt:
+                    opts_t += f"✅ <b>{_cl(l3)}  {ot3}</b>\n"
+                else:
+                    opts_t += f"<s>{_cl(l3)}  {ot3}</s>\n"
+            expl_block_t = f"\n▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱\n💡 {expl}" if expl else ""
             text = (
                 f"<b>[{expected_idx+1}/{len(qs)}]</b>  ⏰ <b>Vaqt tugadi!</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"{qtxt[:100]}\n\n"
-                f"❌ Javob berilmadi\n"
-                f"✔️ <b>{str(corr)[:60]}</b>{expl_txt}\n\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"<i>⏩ {ANSWER_SHOW_SEC}s da keyingiga o'tadi</i>"
+                f"▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱\n\n"
+                f"{qtxt[:120]}\n\n"
+                f"{opts_t}"
+                f"{expl_block_t}\n\n"
+                f"<i>⏩ {ANSWER_SHOW_SEC}s • yoki keyingiga o'tish:</i>"
             )
             await state.update_data(ans=ans, idx=new_idx, no_ans_streak=streak)
             try:
@@ -561,16 +609,35 @@ async def answer_cb(callback: CallbackQuery, state: FSMContext):
     next_kb = InlineKeyboardBuilder()
     next_kb.row(InlineKeyboardButton(text="➡️ Keyingi savol", callback_data="next_q_now"))
 
-    icon    = "✅" if is_c else "❌"
-    label   = "To'g'ri!" if is_c else "Noto'g'ri!"
-    qtxt_s  = qtxt[:100] + ("..." if len(qtxt) > 100 else "")
+    # Variantlarni strikethrough/bold ko'rsatish
+    opts_show = ""
+    m_corr = re.match(r"^([A-Za-z])", str(corr).strip())
+    c_let  = m_corr.group(1).upper() if m_corr else ""
+    m_ans  = re.match(r"^([A-Za-z])", str(ans_val).strip())
+    a_let  = m_ans.group(1).upper() if m_ans else ""
+    for i2, opt2 in enumerate(q.get("options", [])):
+        raw2 = str(opt2)
+        mo2  = re.match(r"^([A-Za-z])\s*[).]\s*", raw2)
+        l2   = mo2.group(1).upper() if mo2 else chr(65+i2)
+        ot2  = raw2[mo2.end():].strip() if mo2 else raw2.strip()
+        if l2 == c_let:
+            opts_show += f"✅ <b>{_cl(l2)}  {ot2}</b>\n"
+        elif l2 == a_let and not is_c:
+            opts_show += f"❌ <s>{_cl(l2)}  {ot2}</s>\n"
+        else:
+            opts_show += f"<s>{_cl(l2)}  {ot2}</s>\n"
+
+    icon   = "✅" if is_c else "❌"
+    label  = "To'g'ri!" if is_c else "Noto'g'ri!"
+    qtxt_s = qtxt[:120] + ("..." if len(qtxt) > 120 else "")
+    expl_block = f"\n▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱\n💡 {expl}" if expl else ""
     result_text = (
-        f"<b>[{idx+1}/{len(qs)}]</b>  {icon} <b>{label}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"<b>[{idx+1}/{len(qs)}]</b>\n"
+        f"▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱\n\n"
         f"{qtxt_s}\n\n"
-        f"✔️ <b>{corr_text[:80]}</b>{expl_txt}\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"<i>⏩ {ANSWER_SHOW_SEC}s da keyingiga o'tadi</i>"
+        f"{opts_show}"
+        f"{expl_block}\n\n"
+        f"<i>⏩ {ANSWER_SHOW_SEC}s • yoki keyingiga o'tish:</i>"
     )
     try:
         await callback.message.edit_text(result_text, reply_markup=next_kb.as_markup())
@@ -667,15 +734,14 @@ async def text_answer_handler(message: Message, state: FSMContext):
 
     icon_ok  = "✅" if is_c else "❌"
     label_ok = "To'g'ri!" if is_c else "Noto'g'ri!"
-    qtxt_s   = qtxt[:100] + ("..." if len(qtxt) > 100 else "")
+    qtxt_s   = qtxt[:80] + ("..." if len(qtxt) > 80 else "")
     result_text = (
-        f"<b>[{idx+1}/{len(qs)}]</b>  {icon_ok} <b>{label_ok}</b>\n"
+        f"{icon_ok} <b>{idx+1}/{len(qs)} — {label_ok}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"{qtxt_s}\n\n"
+        f"<i>{qtxt_s}</i>\n\n"
         f"✍️ Sizning: <code>{user_ans[:60]}</code>\n"
-        f"✔️ <b>{str(corr)[:80]}</b>{expl_txt}\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"<i>⏩ {ANSWER_SHOW_SEC}s da keyingiga o'tadi</i>"
+        f"✔️ To'g'ri: <b>{str(corr)[:80]}</b>{expl_txt}\n\n"
+        f"<i>{ANSWER_SHOW_SEC}s da avtomatik keyingiga o'tadi</i>"
     )
     try:
         if q_msg:
