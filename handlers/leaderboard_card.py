@@ -1,111 +1,95 @@
 """
-Leaderboard Card Generator
-==========================
-Test tugagach chiroyli rasm kartochka yasaydi va guruhga yuboradi.
-Rasm so'ng o'chiriladi (xabarni emas, faylni).
-
-Dizayn:
-  - Qora-gradient fon
-  - Test nomi + statistika header
-  - Top 3 — katta medal + progress bar
-  - 4-10 — compact qatorlar
-  - Footer: ishtirokchi soni, o'rtacha ball
+Leaderboard Card Generator — Professional Design
+=================================================
+2-rasmdagi kabi yuqori sifatli leaderboard kartochka.
 """
 import io
 import logging
-import os
+import math
 from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-# ═══════════════════════════════════════════════════
-# RANGLAR VA KONSTANTLAR
-# ═══════════════════════════════════════════════════
-BG_TOP        = (10, 10, 30)
-BG_BOTTOM     = (20, 20, 50)
-ACCENT        = (99, 102, 241)       # indigo
-GOLD          = (255, 200, 50)
-SILVER        = (192, 192, 210)
-BRONZE        = (205, 127, 50)
+# ═══════════════════════════════════════════════
+# FONTLAR
+# ═══════════════════════════════════════════════
+FONT_BOLD    = "/usr/share/fonts/truetype/crosextra/Carlito-Bold.ttf"
+FONT_REGULAR = "/usr/share/fonts/truetype/crosextra/Carlito-Regular.ttf"
+
+# ═══════════════════════════════════════════════
+# RANGLAR
+# ═══════════════════════════════════════════════
+BG_COLOR      = (18, 20, 40)        # qorong'i ko'k fon
+CARD_BG       = (26, 29, 54)        # karta foni
+BORDER_GOLD   = (255, 190, 50)      # 1-o'rin oltin chegara
+BORDER_SILVER = (160, 170, 200)     # 2-o'rin kumush
+BORDER_BRONZE = (200, 130, 60)      # 3-o'rin bronza
+BORDER_DEF    = (45, 50, 85)        # oddiy chegara
+ACCENT        = (100, 105, 220)     # indigo aksent
 WHITE         = (255, 255, 255)
-GRAY          = (150, 155, 180)
-DARK_CARD     = (30, 32, 60)
-GREEN_BAR     = (72, 199, 142)
-RED_BAR       = (252, 100, 100)
-YELLOW_BAR    = (251, 191, 36)
+GRAY          = (130, 140, 175)
+GREEN         = (60, 210, 140)
+YELLOW        = (250, 190, 40)
+RED           = (240, 90, 90)
+BAR_BG        = (40, 44, 75)
 
-MEDAL_COLORS  = [GOLD, SILVER, BRONZE]
-MEDAL_EMOJIS  = ["🥇", "🥈", "🥉"]
-RANK_EMOJI    = ["4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
-
-# 2x scale — Telegram compress qilganda ham o'qiladi
-SCALE         = 2
-W, H_BASE     = 900 * SCALE, 200 * SCALE
-PADDING       = 40  * SCALE
-ROW_H         = 68  * SCALE
-TOP3_H        = 88  * SCALE
+MEDAL_COLORS  = [BORDER_GOLD, BORDER_SILVER, BORDER_BRONZE]
+MEDAL_BG      = [(60, 48, 10), (38, 42, 58), (52, 35, 15)]
 
 
-def _get_font(size: int, bold: bool = False):
-    """Font yuklash — tizimda bor birinchi fontdan foydalanadi."""
+def _font(size, bold=False):
+    from PIL import ImageFont
+    path = FONT_BOLD if bold else FONT_REGULAR
     try:
-        from PIL import ImageFont
-        paths = [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold
-            else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if bold
-            else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-            "/usr/share/fonts/truetype/freefont/FreeSansBold.otf" if bold
-            else "/usr/share/fonts/truetype/freefont/FreeSans.otf",
-        ]
-        for p in paths:
-            if os.path.exists(p):
-                return ImageFont.truetype(p, size)
-        return ImageFont.load_default()
+        return ImageFont.truetype(path, size)
     except Exception:
         try:
-            from PIL import ImageFont
-            return ImageFont.load_default()
+            return ImageFont.truetype(FONT_REGULAR, size)
         except Exception:
-            return None
+            return ImageFont.load_default()
 
 
-def _gradient_bg(draw, w: int, h: int):
-    """Vertikal gradient fon."""
-    for y in range(h):
-        t  = y / h
-        r  = int(BG_TOP[0] + (BG_BOTTOM[0] - BG_TOP[0]) * t)
-        g  = int(BG_TOP[1] + (BG_BOTTOM[1] - BG_TOP[1]) * t)
-        b  = int(BG_TOP[2] + (BG_BOTTOM[2] - BG_TOP[2]) * t)
-        draw.line([(0, y), (w, y)], fill=(r, g, b))
+def _bar_color(pct, passing):
+    if pct >= passing:
+        return GREEN
+    elif pct >= passing * 0.7:
+        return YELLOW
+    else:
+        return RED
 
 
-def _bar(draw, x: int, y: int, w: int, h: int, pct: float, passing: float = 60.0):
-    """Progress bar — foizga qarab rang."""
-    draw.rounded_rectangle([x, y, x + w, y + h],
-                            radius=h // 2, fill=(40, 42, 70))
-    fill_w = max(4, int(w * pct / 100))
-    color  = GREEN_BAR if pct >= passing else (
-             YELLOW_BAR if pct >= 40 else RED_BAR)
-    draw.rounded_rectangle([x, y, x + fill_w, y + h],
-                            radius=h // 2, fill=color)
+def _pct_color(pct, passing):
+    if pct >= passing:
+        return GREEN
+    elif pct >= passing * 0.7:
+        return YELLOW
+    else:
+        return RED
 
 
-def _truncate(text: str, font, max_w: int) -> str:
-    """Matnni belgilangan kenglikka sig'diradi."""
-    try:
-        from PIL import ImageDraw as ID
-        import PIL.Image as PI
-        tmp_img  = PI.new("RGB", (1, 1))
-        tmp_draw = ID.Draw(tmp_img)
-        while len(text) > 1:
-            bbox = tmp_draw.textbbox((0, 0), text, font=font)
-            if (bbox[2] - bbox[0]) <= max_w:
-                break
-            text = text[:-2] + "…"
-        return text
-    except Exception:
-        return text[:30]
+def _draw_rounded_rect(draw, x0, y0, x1, y1, r, fill, outline=None, outline_width=2):
+    """To'ldirilgan yumaloq to'rtburchak."""
+    from PIL import ImageDraw
+    draw.rectangle([x0 + r, y0, x1 - r, y1], fill=fill)
+    draw.rectangle([x0, y0 + r, x1, y1 - r], fill=fill)
+    draw.ellipse([x0, y0, x0 + 2*r, y0 + 2*r], fill=fill)
+    draw.ellipse([x1 - 2*r, y0, x1, y0 + 2*r], fill=fill)
+    draw.ellipse([x0, y1 - 2*r, x0 + 2*r, y1], fill=fill)
+    draw.ellipse([x1 - 2*r, y1 - 2*r, x1, y1], fill=fill)
+    if outline:
+        draw.arc([x0, y0, x0+2*r, y0+2*r], 180, 270, fill=outline, width=outline_width)
+        draw.arc([x1-2*r, y0, x1, y0+2*r], 270, 360, fill=outline, width=outline_width)
+        draw.arc([x0, y1-2*r, x0+2*r, y1], 90, 180, fill=outline, width=outline_width)
+        draw.arc([x1-2*r, y1-2*r, x1, y1], 0, 90, fill=outline, width=outline_width)
+        draw.line([x0+r, y0, x1-r, y0], fill=outline, width=outline_width)
+        draw.line([x0+r, y1, x1-r, y1], fill=outline, width=outline_width)
+        draw.line([x0, y0+r, x0, y1-r], fill=outline, width=outline_width)
+        draw.line([x1, y0+r, x1, y1-r], fill=outline, width=outline_width)
+
+
+def _draw_circle(draw, cx, cy, r, fill, outline=None, outline_width=3):
+    draw.ellipse([cx-r, cy-r, cx+r, cy+r], fill=fill,
+                 outline=outline, width=outline_width if outline else 0)
 
 
 def generate_leaderboard_image(
@@ -114,206 +98,247 @@ def generate_leaderboard_image(
     passing_score: float = 60.0,
     total_questions: int = 0,
 ) -> Optional[bytes]:
-    """
-    Leaderboard rasmini bytes formatida qaytaradi.
-
-    results = [
-      {
-        "first_name": "Ali",
-        "username": "ali_uz",
-        "score": 85.0,
-        "correct": 17,
-        "total": 20,
-      }, ...
-    ]
-    """
     try:
         from PIL import Image, ImageDraw
-    except ImportError:
-        logger.warning("Pillow yo'q — rasm yasalmaydik")
-        return None
 
-    if not results:
-        return None
+        W = 900
+        PAD = 36
 
-    top10    = results[:15]
-    top3     = top10[:3]
-    rest     = top10[3:]
+        # ── O'lchamlar ──
+        HEADER_H  = 130
+        STATS_H   = 44
+        DIVIDER_H = 2
+        TOP3_H    = 96
+        ROW_H     = 72
+        FOOTER_H  = 56
+        GAP       = 12
 
-    # ── Rasm balandligini hisoblash ─────────────────
-    H = (
-        PADDING                        # yuqori bo'sh joy
-        + 90                           # header (test nomi)
-        + 30                           # bo'sh joy
-        + len(top3) * TOP3_H           # top 3
-        + (20 if rest else 0)          # separator
-        + len(rest) * ROW_H            # 4-10
-        + 80                           # footer
-        + PADDING                      # pastki bo'sh joy
-    )
-    H = max(H, 400)
+        top3    = results[:3]
+        rest    = results[3:15]
+        n_rest  = len(rest)
 
-    img  = Image.new("RGB", (W, H), BG_TOP)
-    draw = ImageDraw.Draw(img)
-
-    _gradient_bg(draw, W, H)
-
-    # ── Yuqori chiziq (accent) ──────────────────────
-    draw.rectangle([0, 0, W, 5], fill=ACCENT)
-
-    # ── Shrift yuklash ──────────────────────────────
-    f_title   = _get_font(64, bold=True)
-    f_big     = _get_font(56, bold=True)
-    f_med     = _get_font(44, bold=False)
-    f_small   = _get_font(36, bold=False)
-    f_footer  = _get_font(40, bold=False)
-
-    # ── HEADER ─────────────────────────────────────
-    y = PADDING
-
-    # Trophy icon area
-    draw.ellipse([PADDING, y, PADDING + 50, y + 50],
-                 fill=(40, 42, 80), outline=ACCENT, width=4)
-    draw.text((PADDING + 13, y + 8), "🏆", font=_get_font(56), fill=WHITE)
-
-    title_text = _truncate(quiz_title, f_title, W - PADDING * 2 - 70)
-    draw.text((PADDING + 60, y + 8), title_text, font=f_title, fill=WHITE)
-
-    y += 60
-    # Stat chiziqlar
-    passed    = sum(1 for r in results if r.get("score", 0) >= passing_score)
-    avg_score = sum(r.get("score", 0) for r in results) / len(results) if results else 0
-    stat_text = (
-        f"👥 {len(results)} ishtirokchi   "
-        f"✅ {passed} o'tdi ({passed*100//max(len(results),1)}%)   "
-        f"📊 O'rtacha: {avg_score:.0f}%"
-    )
-    draw.text((PADDING, y), stat_text, font=f_small, fill=GRAY)
-    y += 30
-
-    # ── Divider ─────────────────────────────────────
-    draw.rectangle([PADDING, y, W - PADDING, y + 2],
-                   fill=(50, 55, 90))
-    y += 20
-
-    # ── TOP 3 ────────────────────────────────────────
-    for i, r in enumerate(top3):
-        name   = (r.get("username") or r.get("first_name") or "O'quvchi")
-        score  = float(r.get("score", 0))
-        correct= int(r.get("correct", 0))
-        total  = int(r.get("total", total_questions or 1))
-        color  = MEDAL_COLORS[i]
-
-        # Karta foni
-        card_x1 = PADDING
-        card_x2 = W - PADDING
-        card_y1 = y
-        card_y2 = y + TOP3_H - 8
-        draw.rounded_rectangle(
-            [card_x1, card_y1, card_x2, card_y2],
-            radius=12,
-            fill=(28, 30, 58),
-            outline=(*color[:3], 80),
-            width=2
+        total_h = (
+            PAD
+            + HEADER_H + GAP
+            + STATS_H  + GAP
+            + DIVIDER_H + GAP
+            + len(top3) * (TOP3_H + GAP)
+            + (30 + GAP if n_rest else 0)
+            + n_rest * (ROW_H + GAP)
+            + DIVIDER_H + GAP
+            + FOOTER_H
+            + PAD
         )
 
-        # Medal doira
-        cx, cy, cr = card_x1 + 36, card_y1 + TOP3_H // 2 - 4, 22
-        draw.ellipse([cx - cr, cy - cr, cx + cr, cy + cr],
-                     fill=color, outline=WHITE, width=2)
-        rank_txt = str(i + 1)
-        draw.text((cx - 6 if i < 9 else cx - 9, cy - 11),
-                  rank_txt, font=f_med, fill=(20, 20, 40))
+        img  = Image.new("RGB", (W, total_h), BG_COLOR)
+        draw = ImageDraw.Draw(img)
 
-        # Ism
-        tx = card_x1 + 75
-        name_disp = _truncate(name, f_big, W - tx - 220)
-        draw.text((tx, card_y1 + 10), name_disp, font=f_big, fill=WHITE)
+        y = PAD
 
-        # To'g'ri javob
-        score_color = GREEN_BAR if score >= passing_score else (
-                      YELLOW_BAR if score >= 40 else RED_BAR)
-        score_txt = f"{score:.0f}%"
-        draw.text((W - PADDING - 160, card_y1 + 8),
-                  f"✅ {correct}/{total}", font=f_med, fill=GRAY)
-        draw.text((W - PADDING - 70, card_y1 + 8),
-                  score_txt, font=f_big, fill=score_color)
+        # ══════════════════════════════════════════
+        # HEADER — icon + sarlavha
+        # ══════════════════════════════════════════
+        ICON_R = 36
+        cx = PAD + ICON_R
+        cy = y + HEADER_H // 2
+        _draw_circle(draw, cx, cy, ICON_R, ACCENT, outline=WHITE, outline_width=3)
+        icon_txt = "🏆"
+        # Emoji o'rniga oddiy matn (Pillow emoji ko'rsatmaydi)
+        f_icon = _font(28, bold=True)
+        draw.text((cx, cy), "#", font=f_icon, fill=WHITE, anchor="mm")
 
-        # Progress bar
-        _bar(draw, tx, card_y1 + 46, W - tx - PADDING - 10,
-             14, score, passing_score)
+        # Test nomi
+        f_title = _font(42, bold=True)
+        title_x = cx + ICON_R + 20
+        # Uzun nomni kesish
+        title = quiz_title if len(quiz_title) <= 28 else quiz_title[:26] + "..."
+        draw.text((title_x, cy - 18), title, font=f_title, fill=WHITE)
 
-        y += TOP3_H
+        y += HEADER_H + GAP
 
-    # ── Separator ────────────────────────────────────
-    if rest:
-        y += 10
-        draw.rectangle([PADDING, y, W - PADDING, y + 1],
-                       fill=(45, 48, 80))
-        draw.text((PADDING, y + 4),
-                  f"Qolgan {len(rest)} ishtirokchi:",
-                  font=f_small, fill=GRAY)
-        y += 28
+        # ══════════════════════════════════════════
+        # STATISTIKA QATORI
+        # ══════════════════════════════════════════
+        avg     = sum(r["score"] for r in results) / len(results) if results else 0
+        passed  = sum(1 for r in results if r["score"] >= passing_score)
+        n_total = len(results)
 
-    # ── 4-10 QATORLAR ────────────────────────────────
-    for i, r in enumerate(rest):
-        rank   = i + 4
-        name   = (r.get("username") or r.get("first_name") or "O'quvchi")
-        score  = float(r.get("score", 0))
-        correct= int(r.get("correct", 0))
-        total  = int(r.get("total", total_questions or 1))
+        f_stats = _font(26)
+        f_statsb = _font(26, bold=True)
 
-        # Alternating row bg
-        if i % 2 == 0:
-            draw.rectangle([PADDING, y, W - PADDING, y + ROW_H - 6],
-                           fill=(25, 27, 52))
+        stats_items = [
+            (f"👥 {n_total} ishtirokchi", WHITE),
+            (f"✅ {passed} o'tdi ({passed*100//n_total if n_total else 0}%)", GREEN),
+            (f"📊 O'rtacha: {avg:.0f}%", GRAY),
+        ]
+        sx = PAD
+        for txt, col in stats_items:
+            draw.text((sx, y), txt, font=f_stats, fill=col)
+            bbox = draw.textbbox((sx, y), txt, font=f_stats)
+            sx = bbox[2] + 30
 
-        # Rank
-        draw.text((PADDING + 5, y + 16),
-                  f"{rank}.", font=f_med, fill=GRAY)
+        y += STATS_H + GAP
 
-        # Ism
-        name_disp = _truncate(name, f_med, W - PADDING * 2 - 220)
-        draw.text((PADDING + 38, y + 16),
-                  name_disp, font=f_med, fill=WHITE)
+        # Divider
+        draw.rectangle([PAD, y, W-PAD, y+DIVIDER_H], fill=ACCENT)
+        y += DIVIDER_H + GAP
 
-        # Natija
-        score_color = GREEN_BAR if score >= passing_score else (
-                      YELLOW_BAR if score >= 40 else RED_BAR)
-        draw.text((W - PADDING - 150, y + 16),
-                  f"{correct}/{total}", font=f_med, fill=GRAY)
-        draw.text((W - PADDING - 65, y + 16),
-                  f"{score:.0f}%", font=f_med, fill=score_color)
+        # ══════════════════════════════════════════
+        # TOP 3 — katta kartalar
+        # ══════════════════════════════════════════
+        f_rank   = _font(28, bold=True)
+        f_name   = _font(30, bold=True)
+        f_score  = _font(30, bold=True)
+        f_info   = _font(22)
+        f_sub    = _font(20)
 
-        # Mini bar
-        _bar(draw, PADDING + 38, y + 46, W - PADDING * 2 - 120,
-             10, score, passing_score)
+        for i, r in enumerate(top3):
+            pct     = r["score"]
+            correct = r["correct"]
+            total   = r["total"] or total_questions or 1
+            name    = (r.get("first_name") or r.get("username") or "O'quvchi")[:22]
+            border  = MEDAL_COLORS[i]
+            bg      = MEDAL_BG[i]
 
-        y += ROW_H
+            # Karta foni
+            _draw_rounded_rect(draw, PAD, y, W-PAD, y+TOP3_H, 12,
+                                fill=CARD_BG, outline=border, outline_width=3)
 
-    # ── FOOTER ──────────────────────────────────────
-    y += 20
-    draw.rectangle([PADDING, y, W - PADDING, y + 1],
-                   fill=(50, 55, 90))
-    y += 12
+            # Rank doira
+            rk_cx = PAD + 48
+            rk_cy = y + TOP3_H // 2
+            _draw_circle(draw, rk_cx, rk_cy, 28, border)
+            draw.text((rk_cx, rk_cy), str(i+1), font=f_rank,
+                      fill=BG_COLOR, anchor="mm")
 
-    # Passing score ko'rsatish
-    footer_left  = f"🎯 O'tish bali: {passing_score:.0f}%"
-    footer_right = f"📝 {total_questions} ta savol" if total_questions else ""
-    draw.text((PADDING, y), footer_left, font=f_footer, fill=GRAY)
-    if footer_right:
-        bbox = draw.textbbox((0, 0), footer_right, font=f_footer)
-        fw   = bbox[2] - bbox[0]
-        draw.text((W - PADDING - fw, y), footer_right, font=f_footer, fill=GRAY)
+            # Ism + correct/total — yuqori qatorda
+            name_x  = rk_cx + 40
+            pct_col = _pct_color(pct, passing_score)
+            pct_txt = f"{pct:.0f}%"
+            f_pct   = _font(32, bold=True)
+            pct_bbox = draw.textbbox((0, 0), pct_txt, font=f_pct)
+            pct_w    = pct_bbox[2] - pct_bbox[0]
 
-    # ── Pastki accent chiziq ─────────────────────────
-    draw.rectangle([0, H - 5, W, H], fill=ACCENT)
+            info_txt  = f"{correct}/{total}"
+            f_info2   = _font(22)
+            info_bbox = draw.textbbox((0, 0), info_txt, font=f_info2)
+            info_w    = info_bbox[2] - info_bbox[0]
 
-    # ── PNG bytes ───────────────────────────────────
-    buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
-    buf.seek(0)
-    return buf.getvalue()
+            # Ism — yuqori chap, vertikal markazda
+            name_y = y + TOP3_H // 2 - 28
+            draw.text((name_x, name_y), name, font=f_name, fill=WHITE)
+
+            # correct/total — ismning o'ng tomonida, foizdan chapda
+            info_x = W - PAD - 16 - pct_w - 20 - info_w - 16
+            info_y = name_y + 4
+            draw.text((info_x, info_y), info_txt, font=f_info2, fill=GRAY)
+
+            # Foiz — o'ng yuqori
+            draw.text((W - PAD - 16 - pct_w, name_y),
+                      pct_txt, font=f_pct, fill=pct_col)
+
+            # Progress bar — pastda, matndan 14px past
+            bar_x0 = name_x
+            bar_x1 = W - PAD - 16
+            bar_y  = name_y + 42
+            bar_w  = bar_x1 - bar_x0
+            _draw_rounded_rect(draw, bar_x0, bar_y, bar_x1, bar_y + 10, 5, fill=BAR_BG)
+            filled_w = int(bar_w * pct / 100)
+            if filled_w > 10:
+                col = _bar_color(pct, passing_score)
+                _draw_rounded_rect(draw, bar_x0, bar_y, bar_x0 + filled_w, bar_y + 10, 5, fill=col)
+
+            y += TOP3_H + GAP
+
+        # ══════════════════════════════════════════
+        # QOLGAN ISHTIROKCHILAR
+        # ══════════════════════════════════════════
+        if rest:
+            f_sec = _font(24)
+            draw.text((PAD, y + 4), f"Qolgan {n_rest} ishtirokchi:", font=f_sec, fill=GRAY)
+            y += 30 + GAP
+
+            f_rname = _font(26, bold=True)
+            f_rinfo = _font(24)
+            f_rpct  = _font(26, bold=True)
+
+            for i, r in enumerate(rest):
+                rank    = i + 4
+                pct     = r["score"]
+                correct = r["correct"]
+                total   = r["total"] or total_questions or 1
+                name    = (r.get("first_name") or r.get("username") or "O'quvchi")[:24]
+                col     = _bar_color(pct, passing_score)
+                pct_col = _pct_color(pct, passing_score)
+
+                row_y0 = y
+                row_y1 = y + ROW_H
+
+                # Fon
+                _draw_rounded_rect(draw, PAD, row_y0, W-PAD, row_y1, 8,
+                                   fill=CARD_BG, outline=BORDER_DEF, outline_width=1)
+
+                # Rank raqam
+                draw.text((PAD + 16, row_y0 + 16), f"{rank}.", font=f_sub, fill=GRAY)
+
+                name_x = PAD + 56
+
+                # Foiz — o'ng yuqori
+                pct_txt  = f"{pct:.0f}%"
+                pct_bbox = draw.textbbox((0, 0), pct_txt, font=f_rpct)
+                pct_w    = pct_bbox[2] - pct_bbox[0]
+                draw.text((W - PAD - 16 - pct_w, row_y0 + 12),
+                          pct_txt, font=f_rpct, fill=pct_col)
+
+                # correct/total — foizdan chapda
+                info_txt  = f"{correct}/{total}"
+                info_bbox = draw.textbbox((0, 0), info_txt, font=f_rinfo)
+                info_w    = info_bbox[2] - info_bbox[0]
+                draw.text((W - PAD - 16 - pct_w - 16 - info_w, row_y0 + 14),
+                          info_txt, font=f_rinfo, fill=GRAY)
+
+                # Ism — chap yuqori
+                draw.text((name_x, row_y0 + 12), name, font=f_rname, fill=WHITE)
+
+                # Bar — pastda, ismdan 12px past
+                bar_x0 = name_x
+                bar_x1 = W - PAD - 16
+                bar_y  = row_y0 + 46
+                bar_w  = bar_x1 - bar_x0
+                _draw_rounded_rect(draw, bar_x0, bar_y, bar_x1, bar_y + 8, 4, fill=BAR_BG)
+                fw = int(bar_w * pct / 100)
+                if fw > 8:
+                    _draw_rounded_rect(draw, bar_x0, bar_y, bar_x0 + fw, bar_y + 8, 4, fill=col)
+
+                y += ROW_H + GAP
+
+        # ══════════════════════════════════════════
+        # FOOTER
+        # ══════════════════════════════════════════
+        draw.rectangle([PAD, y, W-PAD, y+DIVIDER_H], fill=BORDER_DEF)
+        y += DIVIDER_H + GAP
+
+        f_foot = _font(24)
+        draw.text((PAD, y + 14),
+                  f"O'tish bali: {passing_score:.0f}%",
+                  font=f_foot, fill=GRAY)
+
+        tq_txt = f"{total_questions} ta savol"
+        tq_bbox = draw.textbbox((0,0), tq_txt, font=f_foot)
+        tq_w = tq_bbox[2] - tq_bbox[0]
+        draw.text((W - PAD - tq_w, y + 14),
+                  tq_txt, font=f_foot, fill=GRAY)
+
+        # ── PNG sifatida saqlash ──
+        buf = io.BytesIO()
+        img.save(buf, format="PNG", optimize=False)
+        buf.seek(0)
+        return buf.read()
+
+    except Exception as e:
+        logger.error(f"Leaderboard rasm xatosi: {e}")
+        import traceback; traceback.print_exc()
+        return None
 
 
 async def send_leaderboard_card(
@@ -323,47 +348,38 @@ async def send_leaderboard_card(
     results: List[Dict],
     passing_score: float = 60.0,
     total_questions: int = 0,
-    caption: str = "",
+    caption: str = None,
     delete_after: int = 0,
 ) -> Optional[int]:
-    """
-    Leaderboard rasmini guruhga yuboradi.
-    delete_after > 0 bo'lsa, shu soniyadan keyin xabarni o'chiradi.
-    Qaytaradi: yuborilgan xabar message_id yoki None.
-    """
     import asyncio
     from aiogram.types import BufferedInputFile
 
     img_bytes = generate_leaderboard_image(
         quiz_title, results, passing_score, total_questions
     )
-
     if not img_bytes:
-        # Fallback: oddiy matn
-        logger.warning("Rasm yasalmas — matn yuboriladi")
         return None
 
     try:
-        msg = await bot.send_photo(
+        # Document sifatida — Telegram siqmaydi, HD sifat saqlanadi
+        msg = await bot.send_document(
             chat_id=chat_id,
-            photo=BufferedInputFile(img_bytes, filename="leaderboard.png"),
+            document=BufferedInputFile(img_bytes, filename="leaderboard.png"),
             caption=caption if caption else None,
-            parse_mode="HTML"
+            parse_mode="HTML" if caption else None,
         )
-        logger.info(f"✅ Leaderboard rasm yuborildi: {chat_id} msg={msg.message_id}")
+        logger.info(f"✅ Leaderboard (HD doc) yuborildi: {chat_id} msg={msg.message_id}")
 
         if delete_after > 0:
             async def _del():
                 await asyncio.sleep(delete_after)
                 try:
                     await bot.delete_message(chat_id, msg.message_id)
-                    logger.info(f"🗑 Leaderboard rasm o'chirildi: msg={msg.message_id}")
-                except Exception as e:
-                    logger.warning(f"Rasm o'chirishda xato: {e}")
+                except Exception: pass
             asyncio.create_task(_del())
 
         return msg.message_id
 
     except Exception as e:
-        logger.error(f"Leaderboard rasm yuborishda xato: {e}")
+        logger.error(f"Leaderboard yuborishda xato: {e}")
         return None
