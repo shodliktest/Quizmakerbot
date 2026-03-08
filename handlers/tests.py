@@ -496,60 +496,10 @@ async def _question_tick(bot, cid, state, uid, expected_idx, msg_id, total_sec):
     except asyncio.CancelledError:
         pass
     except Exception as e:
-        log.error(f"Tick xato: {e}")
+        import traceback
+        log.error(f"Tick xato: {e}\n{traceback.format_exc()}")
 
 
-async def _send_question_new(bot, cid, state, uid):
-    """Yangi xabar yuboradi — faqat birinchi savolda yoki pauza qaytganda"""
-    d   = await state.get_data()
-    qs  = d["qs"]
-    idx = d["idx"]
-    if idx >= len(qs):
-        await _finish_inline(bot, cid, state, d)
-        return
-
-    text, kb, is_text = _build_question_content(qs, idx)
-    msg = await bot.send_message(cid, text, reply_markup=kb)
-    await state.update_data(q_msg_id=msg.message_id, answered_this=False)
-
-    if is_text:
-        await state.set_state(TestSolving.text_answer)
-    else:
-        await state.set_state(TestSolving.answering)
-
-    _cancel_timer(uid)
-    task = asyncio.create_task(
-        _question_timeout(bot, cid, state, uid, idx, QUESTION_SEC)
-    )
-    _inline_timers[uid] = task
-
-
-async def _edit_question(bot, cid, msg_id, state, uid):
-    """Mavjud xabarni edit qiladi — keyingi savol"""
-    d   = await state.get_data()
-    qs  = d["qs"]
-    idx = d["idx"]
-    if idx >= len(qs):
-        await _finish_inline(bot, cid, state, d)
-        return
-
-    text, kb, is_text = _build_question_content(qs, idx)
-    try:
-        await bot.edit_message_text(
-            chat_id=cid, message_id=msg_id, text=text, reply_markup=kb
-        )
-    except TelegramBadRequest:
-        # Edit imkoni bo'lmasa yangi yuborish
-        msg = await bot.send_message(cid, text, reply_markup=kb)
-        msg_id = msg.message_id
-        await state.update_data(q_msg_id=msg_id)
-
-    await state.update_data(answered_this=False)
-    _cancel_timer(uid)
-    task = asyncio.create_task(
-        _question_timeout(bot, cid, state, uid, idx, QUESTION_SEC)
-    )
-    _inline_timers[uid] = task
 
 
 def _progress_bar(done, total, width=10):
@@ -622,82 +572,6 @@ def _build_question_content(qs, idx, time_left=None):
 
     return text, b.as_markup(), False
 
-
-async def _question_timeout(bot, cid, state, uid, expected_idx, wait_sec):
-    """Javobsiz QUESTION_SEC soniya o'tsa — xato deb belgilab keyingiga o'tish"""
-    try:
-        await asyncio.sleep(wait_sec)
-        cur = await state.get_state()
-        if cur not in (TestSolving.answering.state, TestSolving.text_answer.state): return
-        d = await state.get_data()
-        if d.get("idx") != expected_idx: return
-        if d.get("answered_this"): return
-
-        # Javob berilmadi — streakni oshir
-        streak  = d.get("no_ans_streak", 0) + 1
-        ans     = d.get("ans", {})
-        ans[str(expected_idx)] = None
-        new_idx = expected_idx + 1
-        qs      = d.get("qs", [])
-        msg_id  = d.get("q_msg_id")
-
-        if streak >= 2:
-            # 2 marta ketma-ket javobsiz → pauza
-            await state.update_data(ans=ans, idx=new_idx, no_ans_streak=0)
-            await state.set_state(TestSolving.paused)
-            try:
-                await bot.edit_message_text(
-                    chat_id=cid, message_id=msg_id,
-                    text=(
-                        f"⏸ <b>TEST PAUZALAND</b>\n\n"
-                        f"Ketma-ket 2 ta savolga javob berilmadi.\n"
-                        f"<i>Davom etish yoki to'xtatishni tanlang:</i>"
-                    ),
-                    reply_markup=inline_pause_kb()
-                )
-            except TelegramBadRequest:
-                await bot.send_message(
-                    cid,
-                    "⏸ <b>TEST PAUZALAND</b>\n\nDavom etish yoki to'xtatish:",
-                    reply_markup=inline_pause_kb()
-                )
-        else:
-            # Xato deb belgilab, izoh bilan edit qil, 30s keyingi
-            q    = qs[expected_idx] if expected_idx < len(qs) else {}
-            corr = q.get("correct", "?")
-            expl = q.get("explanation", "")
-            if expl in ("Izoh kiritilmagan.", "Izoh yo'q", ""): expl = ""
-            expl_txt = f"\n💡 <i>{expl[:120]}</i>" if expl else ""
-            qtxt = re.sub(r'^\[\d+/\d+\]\s*', '', q.get("question", q.get("text",""))).strip()
-
-            next_kb = InlineKeyboardBuilder()
-            next_kb.row(InlineKeyboardButton(text="➡️ Keyingi", callback_data="next_q_now"))
-
-            text = (
-                f"⏰ <b>{expected_idx+1}/{len(qs)} — Vaqt tugadi!</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"<i>{qtxt[:80]}</i>\n\n"
-                f"❌ Javob berilmadi\n"
-                f"✔️ To'g'ri: <b>{str(corr)[:60]}</b>{expl_txt}\n\n"
-                f"<i>Keyingiga {ANSWER_SHOW_SEC}s da avtomatik o'tadi</i>"
-            )
-            await state.update_data(ans=ans, idx=new_idx, no_ans_streak=streak)
-            try:
-                await bot.edit_message_text(
-                    chat_id=cid, message_id=msg_id, text=text,
-                    reply_markup=next_kb.as_markup()
-                )
-            except TelegramBadRequest: pass
-
-            # ANSWER_SHOW_SEC soniya keyingi savol
-            _cancel_timer(uid)
-            task = asyncio.create_task(
-                _auto_next(bot, cid, state, uid, new_idx, ANSWER_SHOW_SEC)
-            )
-            _inline_timers[uid] = task
-
-    except asyncio.CancelledError: pass
-    except Exception as e: log.error(f"Timeout: {e}")
 
 
 # ── Javob handler ─────────────────────────────────────────────
@@ -825,16 +699,25 @@ async def _auto_next(bot, cid, state, uid, expected_new_idx, wait_sec, msg_id=No
             await _finish_inline(bot, cid, state, d_fresh)
 
     except asyncio.CancelledError: pass
-    except Exception as e: log.error(f"Auto next: {e}")
+    except Exception as e:
+        import traceback
+        log.error(f"Auto next: {e}\n{traceback.format_exc()}")
 
 
-@router.callback_query(F.data == "next_q_now", StateFilter(TestSolving.answering))
+@router.callback_query(F.data == "next_q_now")
 async def next_q_now_cb(callback: CallbackQuery, state: FSMContext):
+    cur = await state.get_state()
+    # Faqat test davomida ishlaydi
+    if cur not in (TestSolving.answering.state, TestSolving.text_answer.state,
+                   TestSolving.paused.state):
+        await callback.answer()
+        return
     await callback.answer()
     uid    = callback.from_user.id
     cid    = callback.message.chat.id if callback.message else uid
     msg_id = callback.message.message_id
     _cancel_timer(uid)
+    await state.set_state(TestSolving.answering)
     d   = await state.get_data()
     qs  = d.get("qs", [])
     idx = d.get("idx", 0)
@@ -842,8 +725,7 @@ async def next_q_now_cb(callback: CallbackQuery, state: FSMContext):
     if idx < len(qs):
         await _show_next_question(callback.bot, cid, msg_id, qs, idx, state, uid)
     else:
-        d_fresh = await state.get_data()
-        await _finish_inline(callback.bot, cid, state, d_fresh)
+        await _finish_inline(callback.bot, cid, state, d)
 
 
 # ── Matn javob ────────────────────────────────────────────────
@@ -1000,38 +882,43 @@ async def cancel_test_cb(callback: CallbackQuery, state: FSMContext):
 
 # ── Yakunlash ─────────────────────────────────────────────────
 async def _finish_inline(bot, cid, state, d):
+    import traceback as _tb
     from utils.scoring import calculate_score, format_result
     from keyboards.keyboards import result_kb
 
-    test     = d["test"]
-    qs       = d["qs"]
-    ans      = d.get("ans", {})
-    elapsed  = int(time.time() - d.get("t0", time.time()))
-    uid      = d.get("uid", cid)
-    via_link = d.get("via_link", False)
-    msg_id   = d.get("q_msg_id")
-    _cancel_timer(uid)
+    try:
+        test     = d["test"]
+        qs       = d["qs"]
+        ans      = d.get("ans", {})
+        elapsed  = int(time.time() - d.get("t0", time.time()))
+        uid      = d.get("uid", cid)
+        via_link = d.get("via_link", False)
+        msg_id   = d.get("q_msg_id")
+        _cancel_timer(uid)
 
-    scored = calculate_score(qs, ans)
-    scored.update({
-        "time_spent":    elapsed,
-        "passing_score": test.get("passing_score", 60),
-        "mode":          "inline",
-    })
-    rid = await save_result(uid, test.get("test_id", ""), scored, via_link=via_link)
-    await state.clear()
+        scored = calculate_score(qs, ans)
+        scored.update({
+            "time_spent":    elapsed,
+            "passing_score": test.get("passing_score", 60),
+            "mode":          "inline",
+        })
+        rid = await save_result(uid, test.get("test_id", ""), scored, via_link=via_link)
+        await state.clear()
 
-    result_text = format_result(scored, test)
-    kb          = result_kb(test.get("test_id", ""), rid)
+        result_text = format_result(scored, test)
+        kb          = result_kb(test.get("test_id", ""), rid)
 
-    # Oxirgi savol xabarini natija bilan almashtirish
-    if msg_id:
-        try:
-            await bot.edit_message_text(
-                chat_id=cid, message_id=msg_id,
-                text=result_text, reply_markup=kb
-            )
-            return
-        except TelegramBadRequest: pass
+        if msg_id:
+            try:
+                await bot.edit_message_text(
+                    chat_id=cid, message_id=msg_id,
+                    text=result_text, reply_markup=kb, parse_mode="HTML"
+                )
+                return
+            except TelegramBadRequest:
+                pass
 
-    await bot.send_message(cid, result_text, reply_markup=kb)
+        await bot.send_message(cid, result_text, reply_markup=kb, parse_mode="HTML")
+
+    except Exception as e:
+        log.error(f"_finish_inline xato: {e}\n{_tb.format_exc()}")
