@@ -6,8 +6,27 @@ from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-FB = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-FR = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+# Shrift qidirish: Noto (packages.txt) → DejaVu (default) → fallback
+def _find_font(bold=False):
+    import os
+    candidates_bold = [
+        "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-ExtraBold.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSans-Bold.otf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    ]
+    candidates_reg = [
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSans-Regular.otf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ]
+    for path in (candidates_bold if bold else candidates_reg):
+        if os.path.exists(path):
+            return path
+    return None
+
+FB = _find_font(bold=True)  or "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+FR = _find_font(bold=False) or "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
 BG   = (18, 20, 40)
 CARD = (26, 29, 54)
