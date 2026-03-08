@@ -2,7 +2,8 @@
 import logging
 from aiogram import Router, F
 from aiogram.types import (InlineQuery, InlineQueryResultArticle,
-                            InputTextMessageContent, InlineKeyboardButton)
+                            InputTextMessageContent, InlineKeyboardButton,
+                            SwitchInlineQueryChosenChat)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from utils.ram_cache import get_tests_meta, get_test_by_id
 
@@ -16,6 +17,47 @@ async def inline_handler(query: InlineQuery):
     text         = (query.query or "").strip().lower()
     bot_info     = await query.bot.me()
     bot_username = bot_info.username
+
+    # ── GURUH TEST BOSHLASH — gpoll_TID yoki ginline_TID ──
+    if text.startswith("gpoll_") or text.startswith("ginline_"):
+        is_poll = text.startswith("gpoll_")
+        tid     = text[6:].upper() if is_poll else text[8:].upper()
+        mode    = "poll" if is_poll else "inline"
+        test    = get_test_by_id(tid) or await get_test_full(tid)
+        if test:
+            qc    = len(test.get("questions",[])) or test.get("question_count",0)
+            title = test.get("title","Test")
+            # Guruhga yuboriladigan xabar
+            msg = (
+                f"🎯 <b>{title}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📋 Savollar: <b>{qc} ta</b>\n"
+                f"⏱ Vaqt: {test.get('poll_time',30)}s/savol\n"
+                f"🎯 O'tish: {test.get('passing_score',60)}%\n\n"
+                f"👇 Testni boshlash uchun quyidagi tugmani bosing!"
+            )
+            b = InlineKeyboardBuilder()
+            if is_poll:
+                b.row(InlineKeyboardButton(
+                    text="🚀 Poll testni boshlash",
+                    callback_data=f"gsend_poll_{tid}"
+                ))
+            else:
+                b.row(InlineKeyboardButton(
+                    text="🚀 Inline testni boshlash",
+                    callback_data=f"gsend_inline_{tid}"
+                ))
+            result = InlineQueryResultArticle(
+                id=f"{mode}_{tid}",
+                title=f"{'📊 Poll' if is_poll else '▶️ Inline'}: {title}",
+                description=f"Guruhga yuborish va boshlash",
+                input_message_content=InputTextMessageContent(
+                    message_text=msg, parse_mode="HTML"
+                ),
+                reply_markup=b.as_markup(),
+            )
+            return await query.answer([result], cache_time=0, is_personal=True)
+        return await query.answer([], cache_time=0)
 
     if text.startswith("test_"):
         tid  = text[5:].upper()
@@ -78,11 +120,30 @@ def _make_result(test: dict, bot_username: str) -> InlineQueryResultArticle:
         InlineKeyboardButton(text="▶️ Inline test", url=f"{base}?start={tid}"),
         InlineKeyboardButton(text="📊 Quiz Poll",   url=f"{base}?start=poll_{tid}"),
     )
-    # Guruhda ishlash: callback — ulashilgan xabarda guruhda bosilganda
-    # bot o'zi @siz chatga /quiz_start KOD tur YUBORADI (bot nomi yo'q)
+    # Guruhda ishlash: switch_inline_query_chosen_chat
+    # Foydalanuvchi guruhni tanlaydi → inline_handler gpoll_/ginline_ ni oladi
+    # → guruhga to'g'ridan xabar + tugma yuboriladi — @bot nomi yo'q!
     b.row(
-        InlineKeyboardButton(text="👥 Guruhda Poll",   callback_data=f"gsend_poll_{tid}"),
-        InlineKeyboardButton(text="👥 Guruhda Inline", callback_data=f"gsend_inline_{tid}"),
+        InlineKeyboardButton(
+            text="👥 Guruhda Poll",
+            switch_inline_query_chosen_chat=SwitchInlineQueryChosenChat(
+                query=f"gpoll_{tid}",
+                allow_group_chats=True,
+                allow_channel_chats=False,
+                allow_user_chats=False,
+                allow_bot_chats=False,
+            )
+        ),
+        InlineKeyboardButton(
+            text="👥 Guruhda Inline",
+            switch_inline_query_chosen_chat=SwitchInlineQueryChosenChat(
+                query=f"ginline_{tid}",
+                allow_group_chats=True,
+                allow_channel_chats=False,
+                allow_user_chats=False,
+                allow_bot_chats=False,
+            )
+        ),
     )
     b.row(InlineKeyboardButton(text="➕ Shunga o'xshash test yarat",
                                url=f"{base}?start=create"))
