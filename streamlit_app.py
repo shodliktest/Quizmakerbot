@@ -1,8 +1,6 @@
 """🌐 QUIZ BOT — Admin Panel"""
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go
-import plotly.express as px
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
@@ -320,43 +318,41 @@ def arc_gauge_html(pct, mb, limit_mb=450):
 
 
 def donut_chart(correct, wrong, skipped):
-    fig = go.Figure(go.Pie(
-        labels=["To'g'ri", "Xato", "O'tkazilgan"],
-        values=[correct or 0, wrong or 0, skipped or 0],
-        hole=0.65,
-        marker_colors=["#10b981", "#f43f5e", "#64748b"],
-        textinfo="none",
-    ))
-    fig.update_layout(
-        height=200, margin=dict(t=10, b=10, l=10, r=10),
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        showlegend=True,
-        legend=dict(orientation="v", font={"color": "#e2e8f0", "size": 11}),
-    )
-    return fig
+    total = (correct or 0) + (wrong or 0) + (skipped or 0)
+    if total == 0: return None
+    c_pct = round((correct or 0)*100/total)
+    w_pct = round((wrong   or 0)*100/total)
+    s_pct = 100 - c_pct - w_pct
+    html = f"""
+    <div style="display:flex;gap:16px;align-items:center;padding:8px 0">
+      <div style="display:flex;flex-direction:column;gap:6px;width:100%">
+        <div style="display:flex;justify-content:space-between;font-size:0.82rem;color:#e2e8f0">
+          <span>✅ To'g'ri</span><span style="color:#10b981">{correct} ({c_pct}%)</span>
+        </div>
+        <div style="height:8px;background:#1e293b;border-radius:4px">
+          <div style="height:8px;width:{c_pct}%;background:#10b981;border-radius:4px"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:0.82rem;color:#e2e8f0">
+          <span>❌ Xato</span><span style="color:#f43f5e">{wrong} ({w_pct}%)</span>
+        </div>
+        <div style="height:8px;background:#1e293b;border-radius:4px">
+          <div style="height:8px;width:{w_pct}%;background:#f43f5e;border-radius:4px"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:0.82rem;color:#e2e8f0">
+          <span>⏭ O'tkazilgan</span><span style="color:#64748b">{skipped} ({s_pct}%)</span>
+        </div>
+        <div style="height:8px;background:#1e293b;border-radius:4px">
+          <div style="height:8px;width:{s_pct}%;background:#64748b;border-radius:4px"></div>
+        </div>
+      </div>
+    </div>"""
+    return html
 
 
 def bar_chart(data: dict, title=""):
     if not data:
         return None
-    fig = go.Figure(go.Bar(
-        x=list(data.keys()), y=list(data.values()),
-        marker=dict(
-            color=list(data.values()),
-            colorscale=[[0,"#6366f1"],[0.5,"#22d3ee"],[1,"#10b981"]],
-            showscale=False,
-        ),
-        text=list(data.values()), textposition="outside",
-        textfont={"color": "#e2e8f0", "size": 11, "family": "Space Mono"},
-    ))
-    fig.update_layout(
-        title={"text": title, "font": {"color": "#64748b", "size": 12}},
-        height=220, margin=dict(t=40, b=20, l=20, r=20),
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        xaxis=dict(showgrid=False, tickfont={"color": "#64748b"}),
-        yaxis=dict(showgrid=True, gridcolor="#1e293b", tickfont={"color": "#64748b"}),
-    )
-    return fig
+    return {"title": title, "data": data}
 
 
 # ══ DASHBOARD ═════════════════════════════════════════════
@@ -404,8 +400,8 @@ if menu == "📊 Dashboard":
             st.dataframe(pd.DataFrame(rows), use_container_width=True, height=220)
             # Fan bo'yicha bar chart
             if cat_count:
-                fig = bar_chart(cat_count, "Fan bo'yicha urinishlar")
-                if fig: st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+                html = bar_chart(cat_count, "Fan bo'yicha urinishlar")
+                if html: st.markdown(html, unsafe_allow_html=True)
         else:
             st.markdown("""
             <div style='text-align:center;padding:60px;color:#64748b;
@@ -417,8 +413,8 @@ if menu == "📊 Dashboard":
 
     with right:
         st.markdown("#### 🎯 Javoblar tahlili")
-        fig = donut_chart(correct_total, wrong_total, skip_total)
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        html = donut_chart(correct_total, wrong_total, skip_total)
+        if html: st.markdown(html, unsafe_allow_html=True)
 
         total_ans = correct_total + wrong_total + skip_total
         if total_ans > 0:
@@ -580,9 +576,8 @@ elif menu == "📋 Testlar":
 
         # Fan bo'yicha chart
         if cats:
-            fig = bar_chart(cats, "Fanlari bo'yicha testlar")
-            if fig:
-                st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+            html = bar_chart(cats, "Fanlari bo'yicha testlar")
+            if html: st.markdown(html, unsafe_allow_html=True)
 
         st.markdown("#### 📄 Test ro'yxati")
         vis_map = {"public": "🌍", "link": "🔗", "private": "🔒"}
@@ -623,22 +618,27 @@ elif menu == "👥 Userlar":
         # Top 10 bo'yicha chart
         top = sorted(users, key=lambda x: x.get("avg_score", 0), reverse=True)[:10]
         if top:
-            names  = [u.get("name","?")[:15] for u in top]
+            names  = [u.get("name","?")[:18] for u in top]
             scores = [u.get("avg_score",0) for u in top]
-            fig = go.Figure(go.Bar(
-                x=scores, y=names, orientation='h',
-                marker=dict(color=scores, colorscale=[[0,"#6366f1"],[1,"#10b981"]], showscale=False),
-                text=[f"{s:.1f}%" for s in scores], textposition="outside",
-                textfont={"color":"#e2e8f0","size":10,"family":"Space Mono"},
-            ))
-            fig.update_layout(
-                title={"text":"Top 10 Foydalanuvchilar","font":{"color":"#64748b","size":12}},
-                height=280, margin=dict(t=40,b=10,l=10,r=60),
-                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                xaxis=dict(showgrid=True,gridcolor="#1e293b",tickfont={"color":"#64748b"},range=[0,110]),
-                yaxis=dict(showgrid=False,tickfont={"color":"#e2e8f0"}),
-            )
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+            rows   = ""
+            for nm, sc in zip(names, scores):
+                col = "#10b981" if sc>=70 else "#f59e0b" if sc>=50 else "#f43f5e"
+                rows += f"""
+                <div style='margin-bottom:6px'>
+                  <div style='display:flex;justify-content:space-between;
+                              font-size:0.8rem;color:#e2e8f0;margin-bottom:2px'>
+                    <span>{nm}</span>
+                    <span style='font-family:Space Mono,monospace;color:{col}'>{sc:.1f}%</span>
+                  </div>
+                  <div style='height:7px;background:#1e293b;border-radius:4px'>
+                    <div style='height:7px;width:{sc}%;background:{col};border-radius:4px'></div>
+                  </div>
+                </div>"""
+            st.markdown(f"""
+            <div style='padding:4px 0'>
+              <div style='font-size:0.78rem;color:#64748b;margin-bottom:8px'>Top 10 Foydalanuvchilar</div>
+              {rows}
+            </div>""", unsafe_allow_html=True)
 
         st.markdown("#### 👥 Userlar ro'yxati")
         df = pd.DataFrame([{
@@ -773,24 +773,30 @@ elif menu == "🏆 Reyting":
         st.markdown("<br>", unsafe_allow_html=True)
 
         # Horizontal bar chart
-        names  = [u.get("name","?")[:18] for u in docs[:15]]
+        names  = [u.get("name","?")[:22] for u in docs[:15]]
         scores = [u.get("avg_score",0) for u in docs[:15]]
-        fig = go.Figure(go.Bar(
-            x=scores[::-1], y=names[::-1], orientation='h',
-            marker=dict(color=scores[::-1],
-                        colorscale=[[0,"#6366f1"],[0.5,"#22d3ee"],[1,"#10b981"]],
-                        showscale=False),
-            text=[f"{s:.1f}%" for s in scores[::-1]],
-            textposition="outside",
-            textfont={"color":"#e2e8f0","size":10,"family":"Space Mono"},
-        ))
-        fig.update_layout(
-            height=400, margin=dict(t=10,b=10,l=10,r=70),
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            xaxis=dict(showgrid=True,gridcolor="#1e293b",tickfont={"color":"#64748b"},range=[0,110]),
-            yaxis=dict(showgrid=False,tickfont={"color":"#e2e8f0","size":11}),
-        )
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        rows   = ""
+        for i,(nm,sc) in enumerate(zip(names,scores)):
+            col = "#10b981" if sc>=70 else "#f59e0b" if sc>=50 else "#f43f5e"
+            medal = ["🥇","🥈","🥉"][i] if i<3 else f"{i+1}."
+            rows += f"""
+            <div style='display:flex;align-items:center;gap:10px;margin-bottom:7px'>
+              <span style='width:28px;text-align:right;font-size:0.8rem;
+                           color:#64748b;flex-shrink:0'>{medal}</span>
+              <div style='flex:1'>
+                <div style='display:flex;justify-content:space-between;
+                            font-size:0.82rem;color:#e2e8f0;margin-bottom:2px'>
+                  <span>{nm}</span>
+                  <span style='font-family:Space Mono,monospace;color:{col}'>{sc:.1f}%</span>
+                </div>
+                <div style='height:8px;background:#1e293b;border-radius:4px'>
+                  <div style='height:8px;width:{sc}%;background:{col};border-radius:4px'></div>
+                </div>
+              </div>
+            </div>"""
+        st.markdown(f"""
+        <div style='padding:8px 0;max-height:500px;overflow-y:auto'>{rows}</div>
+        """, unsafe_allow_html=True)
 
         # To'liq jadval
         with st.expander("📋 To'liq ro'yxat"):
