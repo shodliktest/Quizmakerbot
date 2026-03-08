@@ -908,42 +908,31 @@ async def grestart(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("gsend_poll_"))
 async def gsend_poll(callback: CallbackQuery):
-    """Tugma bosilganda bot guruhga /quiz_start KOD poll buyrug'ini yuboradi."""
     tid     = callback.data[11:]
-    chat_id = callback.message.chat.id if callback.message else None
-
-    if not chat_id or (callback.message and callback.message.chat.type not in ("group","supergroup")):
-        return await callback.answer(
-            "⚠️ Bu tugmani guruhda bosing!\n"
-            f"Yoki guruhda yozing:\n/quiz_start {tid} poll",
+    # Inline xabarda callback.message = None — chat_id yo'q
+    # Guruhda bosilgan bo'lsa — bot o'zi yozadi
+    # Private/inline dan bosilgan bo'lsa — alert ko'rsatamiz
+    if callback.message and callback.message.chat.type in ("group", "supergroup"):
+        await callback.answer("✅ Boshlanmoqda...")
+        await callback.bot.send_message(callback.message.chat.id, f"/quiz_start {tid} poll")
+    else:
+        await callback.answer(
+            f"👥 Guruhga yuboring va shu tugmani guruhda bosing!\n\nYoki guruhda yozing:\n/quiz_start {tid} poll",
             show_alert=True
         )
-
-    await callback.answer("✅ Test boshlanmoqda...")
-    await callback.bot.send_message(
-        chat_id,
-        f"/quiz_start {tid} poll"
-    )
 
 
 @router.callback_query(F.data.startswith("gsend_inline_"))
 async def gsend_inline(callback: CallbackQuery):
-    """Tugma bosilganda bot guruhga /quiz_start KOD inline buyrug'ini yuboradi."""
     tid     = callback.data[13:]
-    chat_id = callback.message.chat.id if callback.message else None
-
-    if not chat_id or (callback.message and callback.message.chat.type not in ("group","supergroup")):
-        return await callback.answer(
-            "⚠️ Bu tugmani guruhda bosing!\n"
-            f"Yoki guruhda yozing:\n/quiz_start {tid} inline",
+    if callback.message and callback.message.chat.type in ("group", "supergroup"):
+        await callback.answer("✅ Boshlanmoqda...")
+        await callback.bot.send_message(callback.message.chat.id, f"/quiz_start {tid} inline")
+    else:
+        await callback.answer(
+            f"👥 Guruhga yuboring va shu tugmani guruhda bosing!\n\nYoki guruhda yozing:\n/quiz_start {tid} inline",
             show_alert=True
         )
-
-    await callback.answer("✅ Test boshlanmoqda...")
-    await callback.bot.send_message(
-        chat_id,
-        f"/quiz_start {tid} inline"
-    )
 
 
 # ══════════════════════════════════════════════════════════════

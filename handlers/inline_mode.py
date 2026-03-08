@@ -2,8 +2,7 @@
 import logging
 from aiogram import Router, F
 from aiogram.types import (InlineQuery, InlineQueryResultArticle,
-                            InputTextMessageContent, InlineKeyboardButton,
-                            SwitchInlineQueryChosenChat)
+                            InputTextMessageContent, InlineKeyboardButton)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from utils.ram_cache import get_tests_meta, get_test_by_id
 
@@ -79,30 +78,11 @@ def _make_result(test: dict, bot_username: str) -> InlineQueryResultArticle:
         InlineKeyboardButton(text="▶️ Inline test", url=f"{base}?start={tid}"),
         InlineKeyboardButton(text="📊 Quiz Poll",   url=f"{base}?start=poll_{tid}"),
     )
-    # Guruhda ishlash:
-    # switch_inline_query_chosen_chat — foydalanuvchi guruhni tanlaydi,
-    # tanlangan guruh chat inputiga /quiz_start TID poll avto-yoziladi
+    # Guruhda ishlash: callback — ulashilgan xabarda guruhda bosilganda
+    # bot o'zi @siz chatga /quiz_start KOD tur YUBORADI (bot nomi yo'q)
     b.row(
-        InlineKeyboardButton(
-            text="👥 Guruhda Poll",
-            switch_inline_query_chosen_chat=SwitchInlineQueryChosenChat(
-                query=f"/quiz_start {tid} poll",
-                allow_group_chats=True,
-                allow_channel_chats=False,
-                allow_user_chats=False,
-                allow_bot_chats=False,
-            )
-        ),
-        InlineKeyboardButton(
-            text="👥 Guruhda Inline",
-            switch_inline_query_chosen_chat=SwitchInlineQueryChosenChat(
-                query=f"/quiz_start {tid} inline",
-                allow_group_chats=True,
-                allow_channel_chats=False,
-                allow_user_chats=False,
-                allow_bot_chats=False,
-            )
-        ),
+        InlineKeyboardButton(text="👥 Guruhda Poll",   callback_data=f"gsend_poll_{tid}"),
+        InlineKeyboardButton(text="👥 Guruhda Inline", callback_data=f"gsend_inline_{tid}"),
     )
     b.row(InlineKeyboardButton(text="➕ Shunga o'xshash test yarat",
                                url=f"{base}?start=create"))
