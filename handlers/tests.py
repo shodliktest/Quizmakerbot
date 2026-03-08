@@ -384,11 +384,14 @@ def _build_question_content(qs, idx):
             l   = m.group(1).upper() if m else chr(65+i)
             ot  = raw[m.end():].strip() if m else raw.strip()
             letters.append(l)
-            opt_lines += f"<b>{l})</b> {ot}\n"
+            opt_lines += f"  <b>{l})</b>  {ot}\n"
         text = (
-            f"📝 <b>{idx+1}/{total} — Savol</b>\n"
+            f"<b>[{idx+1}/{total}]</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"{qtxt}\n\n{opt_lines}"
+            f"{qtxt}\n\n"
+            f"{opt_lines}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"<i>⏱ {QUESTION_SEC}s</i>"
         )
         for l in letters:
             b.add(InlineKeyboardButton(text=l, callback_data=f"ans_{l}"))
@@ -397,9 +400,11 @@ def _build_question_content(qs, idx):
 
     elif qtype == "true_false":
         text = (
-            f"✅❌ <b>{idx+1}/{total} — Ha/Yo'q</b>\n"
+            f"<b>[{idx+1}/{total}]</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"{qtxt}"
+            f"{qtxt}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"<i>⏱ {QUESTION_SEC}s</i>"
         )
         b.row(
             InlineKeyboardButton(text="✅ Ha",   callback_data="ans_Ha"),
@@ -409,16 +414,18 @@ def _build_question_content(qs, idx):
 
     else:
         text = (
-            f"✏️ <b>{idx+1}/{total} — Matn javob</b>\n"
+            f"<b>[{idx+1}/{total}]</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"{qtxt}\n\n"
-            f"<i>✍️ Javobingizni yozing (xabaringiz avtomatik o'chiriladi):</i>"
+            f"<i>✍️ Javobingizni yozing (xabaringiz avtomatik o'chiriladi)</i>\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"<i>⏱ {QUESTION_SEC}s</i>"
         )
         b.row(InlineKeyboardButton(text="⏭ O'tkazish", callback_data="skip_q"))
         b.row(pause_btn)
-        return text, b.as_markup(), True   # is_text=True
+        return text, b.as_markup(), True
 
-    return text, b.as_markup(), False   # is_text=False
+    return text, b.as_markup(), False
 
 
 async def _question_timeout(bot, cid, state, uid, expected_idx, wait_sec):
@@ -472,12 +479,13 @@ async def _question_timeout(bot, cid, state, uid, expected_idx, wait_sec):
             next_kb.row(InlineKeyboardButton(text="➡️ Keyingi", callback_data="next_q_now"))
 
             text = (
-                f"⏰ <b>{expected_idx+1}/{len(qs)} — Vaqt tugadi!</b>\n"
+                f"<b>[{expected_idx+1}/{len(qs)}]</b>  ⏰ <b>Vaqt tugadi!</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"<i>{qtxt[:80]}</i>\n\n"
+                f"{qtxt[:100]}\n\n"
                 f"❌ Javob berilmadi\n"
-                f"✔️ To'g'ri: <b>{str(corr)[:60]}</b>{expl_txt}\n\n"
-                f"<i>Keyingiga {ANSWER_SHOW_SEC}s da avtomatik o'tadi</i>"
+                f"✔️ <b>{str(corr)[:60]}</b>{expl_txt}\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"<i>⏩ {ANSWER_SHOW_SEC}s da keyingiga o'tadi</i>"
             )
             await state.update_data(ans=ans, idx=new_idx, no_ans_streak=streak)
             try:
@@ -553,12 +561,16 @@ async def answer_cb(callback: CallbackQuery, state: FSMContext):
     next_kb = InlineKeyboardBuilder()
     next_kb.row(InlineKeyboardButton(text="➡️ Keyingi savol", callback_data="next_q_now"))
 
+    icon    = "✅" if is_c else "❌"
+    label   = "To'g'ri!" if is_c else "Noto'g'ri!"
+    qtxt_s  = qtxt[:100] + ("..." if len(qtxt) > 100 else "")
     result_text = (
-        f"{'✅' if is_c else '❌'} <b>{idx+1}/{len(qs)} — {'To\'g\'ri!' if is_c else 'Noto\'g\'ri!'}</b>\n"
+        f"<b>[{idx+1}/{len(qs)}]</b>  {icon} <b>{label}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"<i>{qtxt[:80]}{'...' if len(qtxt)>80 else ''}</i>\n\n"
-        f"✔️ To'g'ri: <b>{corr_text[:80]}</b>{expl_txt}\n\n"
-        f"<i>{ANSWER_SHOW_SEC}s da avtomatik keyingiga o'tadi</i>"
+        f"{qtxt_s}\n\n"
+        f"✔️ <b>{corr_text[:80]}</b>{expl_txt}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"<i>⏩ {ANSWER_SHOW_SEC}s da keyingiga o'tadi</i>"
     )
     try:
         await callback.message.edit_text(result_text, reply_markup=next_kb.as_markup())
@@ -655,14 +667,15 @@ async def text_answer_handler(message: Message, state: FSMContext):
 
     icon_ok  = "✅" if is_c else "❌"
     label_ok = "To'g'ri!" if is_c else "Noto'g'ri!"
-    qtxt_s   = qtxt[:80] + ("..." if len(qtxt) > 80 else "")
+    qtxt_s   = qtxt[:100] + ("..." if len(qtxt) > 100 else "")
     result_text = (
-        f"{icon_ok} <b>{idx+1}/{len(qs)} — {label_ok}</b>\n"
+        f"<b>[{idx+1}/{len(qs)}]</b>  {icon_ok} <b>{label_ok}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"<i>{qtxt_s}</i>\n\n"
+        f"{qtxt_s}\n\n"
         f"✍️ Sizning: <code>{user_ans[:60]}</code>\n"
-        f"✔️ To'g'ri: <b>{str(corr)[:80]}</b>{expl_txt}\n\n"
-        f"<i>{ANSWER_SHOW_SEC}s da avtomatik keyingiga o'tadi</i>"
+        f"✔️ <b>{str(corr)[:80]}</b>{expl_txt}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"<i>⏩ {ANSWER_SHOW_SEC}s da keyingiga o'tadi</i>"
     )
     try:
         if q_msg:
