@@ -768,12 +768,13 @@ async def _show_group_leaderboard(
             "scored":     scored,
         })
         try:
-            await save_result(
-                int(uid_str), tid,
-                {**scored, "mode": f"group_{mode}"}
-            )
+            import inspect as _ins
+            _sr = save_result(int(uid_str), tid, {**scored, "mode": f"group_{mode}"})
+            if _ins.isawaitable(_sr):
+                await _sr
         except Exception as e:
-            log.error(f"Natija saqlash: {e}")
+            import traceback
+            log.error(f"Natija saqlash: {e}\n{traceback.format_exc()}")
 
     results_for_card.sort(key=lambda x: x["score"], reverse=True)
 
