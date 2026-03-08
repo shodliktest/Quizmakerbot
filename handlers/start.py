@@ -76,16 +76,14 @@ async def cmd_start(message: Message, state: FSMContext):
                 )
                 return
 
-        # ── GURUHDA ISHLASH — deep link orqali ──────────────────
+        # ── GURUHDA ISHLASH — startgroup deep link ──────────────
         if param.lower().startswith("gpoll_"):
             tid  = param[6:].upper()
             chat = message.chat
             if chat.type in ("group", "supergroup"):
-                # Guruhda bosilgan — chatga /quiz_start KOD poll yozib yuboradi
-                # Foydalanuvchi ko'radi, bot handler qo'lga oladi
-                await message.answer(f"/quiz_start {tid} poll")
+                from handlers.group import _start_group_test
+                await _start_group_test(message.bot, chat.id, uid, tid, "poll")
             else:
-                # Private chatda — test kartochkasini ko'rsat
                 test = get_test_by_id(tid) or await _gtf(tid)
                 if test:
                     await message.answer(welcome, reply_markup=main_kb(uid))
@@ -96,10 +94,9 @@ async def cmd_start(message: Message, state: FSMContext):
             tid  = param[8:].upper()
             chat = message.chat
             if chat.type in ("group", "supergroup"):
-                # Guruhda bosilgan — chatga /quiz_start KOD inline yozib yuboradi
-                await message.answer(f"/quiz_start {tid} inline")
+                from handlers.group import _start_group_test
+                await _start_group_test(message.bot, chat.id, uid, tid, "inline")
             else:
-                # Private chatda — test kartochkasini ko'rsat
                 test = get_test_by_id(tid) or await _gtf(tid)
                 if test:
                     await message.answer(welcome, reply_markup=main_kb(uid))
