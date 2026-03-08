@@ -350,9 +350,22 @@ def donut_chart(correct, wrong, skipped):
 
 
 def bar_chart(data: dict, title=""):
-    if not data:
-        return None
-    return {"title": title, "data": data}
+    if not data: return None
+    mx = max(data.values()) or 1
+    colors = ["#10b981","#22d3ee","#6366f1","#f59e0b","#f43f5e",
+              "#8b5cf6","#06b6d4","#84cc16","#ec4899","#14b8a6"]
+    rows = ""
+    for i,(k,v) in enumerate(sorted(data.items(), key=lambda x: -x[1])):
+        c   = colors[i % len(colors)]
+        pct = round(v * 100 / mx)
+        rows += f"""<div style='margin-bottom:7px'>
+          <div style='display:flex;justify-content:space-between;font-size:0.8rem;color:#e2e8f0;margin-bottom:2px'>
+            <span>{k}</span><span style='font-family:Space Mono,monospace;color:{c}'>{v}</span>
+          </div>
+          <div style='height:7px;background:#1e293b;border-radius:4px'>
+            <div style='height:7px;width:{pct}%;background:{c};border-radius:4px'></div>
+          </div></div>"""
+    return f"<div style='padding:4px 0'><div style='font-size:0.78rem;color:#64748b;margin-bottom:8px'>{title}</div>{rows}</div>"
 
 
 # ══ DASHBOARD ═════════════════════════════════════════════
@@ -634,11 +647,10 @@ elif menu == "👥 Userlar":
                     <div style='height:7px;width:{sc}%;background:{col};border-radius:4px'></div>
                   </div>
                 </div>"""
-            st.markdown(f"""
-            <div style='padding:4px 0'>
+            import streamlit.components.v1 as _c
+            _c.html(f"""<div style='background:transparent;padding:4px 0;font-family:sans-serif'>
               <div style='font-size:0.78rem;color:#64748b;margin-bottom:8px'>Top 10 Foydalanuvchilar</div>
-              {rows}
-            </div>""", unsafe_allow_html=True)
+              {rows}</div>""", height=len(top)*46+30)
 
         st.markdown("#### 👥 Userlar ro'yxati")
         df = pd.DataFrame([{
