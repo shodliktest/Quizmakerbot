@@ -49,7 +49,6 @@ def test_info_kb(tid, creator_id=None, viewer_uid=None, back_cb="back_to_cats"):
             InlineKeyboardButton(text="▶️ Inline test", callback_data=f"start_test_{tid}"),
             InlineKeyboardButton(text="📊 Quiz Poll",   callback_data=f"start_poll_{tid}"),
         )
-        b.row(InlineKeyboardButton(text="👥 Guruhda (Inline)", callback_data=f"group_inline_{tid}"))
     b.row(InlineKeyboardButton(text="📤 Ulashish", switch_inline_query=f"test_{tid}"))
     if is_own and not paused:
         b.row(
@@ -69,7 +68,6 @@ def test_created_kb(tid, bot_username=""):
         InlineKeyboardButton(text="▶️ Boshlash",  callback_data=f"start_test_{tid}"),
         InlineKeyboardButton(text="📊 Quiz Poll", callback_data=f"start_poll_{tid}"),
     )
-    b.row(InlineKeyboardButton(text="👥 Guruhda (Inline)", callback_data=f"group_inline_{tid}"))
     b.row(InlineKeyboardButton(text="📤 Ulashish", switch_inline_query=f"test_{tid}"))
     b.row(InlineKeyboardButton(text="🏠 Asosiy menyu", callback_data="main_menu"))
     return b.as_markup()
