@@ -1,367 +1,240 @@
 """
-Leaderboard Card Generator
-==========================
-Test tugagach chiroyli rasm kartochka yasaydi va guruhga yuboradi.
-Rasm so'ng o'chiriladi (xabarni emas, faylni).
-
-Dizayn:
-  - Qora-gradient fon
-  - Test nomi + statistika header
-  - Top 3 — katta medal + progress bar
-  - 4-10 — compact qatorlar
-  - Footer: ishtirokchi soni, o'rtacha ball
+Leaderboard Card — Playwright HTML→PNG renderer
+Yuqori sifatli, professional ko'rinish
 """
-import io
+import asyncio
 import logging
-import os
 from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-# ═══════════════════════════════════════════════════
-# RANGLAR VA KONSTANTLAR
-# ═══════════════════════════════════════════════════
-BG_TOP        = (10, 10, 30)
-BG_BOTTOM     = (20, 20, 50)
-ACCENT        = (99, 102, 241)       # indigo
-GOLD          = (255, 200, 50)
-SILVER        = (192, 192, 210)
-BRONZE        = (205, 127, 50)
-WHITE         = (255, 255, 255)
-GRAY          = (150, 155, 180)
-DARK_CARD     = (30, 32, 60)
-GREEN_BAR     = (72, 199, 142)
-RED_BAR       = (252, 100, 100)
-YELLOW_BAR    = (251, 191, 36)
 
-MEDAL_COLORS  = [GOLD, SILVER, BRONZE]
-MEDAL_EMOJIS  = ["🥇", "🥈", "🥉"]
-RANK_EMOJI    = ["4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
+def _bar_color(pct, passing):
+    if pct >= passing:      return "#3cd28c"
+    elif pct >= passing*0.7: return "#f9be28"
+    else:                   return "#f05a5a"
 
-W, H_BASE     = 900, 200   # H dinamik hisoblanadi
-PADDING       = 40
-ROW_H         = 68
-TOP3_H        = 88
+def _pct_color(pct, passing):
+    return _bar_color(pct, passing)
 
 
-def _get_font(size: int, bold: bool = False):
-    """Font yuklash — tizimda bor birinchi fontdan foydalanadi."""
-    try:
-        from PIL import ImageFont
-        paths = [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold
-            else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if bold
-            else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-            "/usr/share/fonts/truetype/freefont/FreeSansBold.otf" if bold
-            else "/usr/share/fonts/truetype/freefont/FreeSans.otf",
-        ]
-        for p in paths:
-            if os.path.exists(p):
-                return ImageFont.truetype(p, size)
-        return ImageFont.load_default()
-    except Exception:
-        try:
-            from PIL import ImageFont
-            return ImageFont.load_default()
-        except Exception:
-            return None
+def _build_html(quiz_title, results, passing_score, total_questions):
+    avg    = sum(r["score"] for r in results) / len(results) if results else 0
+    passed = sum(1 for r in results if r["score"] >= passing_score)
+    n      = len(results)
+    top3   = results[:3]
+    rest   = results[3:15]
+
+    medal_border = ["#ffbe32", "#a0aac8", "#c8823c"]
+    medal_bg     = ["rgba(255,190,50,0.15)", "rgba(160,170,200,0.10)", "rgba(200,130,60,0.12)"]
+
+    top3_html = ""
+    for i, r in enumerate(top3):
+        pct    = r["score"]
+        c      = r["correct"]
+        t      = r["total"] or total_questions or 1
+        name   = (r.get("first_name") or r.get("username") or "O'quvchi")[:28]
+        bc     = medal_border[i]
+        bg     = medal_bg[i]
+        pc     = _pct_color(pct, passing_score)
+        bcolor = _bar_color(pct, passing_score)
+        top3_html += f"""
+        <div class="card top-card" style="border-color:{bc};background:linear-gradient(135deg,{bg},rgba(26,29,54,0.95))">
+          <div class="rank-circle" style="background:{bc};color:#12142a">{i+1}</div>
+          <div class="card-body">
+            <div class="card-top-row">
+              <span class="name">{name}</span>
+              <div class="right-info">
+                <span class="score-info">{c}/{t}</span>
+                <span class="pct" style="color:{pc}">{pct:.0f}%</span>
+              </div>
+            </div>
+            <div class="bar-bg"><div class="bar-fill" style="width:{pct}%;background:{bcolor}"></div></div>
+          </div>
+        </div>"""
+
+    rest_html = ""
+    if rest:
+        rest_html += f'<div class="rest-label">Qolgan {len(rest)} ishtirokchi:</div>'
+        for i, r in enumerate(rest):
+            rank   = i + 4
+            pct    = r["score"]
+            c      = r["correct"]
+            t      = r["total"] or total_questions or 1
+            name   = (r.get("first_name") or r.get("username") or "O'quvchi")[:30]
+            pc     = _pct_color(pct, passing_score)
+            bcolor = _bar_color(pct, passing_score)
+            rest_html += f"""
+            <div class="card rest-card">
+              <span class="rest-rank">{rank}.</span>
+              <div class="card-body">
+                <div class="card-top-row">
+                  <span class="rest-name">{name}</span>
+                  <div class="right-info">
+                    <span class="score-info">{c}/{t}</span>
+                    <span class="rest-pct" style="color:{pc}">{pct:.0f}%</span>
+                  </div>
+                </div>
+                <div class="bar-bg"><div class="bar-fill" style="width:{pct}%;background:{bcolor}"></div></div>
+              </div>
+            </div>"""
+
+    title_s = quiz_title if len(quiz_title) <= 35 else quiz_title[:33] + "…"
+
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+* {{margin:0;padding:0;box-sizing:border-box}}
+body {{
+  font-family: 'Segoe UI', Arial, sans-serif;
+  background:#12142a; width:900px; padding:36px; color:#fff;
+}}
+.header {{display:flex;align-items:center;gap:18px;margin-bottom:18px}}
+.icon-circle {{
+  width:72px;height:72px;border-radius:50%;background:#6469dc;
+  border:3px solid #fff;display:flex;align-items:center;
+  justify-content:center;font-size:32px;font-weight:800;
+  color:#fff;flex-shrink:0
+}}
+.quiz-title {{font-size:36px;font-weight:800;color:#fff;line-height:1.2}}
+.stats {{display:flex;gap:28px;margin-bottom:14px;font-size:22px}}
+.sp {{color:#fff}} .sg {{color:#3cd28c}} .sa {{color:#8890b0}}
+.divider {{height:2px;background:#6469dc;margin-bottom:16px;border-radius:2px}}
+.divider-light {{height:1px;background:#2d3255;margin:14px 0;border-radius:1px}}
+.card {{
+  display:flex;align-items:center;gap:16px;
+  background:#1a1d36;border:2px solid #2d3255;
+  border-radius:14px;padding:16px 20px;margin-bottom:10px
+}}
+.top-card {{border-width:2.5px;padding:18px 22px}}
+.rank-circle {{
+  width:56px;height:56px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:24px;font-weight:800;flex-shrink:0
+}}
+.card-body {{flex:1;display:flex;flex-direction:column;gap:10px}}
+.card-top-row {{display:flex;align-items:center;justify-content:space-between}}
+.name {{font-size:28px;font-weight:700;color:#fff}}
+.right-info {{display:flex;align-items:center;gap:18px}}
+.score-info {{font-size:22px;font-weight:500;color:#8890b0}}
+.pct {{font-size:32px;font-weight:800;min-width:80px;text-align:right}}
+.bar-bg {{
+  width:100%;height:10px;background:#282c4b;
+  border-radius:6px;overflow:hidden;margin-top:2px
+}}
+.bar-fill {{height:100%;border-radius:6px;min-width:6px}}
+.rest-label {{font-size:22px;color:#8890b0;margin:6px 0 10px 0}}
+.rest-card {{padding:12px 18px;border-radius:10px;border-width:1px}}
+.rest-rank {{font-size:20px;color:#8890b0;width:36px;flex-shrink:0}}
+.rest-name {{font-size:24px;font-weight:600;color:#fff}}
+.rest-pct {{font-size:24px;font-weight:700;min-width:64px;text-align:right}}
+.footer {{
+  display:flex;justify-content:space-between;
+  font-size:22px;color:#8890b0;margin-top:6px
+}}
+</style></head>
+<body>
+  <div class="header">
+    <div class="icon-circle">#</div>
+    <div class="quiz-title">{title_s}</div>
+  </div>
+  <div class="stats">
+    <span class="sp">&#128101; {n} ishtirokchi</span>
+    <span class="sg">&#9989; {passed} o'tdi ({passed*100//n if n else 0}%)</span>
+    <span class="sa">&#128202; O'rtacha: {avg:.0f}%</span>
+  </div>
+  <div class="divider"></div>
+  {top3_html}
+  {rest_html}
+  <div class="divider-light"></div>
+  <div class="footer">
+    <span>&#127919; O'tish bali: {passing_score:.0f}%</span>
+    <span>&#128203; {total_questions} ta savol</span>
+  </div>
+</body></html>"""
 
 
-def _gradient_bg(draw, w: int, h: int):
-    """Vertikal gradient fon."""
-    for y in range(h):
-        t  = y / h
-        r  = int(BG_TOP[0] + (BG_BOTTOM[0] - BG_TOP[0]) * t)
-        g  = int(BG_TOP[1] + (BG_BOTTOM[1] - BG_TOP[1]) * t)
-        b  = int(BG_TOP[2] + (BG_BOTTOM[2] - BG_TOP[2]) * t)
-        draw.line([(0, y), (w, y)], fill=(r, g, b))
+def _find_chromium():
+    """Streamlit Cloud va local uchun Chromium path topish."""
+    import shutil, os
+    # 1. packages.txt orqali o'rnatilgan
+    for path in ["/usr/bin/chromium", "/usr/bin/chromium-browser",
+                 "/usr/bin/google-chrome", "/usr/bin/google-chrome-stable"]:
+        if os.path.exists(path):
+            return path
+    # 2. shutil orqali
+    for name in ["chromium", "chromium-browser", "google-chrome"]:
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
 
 
-def _bar(draw, x: int, y: int, w: int, h: int, pct: float, passing: float = 60.0):
-    """Progress bar — foizga qarab rang."""
-    draw.rounded_rectangle([x, y, x + w, y + h],
-                            radius=h // 2, fill=(40, 42, 70))
-    fill_w = max(4, int(w * pct / 100))
-    color  = GREEN_BAR if pct >= passing else (
-             YELLOW_BAR if pct >= 40 else RED_BAR)
-    draw.rounded_rectangle([x, y, x + fill_w, y + h],
-                            radius=h // 2, fill=color)
-
-
-def _truncate(text: str, font, max_w: int) -> str:
-    """Matnni belgilangan kenglikka sig'diradi."""
-    try:
-        from PIL import ImageDraw as ID
-        import PIL.Image as PI
-        tmp_img  = PI.new("RGB", (1, 1))
-        tmp_draw = ID.Draw(tmp_img)
-        while len(text) > 1:
-            bbox = tmp_draw.textbbox((0, 0), text, font=font)
-            if (bbox[2] - bbox[0]) <= max_w:
-                break
-            text = text[:-2] + "…"
-        return text
-    except Exception:
-        return text[:30]
-
-
-def generate_leaderboard_image(
-    quiz_title: str,
-    results: List[Dict],
-    passing_score: float = 60.0,
-    total_questions: int = 0,
-) -> Optional[bytes]:
-    """
-    Leaderboard rasmini bytes formatida qaytaradi.
-
-    results = [
-      {
-        "first_name": "Ali",
-        "username": "ali_uz",
-        "score": 85.0,
-        "correct": 17,
-        "total": 20,
-      }, ...
-    ]
-    """
-    try:
-        from PIL import Image, ImageDraw
-    except ImportError:
-        logger.warning("Pillow yo'q — rasm yasalmaydik")
-        return None
-
+def generate_leaderboard_image(quiz_title, results, passing_score=60.0, total_questions=0):
     if not results:
         return None
+    try:
+        from playwright.sync_api import sync_playwright
+        html       = _build_html(quiz_title, results, passing_score, total_questions)
+        chrome_path = _find_chromium()
 
-    top10    = results[:15]
-    top3     = top10[:3]
-    rest     = top10[3:]
+        with sync_playwright() as p:
+            launch_opts = {
+                "args": [
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--single-process",
+                ]
+            }
+            if chrome_path:
+                launch_opts["executable_path"] = chrome_path
+                logger.info(f"Chromium: {chrome_path}")
 
-    # ── Rasm balandligini hisoblash ─────────────────
-    H = (
-        PADDING                        # yuqori bo'sh joy
-        + 90                           # header (test nomi)
-        + 30                           # bo'sh joy
-        + len(top3) * TOP3_H           # top 3
-        + (20 if rest else 0)          # separator
-        + len(rest) * ROW_H            # 4-10
-        + 80                           # footer
-        + PADDING                      # pastki bo'sh joy
-    )
-    H = max(H, 400)
-
-    img  = Image.new("RGB", (W, H), BG_TOP)
-    draw = ImageDraw.Draw(img)
-
-    _gradient_bg(draw, W, H)
-
-    # ── Yuqori chiziq (accent) ──────────────────────
-    draw.rectangle([0, 0, W, 5], fill=ACCENT)
-
-    # ── Shrift yuklash ──────────────────────────────
-    f_title   = _get_font(32, bold=True)
-    f_big     = _get_font(28, bold=True)
-    f_med     = _get_font(22, bold=False)
-    f_small   = _get_font(18, bold=False)
-    f_footer  = _get_font(20, bold=False)
-
-    # ── HEADER ─────────────────────────────────────
-    y = PADDING
-
-    # Trophy icon area
-    draw.ellipse([PADDING, y, PADDING + 50, y + 50],
-                 fill=(40, 42, 80), outline=ACCENT, width=2)
-    draw.text((PADDING + 13, y + 8), "🏆", font=_get_font(28), fill=WHITE)
-
-    title_text = _truncate(quiz_title, f_title, W - PADDING * 2 - 70)
-    draw.text((PADDING + 60, y + 8), title_text, font=f_title, fill=WHITE)
-
-    y += 60
-    # Stat chiziqlar
-    passed    = sum(1 for r in results if r.get("score", 0) >= passing_score)
-    avg_score = sum(r.get("score", 0) for r in results) / len(results) if results else 0
-    stat_text = (
-        f"👥 {len(results)} ishtirokchi   "
-        f"✅ {passed} o'tdi ({passed*100//max(len(results),1)}%)   "
-        f"📊 O'rtacha: {avg_score:.0f}%"
-    )
-    draw.text((PADDING, y), stat_text, font=f_small, fill=GRAY)
-    y += 30
-
-    # ── Divider ─────────────────────────────────────
-    draw.rectangle([PADDING, y, W - PADDING, y + 2],
-                   fill=(50, 55, 90))
-    y += 20
-
-    # ── TOP 3 ────────────────────────────────────────
-    for i, r in enumerate(top3):
-        name   = (r.get("username") or r.get("first_name") or "O'quvchi")
-        score  = float(r.get("score", 0))
-        correct= int(r.get("correct", 0))
-        total  = int(r.get("total", total_questions or 1))
-        color  = MEDAL_COLORS[i]
-
-        # Karta foni
-        card_x1 = PADDING
-        card_x2 = W - PADDING
-        card_y1 = y
-        card_y2 = y + TOP3_H - 8
-        draw.rounded_rectangle(
-            [card_x1, card_y1, card_x2, card_y2],
-            radius=12,
-            fill=(28, 30, 58),
-            outline=(*color[:3], 80),
-            width=1
-        )
-
-        # Medal doira
-        cx, cy, cr = card_x1 + 36, card_y1 + TOP3_H // 2 - 4, 22
-        draw.ellipse([cx - cr, cy - cr, cx + cr, cy + cr],
-                     fill=color, outline=WHITE, width=1)
-        rank_txt = str(i + 1)
-        draw.text((cx - 6 if i < 9 else cx - 9, cy - 11),
-                  rank_txt, font=f_med, fill=(20, 20, 40))
-
-        # Ism
-        tx = card_x1 + 75
-        name_disp = _truncate(name, f_big, W - tx - 220)
-        draw.text((tx, card_y1 + 10), name_disp, font=f_big, fill=WHITE)
-
-        # To'g'ri javob
-        score_color = GREEN_BAR if score >= passing_score else (
-                      YELLOW_BAR if score >= 40 else RED_BAR)
-        score_txt = f"{score:.0f}%"
-        draw.text((W - PADDING - 160, card_y1 + 8),
-                  f"✅ {correct}/{total}", font=f_med, fill=GRAY)
-        draw.text((W - PADDING - 70, card_y1 + 8),
-                  score_txt, font=f_big, fill=score_color)
-
-        # Progress bar
-        _bar(draw, tx, card_y1 + 46, W - tx - PADDING - 10,
-             14, score, passing_score)
-
-        y += TOP3_H
-
-    # ── Separator ────────────────────────────────────
-    if rest:
-        y += 10
-        draw.rectangle([PADDING, y, W - PADDING, y + 1],
-                       fill=(45, 48, 80))
-        draw.text((PADDING, y + 4),
-                  f"Qolgan {len(rest)} ishtirokchi:",
-                  font=f_small, fill=GRAY)
-        y += 28
-
-    # ── 4-10 QATORLAR ────────────────────────────────
-    for i, r in enumerate(rest):
-        rank   = i + 4
-        name   = (r.get("username") or r.get("first_name") or "O'quvchi")
-        score  = float(r.get("score", 0))
-        correct= int(r.get("correct", 0))
-        total  = int(r.get("total", total_questions or 1))
-
-        # Alternating row bg
-        if i % 2 == 0:
-            draw.rectangle([PADDING, y, W - PADDING, y + ROW_H - 6],
-                           fill=(25, 27, 52))
-
-        # Rank
-        draw.text((PADDING + 5, y + 16),
-                  f"{rank}.", font=f_med, fill=GRAY)
-
-        # Ism
-        name_disp = _truncate(name, f_med, W - PADDING * 2 - 220)
-        draw.text((PADDING + 38, y + 16),
-                  name_disp, font=f_med, fill=WHITE)
-
-        # Natija
-        score_color = GREEN_BAR if score >= passing_score else (
-                      YELLOW_BAR if score >= 40 else RED_BAR)
-        draw.text((W - PADDING - 150, y + 16),
-                  f"{correct}/{total}", font=f_med, fill=GRAY)
-        draw.text((W - PADDING - 65, y + 16),
-                  f"{score:.0f}%", font=f_med, fill=score_color)
-
-        # Mini bar
-        _bar(draw, PADDING + 38, y + 46, W - PADDING * 2 - 120,
-             10, score, passing_score)
-
-        y += ROW_H
-
-    # ── FOOTER ──────────────────────────────────────
-    y += 20
-    draw.rectangle([PADDING, y, W - PADDING, y + 1],
-                   fill=(50, 55, 90))
-    y += 12
-
-    # Passing score ko'rsatish
-    footer_left  = f"🎯 O'tish bali: {passing_score:.0f}%"
-    footer_right = f"📝 {total_questions} ta savol" if total_questions else ""
-    draw.text((PADDING, y), footer_left, font=f_footer, fill=GRAY)
-    if footer_right:
-        bbox = draw.textbbox((0, 0), footer_right, font=f_footer)
-        fw   = bbox[2] - bbox[0]
-        draw.text((W - PADDING - fw, y), footer_right, font=f_footer, fill=GRAY)
-
-    # ── Pastki accent chiziq ─────────────────────────
-    draw.rectangle([0, H - 5, W, H], fill=ACCENT)
-
-    # ── PNG bytes ───────────────────────────────────
-    buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
-    buf.seek(0)
-    return buf.getvalue()
+            browser = p.chromium.launch(**launch_opts)
+            page    = browser.new_page()
+            page.set_viewport_size({"width": 900, "height": 1200})
+            page.set_content(html, wait_until="domcontentloaded")
+            height = page.evaluate("document.body.scrollHeight")
+            page.set_viewport_size({"width": 900, "height": height + 20})
+            img = page.screenshot(full_page=True, type="png")
+            browser.close()
+        return img
+    except Exception as e:
+        logger.error(f"Playwright xato: {e}")
+        import traceback; traceback.print_exc()
+        return None
 
 
 async def send_leaderboard_card(
-    bot,
-    chat_id: int,
-    quiz_title: str,
-    results: List[Dict],
-    passing_score: float = 60.0,
-    total_questions: int = 0,
-    caption: str = "",
-    delete_after: int = 0,
-) -> Optional[int]:
-    """
-    Leaderboard rasmini guruhga yuboradi.
-    delete_after > 0 bo'lsa, shu soniyadan keyin xabarni o'chiradi.
-    Qaytaradi: yuborilgan xabar message_id yoki None.
-    """
-    import asyncio
+    bot, chat_id, quiz_title, results,
+    passing_score=60.0, total_questions=0,
+    caption=None, delete_after=0,
+):
     from aiogram.types import BufferedInputFile
-
-    img_bytes = generate_leaderboard_image(
+    loop      = asyncio.get_event_loop()
+    img_bytes = await loop.run_in_executor(
+        None, generate_leaderboard_image,
         quiz_title, results, passing_score, total_questions
     )
-
     if not img_bytes:
-        # Fallback: oddiy matn
-        logger.warning("Rasm yasalmas — matn yuboriladi")
         return None
-
     try:
-        msg = await bot.send_photo(
+        msg = await bot.send_document(
             chat_id=chat_id,
-            photo=BufferedInputFile(img_bytes, filename="leaderboard.png"),
-            caption=caption or f"🏆 <b>{quiz_title}</b> — Yakuniy natijalar",
-            parse_mode="HTML"
+            document=BufferedInputFile(img_bytes, filename="leaderboard.png"),
+            caption=caption or None,
+            parse_mode="HTML" if caption else None,
         )
-        logger.info(f"✅ Leaderboard rasm yuborildi: {chat_id} msg={msg.message_id}")
-
+        logger.info(f"✅ Leaderboard HD yuborildi: chat={chat_id}")
         if delete_after > 0:
             async def _del():
                 await asyncio.sleep(delete_after)
-                try:
-                    await bot.delete_message(chat_id, msg.message_id)
-                    logger.info(f"🗑 Leaderboard rasm o'chirildi: msg={msg.message_id}")
-                except Exception as e:
-                    logger.warning(f"Rasm o'chirishda xato: {e}")
+                try: await bot.delete_message(chat_id, msg.message_id)
+                except: pass
             asyncio.create_task(_del())
-
         return msg.message_id
-
     except Exception as e:
-        logger.error(f"Leaderboard rasm yuborishda xato: {e}")
+        logger.error(f"Yuborishda xato: {e}")
         return None
