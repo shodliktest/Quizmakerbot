@@ -18,33 +18,16 @@ router = Router()
 
 # {uid: asyncio.Task}
 _inline_timers: dict = {}
-ANSWER_SHOW_SEC = 30   # Javob ko'rsatilgandan keyin keyingi savolga o'tish
+ANSWER_SHOW_SEC = 3    # Javob ko'rsatilgandan keyin keyingi savolga o'tish
 QUESTION_SEC    = 30   # Savol chiqgandan so'ng javobsiz kutish
+COUNTDOWN_SECS  = 3    # Test boshlanishidan oldin countdown
 
 
 
 
 async def _show_next_question(bot, cid, msg_id, qs, idx, state, uid):
-    """Keyingi savolni edit orqali ko'rsatib, to'g'ri state o'rnatadi va timer ishlatadi"""
-    text, kb, is_text = _build_question_content(qs, idx)
-    try:
-        await bot.edit_message_text(chat_id=cid, message_id=msg_id, text=text, reply_markup=kb)
-        new_msg_id = msg_id
-    except TelegramBadRequest:
-        msg = await bot.send_message(cid, text, reply_markup=kb)
-        new_msg_id = msg.message_id
-
-    await state.update_data(q_msg_id=new_msg_id, answered_this=False)
-    if is_text:
-        await state.set_state(TestSolving.text_answer)
-    else:
-        await state.set_state(TestSolving.answering)
-
-    _cancel_timer(uid)
-    task = asyncio.create_task(
-        _question_timeout(bot, cid, state, uid, idx, QUESTION_SEC)
-    )
-    _inline_timers[uid] = task
+    """Keyingi savolni edit orqali ko'rsatib, tick timer ishlatadi"""
+    await _show_question_edit(bot, cid, msg_id, qs, idx, state, uid)
 
 def _check_text_answer(user_ans: str, correct: str, accepted: list = None) -> bool:
     """Matn javobni tekshirish — katta-kichik harf farq qilmaydi, bo'sh joy kesadi"""
@@ -299,6 +282,21 @@ async def start_inline_test(callback: CallbackQuery, state: FSMContext):
     if not qs:
         return await callback.answer("❌ Savollar yo'q.", show_alert=True)
 
+    # Urinishlar sonini tekshirish
+    max_att = int(test.get("max_attempts", 0))
+    if max_att > 0:
+        from utils.ram_cache import get_daily
+        dr = get_daily()
+        uid_str = str(uid)
+        user_att = dr.get(uid_str, {}).get("by_test", {}).get(tid, {}).get("attempts", 0)
+        if user_att >= max_att:
+            word = "marta" if max_att > 1 else "marta"
+            return await callback.answer(
+                f"⛔ Siz bu testni {max_att} {word} ishladingiz.\n"
+                f"Urinishlar soni tugadi!",
+                show_alert=True
+            )
+
     await state.set_state(TestSolving.answering)
     await state.set_data({
         "test": test, "qs": qs, "idx": 0, "ans": {},
@@ -307,8 +305,178 @@ async def start_inline_test(callback: CallbackQuery, state: FSMContext):
         "no_ans_streak": 0, "q_msg_id": None,
     })
 
-    # Test kartochkasini o'chirmasdan, YANGI xabar sifatida birinchi savol
-    await _send_question_new(callback.bot, cid, state, uid)
+    # Countdown keyin birinchi savol
+    await _run_countdown(callback.bot, cid, uid, test, qs, state)
+
+
+
+
+async def _run_countdown(bot, cid, uid, test, qs, state):
+    """3-2-1 countdown, keyin birinchi savol"""
+    title  = test.get("title", "Test")
+    total  = len(qs)
+    ptime  = test.get("poll_time", QUESTION_SEC)
+    emojis = ["3️⃣", "2️⃣", "1️⃣", "🚀"]
+
+    cdown_msg = await bot.send_message(
+        cid,
+        f"📝 <b>{title}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📋 <b>{total}</b> ta savol  |  ⏱ <b>{ptime}s</b>/savol\n\n"
+        f"3️⃣  Test boshlanmoqda...",
+        parse_mode="HTML"
+    )
+    await state.update_data(q_msg_id=cdown_msg.message_id)
+
+    for emoji in emojis[1:]:
+        await asyncio.sleep(1)
+        try:
+            await bot.edit_message_text(
+                chat_id=cid, message_id=cdown_msg.message_id,
+                text=(
+                    f"📝 <b>{title}</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"📋 <b>{total}</b> ta savol  |  ⏱ <b>{ptime}s</b>/savol\n\n"
+                    f"{emoji}  {'Test boshlanmoqda...' if emoji != '🚀' else 'Boshlandi!'}"
+                ),
+                parse_mode="HTML"
+            )
+        except TelegramBadRequest:
+            pass
+
+    await asyncio.sleep(0.5)
+    # Birinchi savolni shu xabarga edit qilib ko'rsatish
+    await _show_question_edit(bot, cid, cdown_msg.message_id, qs, 0, state, uid)
+
+
+async def _show_question_edit(bot, cid, msg_id, qs, idx, state, uid):
+    """Savolni edit orqali ko'rsatish + vaqt ticker ishga tushirish"""
+    text, kb, is_text = _build_question_content(qs, idx, time_left=QUESTION_SEC)
+    try:
+        await bot.edit_message_text(
+            chat_id=cid, message_id=msg_id,
+            text=text, reply_markup=kb, parse_mode="HTML"
+        )
+    except TelegramBadRequest:
+        new_msg = await bot.send_message(cid, text, reply_markup=kb, parse_mode="HTML")
+        msg_id  = new_msg.message_id
+
+    await state.update_data(
+        q_msg_id=msg_id,
+        answered_this=False,
+        q_start_time=time.time(),
+    )
+    if is_text:
+        await state.set_state(TestSolving.text_answer)
+    else:
+        await state.set_state(TestSolving.answering)
+
+    _cancel_timer(uid)
+    task = asyncio.create_task(
+        _question_tick(bot, cid, state, uid, idx, msg_id, QUESTION_SEC)
+    )
+    _inline_timers[uid] = task
+
+
+async def _question_tick(bot, cid, state, uid, expected_idx, msg_id, total_sec):
+    """Har 5 soniyada progress bar + vaqtni yangilaydi, 0 da timeout"""
+    try:
+        elapsed    = 0
+        tick_every = 5   # har 5s edit — flood xavfsiz
+        while elapsed < total_sec:
+            await asyncio.sleep(tick_every)
+            elapsed += tick_every
+            # Holat tekshirish
+            cur = await state.get_state()
+            if cur not in (TestSolving.answering.state, TestSolving.text_answer.state):
+                return
+            d = await state.get_data()
+            if d.get("idx") != expected_idx or d.get("answered_this"):
+                return
+
+            remaining = max(0, total_sec - elapsed)
+            qs  = d.get("qs", [])
+            if expected_idx < len(qs):
+                text, kb, _ = _build_question_content(qs, expected_idx, time_left=remaining)
+                try:
+                    await bot.edit_message_text(
+                        chat_id=cid, message_id=msg_id,
+                        text=text, reply_markup=kb, parse_mode="HTML"
+                    )
+                except TelegramBadRequest:
+                    pass
+                except Exception:
+                    pass
+
+        # Vaqt tugadi — timeout
+        cur = await state.get_state()
+        if cur not in (TestSolving.answering.state, TestSolving.text_answer.state):
+            return
+        d = await state.get_data()
+        if d.get("idx") != expected_idx or d.get("answered_this"):
+            return
+
+        # Javob berilmadi
+        streak  = d.get("no_ans_streak", 0) + 1
+        ans     = d.get("ans", {})
+        qs      = d.get("qs", [])
+        ans[str(expected_idx)] = None
+        new_idx = expected_idx + 1
+        await state.update_data(ans=ans, idx=new_idx, no_ans_streak=0 if streak < 2 else 0)
+
+        if streak >= 2:
+            await state.set_state(TestSolving.paused)
+            try:
+                await bot.edit_message_text(
+                    chat_id=cid, message_id=msg_id,
+                    text=(
+                        "⏸ <b>TEST PAUZALAND</b>\n\n"
+                        "Ketma-ket 2 ta savolga javob berilmadi.\n"
+                        "<i>Davom etish yoki to'xtatishni tanlang:</i>"
+                    ),
+                    reply_markup=inline_pause_kb(), parse_mode="HTML"
+                )
+            except TelegramBadRequest:
+                pass
+            return
+
+        q      = qs[expected_idx] if expected_idx < len(qs) else {}
+        corr   = q.get("correct", "?")
+        expl   = q.get("explanation", "") or ""
+        if expl in ("Izoh kiritilmagan.", "Izoh yo'q", "Izoh kiritilmagan"): expl = ""
+        expl_t = f"\n💡 <i>{expl[:100]}</i>" if expl else ""
+        qtxt   = re.sub(r'^\[\d+/\d+\]\s*', '', q.get("question", q.get("text",""))).strip()
+
+        next_kb = InlineKeyboardBuilder()
+        next_kb.row(InlineKeyboardButton(text="➡️ Keyingi", callback_data="next_q_now"))
+
+        await state.update_data(no_ans_streak=streak)
+        try:
+            await bot.edit_message_text(
+                chat_id=cid, message_id=msg_id,
+                text=(
+                    f"⏰ <b>{expected_idx+1}/{len(qs)} — Vaqt tugadi!</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"<i>{qtxt[:80]}</i>\n\n"
+                    f"❌ Javob berilmadi\n"
+                    f"✔️ To'g'ri: <b>{str(corr)[:60]}</b>{expl_t}\n\n"
+                    f"<i>{ANSWER_SHOW_SEC}s da keyingiga o'tadi...</i>"
+                ),
+                reply_markup=next_kb.as_markup(), parse_mode="HTML"
+            )
+        except TelegramBadRequest:
+            pass
+
+        _cancel_timer(uid)
+        task = asyncio.create_task(
+            _auto_next(bot, cid, state, uid, new_idx, ANSWER_SHOW_SEC, msg_id)
+        )
+        _inline_timers[uid] = task
+
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        log.error(f"Tick xato: {e}")
 
 
 async def _send_question_new(bot, cid, state, uid):
@@ -364,19 +532,35 @@ async def _edit_question(bot, cid, msg_id, state, uid):
     _inline_timers[uid] = task
 
 
-def _build_question_content(qs, idx):
-    """Savol matni va klaviaturasini qurish"""
-    total = len(qs)
-    q     = qs[idx]
-    qtype = q.get("type", "multiple_choice")
-    qtxt  = re.sub(r'^\[\d+/\d+\]\s*', '', q.get("question", q.get("text", "Savol"))).strip()
+def _progress_bar(done, total, width=12):
+    """Guruh uslubidagi progress bar"""
+    filled = round(done * width / total) if total else 0
+    return "█" * filled + "░" * (width - filled)
+
+def _build_question_content(qs, idx, time_left=None):
+    """Savol matni va klaviaturasini qurish — guruh uslubida"""
+    total    = len(qs)
+    q        = qs[idx]
+    qtype    = q.get("type", "multiple_choice")
+    qtxt     = re.sub(r'^\[\d+/\d+\]\s*', '', q.get("question", q.get("text", "Savol"))).strip()
+    pbar     = _progress_bar(idx, total)
+    pct      = round(idx * 100 / total) if total else 0
+    t_val    = time_left if time_left is not None else QUESTION_SEC
+    t_emoji  = "🔴" if t_val <= 5 else "🟡" if t_val <= 10 else "🟢"
+    time_str = f"{t_emoji} {t_val}s"
+
+    header = (
+        f"📊 {pbar} {idx}/{total}  {time_str}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    )
 
     pause_btn = InlineKeyboardButton(text="⏸ Pauza", callback_data="inline_pause_menu")
+    stop_btn  = InlineKeyboardButton(text="⛔ Stop",  callback_data="cancel_test")
     b = InlineKeyboardBuilder()
 
     if qtype in ("multiple_choice", "multi_select"):
-        opts    = q.get("options", [])
-        letters = []
+        opts      = q.get("options", [])
+        letters   = []
         opt_lines = ""
         for i, opt in enumerate(opts):
             raw = str(opt)
@@ -384,41 +568,28 @@ def _build_question_content(qs, idx):
             l   = m.group(1).upper() if m else chr(65+i)
             ot  = raw[m.end():].strip() if m else raw.strip()
             letters.append(l)
-            opt_lines += f"<b>{l})</b> {ot}\n"
-        text = (
-            f"📝 <b>{idx+1}/{total} — Savol</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"{qtxt}\n\n{opt_lines}"
-        )
+            opt_lines += f"  <b>{l})</b> {ot}\n"
+        text = f"{header}❓ <b>{qtxt}</b>\n\n{opt_lines}"
         for l in letters:
             b.add(InlineKeyboardButton(text=l, callback_data=f"ans_{l}"))
-        b.adjust(len(letters))
-        b.row(pause_btn)
+        b.adjust(min(4, len(letters)))
+        b.row(pause_btn, stop_btn)
 
     elif qtype == "true_false":
-        text = (
-            f"✅❌ <b>{idx+1}/{total} — Ha/Yo'q</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"{qtxt}"
-        )
+        text = f"{header}❓ <b>{qtxt}</b>"
         b.row(
             InlineKeyboardButton(text="✅ Ha",   callback_data="ans_Ha"),
             InlineKeyboardButton(text="❌ Yo'q", callback_data="ans_Yoq"),
         )
-        b.row(pause_btn)
+        b.row(pause_btn, stop_btn)
 
     else:
-        text = (
-            f"✏️ <b>{idx+1}/{total} — Matn javob</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"{qtxt}\n\n"
-            f"<i>✍️ Javobingizni yozing (xabaringiz avtomatik o'chiriladi):</i>"
-        )
+        text = f"{header}✏️ <b>{qtxt}</b>\n\n<i>✍️ Javobingizni yozing:</i>"
         b.row(InlineKeyboardButton(text="⏭ O'tkazish", callback_data="skip_q"))
-        b.row(pause_btn)
-        return text, b.as_markup(), True   # is_text=True
+        b.row(pause_btn, stop_btn)
+        return text, b.as_markup(), True
 
-    return text, b.as_markup(), False   # is_text=False
+    return text, b.as_markup(), False
 
 
 async def _question_timeout(bot, cid, state, uid, expected_idx, wait_sec):
@@ -549,22 +720,30 @@ async def answer_cb(callback: CallbackQuery, state: FSMContext):
     new_idx       = idx + 1
     await state.update_data(ans=ans, idx=new_idx, answered_this=True, no_ans_streak=0)
 
-    # Javob natijasini edit qilib ko'rsatish + "Keyingi" tugma
+    # Chiroyli natija ko'rinishi
     next_kb = InlineKeyboardBuilder()
-    next_kb.row(InlineKeyboardButton(text="➡️ Keyingi savol", callback_data="next_q_now"))
+    next_kb.row(InlineKeyboardButton(text="➡️ Keyingi", callback_data="next_q_now"))
+
+    pbar     = _progress_bar(new_idx, len(qs))
+    icon     = "✅" if is_c else "❌"
+    label    = "To'g'ri!" if is_c else "Noto'g'ri!"
+    qtxt_s   = qtxt[:80] + ("..." if len(qtxt) > 80 else "")
 
     result_text = (
-        f"{'✅' if is_c else '❌'} <b>{idx+1}/{len(qs)} — {'To\'g\'ri!' if is_c else 'Noto\'g\'ri!'}</b>\n"
+        f"📊 {pbar} {new_idx}/{len(qs)}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"<i>{qtxt[:80]}{'...' if len(qtxt)>80 else ''}</i>\n\n"
-        f"✔️ To'g'ri: <b>{corr_text[:80]}</b>{expl_txt}\n\n"
-        f"<i>{ANSWER_SHOW_SEC}s da avtomatik keyingiga o'tadi</i>"
+        f"{icon} <b>{label}</b>\n\n"
+        f"<i>{qtxt_s}</i>\n\n"
+        f"✔️ To'g'ri javob: <b>{corr_text[:80]}</b>{expl_txt}\n\n"
+        f"<i>⏩ {ANSWER_SHOW_SEC}s da davom etadi...</i>"
     )
     try:
-        await callback.message.edit_text(result_text, reply_markup=next_kb.as_markup())
-    except TelegramBadRequest: pass
+        await callback.message.edit_text(
+            result_text, reply_markup=next_kb.as_markup(), parse_mode="HTML"
+        )
+    except TelegramBadRequest:
+        pass
 
-    # ANSWER_SHOW_SEC soniyadan keyin keyingi savol — xuddi shu xabarni edit qilamiz
     _cancel_timer(uid)
     task = asyncio.create_task(
         _auto_next(bot=callback.bot, cid=cid, state=state, uid=uid,
@@ -780,7 +959,7 @@ async def _finish_inline(bot, cid, state, d):
         "passing_score": test.get("passing_score", 60),
         "mode":          "inline",
     })
-    rid = save_result(uid, test.get("test_id", ""), scored, via_link=via_link)
+    rid = await save_result(uid, test.get("test_id", ""), scored, via_link=via_link)
     await state.clear()
 
     result_text = format_result(scored, test)
