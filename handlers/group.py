@@ -441,26 +441,42 @@ async def _run_inline_session(
         session["q_msg_id"] = msg.message_id
 
         # ── Countdown timer ──
-        for remaining in range(poll_time, 0, -1):
+        # Faqat quyidagi nuqtalarda edit: 1,3,6,9,10,15,20,25,30,35,...
+        # Flood bo'lmasin uchun — har soniyada EMAS
+        edit_points = set()
+        edit_points.update([1, 3, 6, 9])
+        t = 10
+        while t <= poll_time:
+            edit_points.add(t)
+            t += 5
+
+        for remaining in range(poll_time - 1, -1, -1):
             await asyncio.sleep(1)
             if chat_id not in _inline_sessions:
                 return
             if _inline_sessions[chat_id].get("locked"):
                 break
-            if remaining % 5 == 0 or remaining <= 5:
-                try:
-                    await bot.edit_message_text(
-                        text=_q_text(remaining),
-                        chat_id=chat_id,
-                        message_id=msg.message_id,
-                        parse_mode="HTML",
-                        reply_markup=kb
-                    )
-                except TelegramBadRequest:
-                    pass
-                except Exception as e:
-                    if "retry" in str(e).lower():
-                        await asyncio.sleep(5)
+
+            if remaining not in edit_points:
+                continue
+
+            try:
+                await bot.edit_message_text(
+                    text=_q_text(remaining),
+                    chat_id=chat_id,
+                    message_id=msg.message_id,
+                    parse_mode="HTML",
+                    reply_markup=kb
+                )
+            except TelegramBadRequest:
+                pass
+            except Exception as e:
+                err = str(e).lower()
+                if "retry after" in err or "flood" in err or "too many" in err:
+                    m    = re.search(r"retry after (\d+)", err)
+                    wait = int(m.group(1)) + 1 if m else 10
+                    log.warning(f"⏳ Timer flood — {wait}s")
+                    await asyncio.sleep(wait)
 
         if chat_id not in _inline_sessions:
             return
@@ -762,45 +778,28 @@ async def _show_group_leaderboard(
     results_for_card.sort(key=lambda x: x["score"], reverse=True)
 
     # ── 1. Rasm leaderboard ──
+    mode_sfx = "inline" if mode == "inline" else "poll"
+    photo_msg_id = None
     try:
         from utils.leaderboard_card import send_leaderboard_card
-        caption = _build_caption(results_for_card, test.get("title","Test"), passing, stopped_early)
-        b       = InlineKeyboardBuilder()
-        b.row(
-            InlineKeyboardButton(
-                text="🔄 Yana bir marta",
-                url=f"https://t.me/{bot_uname}?start={tid}"
-            ),
-            InlineKeyboardButton(
-                text="📤 Ulashish",
-                switch_inline_query=f"test_{tid}"
-            ),
-        )
-        card_msg_id = await send_leaderboard_card(
+        photo_msg_id = await send_leaderboard_card(
             bot=bot,
             chat_id=chat_id,
             quiz_title=test.get("title","Test"),
             results=results_for_card,
             passing_score=passing,
             total_questions=len(qs),
-            caption=caption,
+            caption=None,      # caption yo'q — matn alohida reply qilib
             delete_after=0,
         )
-        if card_msg_id:
-            # Tugmalarni alohida xabar sifatida yuborish
-            await bot.send_message(
-                chat_id,
-                "🎉 <b>Barcha ishtirokchilarga rahmat!</b>",
-                reply_markup=b.as_markup()
-            )
-            return
     except Exception as e:
-        log.warning(f"Rasm leaderboard xato, matn rejimiga o'tilmoqda: {e}")
+        log.warning(f"Rasm leaderboard xato: {e}")
 
-    # ── 2. Fallback: Matn leaderboard ──
+    # ── 2. Matn natijalar — rasmga reply qilib ──
     await _send_text_leaderboard(
         bot, chat_id, tid, results_for_card,
-        test, qs, bot_uname, stopped_early, passing
+        test, qs, bot_uname, stopped_early, passing,
+        mode=mode, reply_to=photo_msg_id
     )
 
 
@@ -822,56 +821,90 @@ def _build_caption(results, title, passing, stopped_early):
 
 async def _send_text_leaderboard(
     bot, chat_id, tid, results, test, qs,
-    bot_uname, stopped_early, passing
+    bot_uname, stopped_early, passing, mode="poll", reply_to=None
 ):
     medals = ["🥇","🥈","🥉"]
-    stop_h = "⛔ <b>Test to'xtatildi!</b>\n" if stopped_early else ""
-    text   = (
-        f"{stop_h}"
-        f"🏆 <b>GURUH TEST NATIJALARI</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📝 {test.get('title','Test')} | {len(qs)} savol | 👥 {len(results)} kishi\n"
-        f"🎯 O'tish bali: {passing:.0f}%\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    )
-    for i, r in enumerate(results[:20]):
-        medal  = medals[i] if i < 3 else f"{i+1}."
-        pct    = r["score"]
-        filled = int(pct/10)
-        bar    = "█"*filled + "░"*(10-filled)
-        icon   = "✅" if pct >= passing else "❌"
-        text  += (
-            f"{medal} <b>{r['first_name']}</b> {icon}\n"
-            f"   <code>[{bar}]</code> {pct:.0f}% ({r['correct']}/{len(qs)})\n\n"
-        )
-    if len(results) > 20:
-        text += f"<i>...va yana {len(results)-20} ta qatnashchi</i>\n"
-
-    avg = sum(r["score"] for r in results) / len(results)
+    avg    = sum(r["score"] for r in results) / len(results) if results else 0
     passed = sum(1 for r in results if r["score"] >= passing)
+
+    stop_h = "⛔️ <b>Test to'xtatildi!</b>" if stopped_early else "🏁 <b>Test tugadi!</b>"
+
+    text = (
+        f"{stop_h}\n"
+        f"📚 <b>{test.get('title','Test')}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🏆 <b>Natijalar jadvali:</b>\n\n"
+    )
+
+    show = results[:15]
+    for i, r in enumerate(show):
+        medal   = medals[i] if i < 3 else f"{i+1}."
+        pct     = r["score"]
+        correct = r["correct"]
+        total   = r["total"]
+        filled  = round(pct / 10)
+        bar     = "🟩" * filled + "⬜️" * (10 - filled)
+        name    = r.get("first_name") or r.get("username") or "O'quvchi"
+        text   += (
+            f"{medal} <b>{name}</b>\n"
+            f"    {bar}  {pct:.0f}%  ({correct}/{total} ✅)\n\n"
+        )
+
+    if len(results) > 15:
+        text += f"<i>...va yana {len(results)-15} ta qatnashchi</i>\n\n"
+
     text += (
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 O'rtacha: <b>{avg:.1f}%</b>  |  ✅ O'tdi: <b>{passed}/{len(results)}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👥 Ishtirokchilar: <b>{len(results)} kishi</b>\n"
+        f"📊 O'rtacha natija: <b>{avg:.1f}%</b>\n\n"
         f"🎉 Barcha ishtirokchilarga rahmat!"
     )
+
+    mode_suffix = "inline" if mode == "inline" else "poll"
     b = InlineKeyboardBuilder()
     b.row(
         InlineKeyboardButton(
             text="🔄 Yana bir marta",
-            url=f"https://t.me/{bot_uname}?start={tid}"
+            callback_data=f"grestart_{tid}_{mode_suffix}"
         ),
         InlineKeyboardButton(
             text="📤 Ulashish",
             switch_inline_query=f"test_{tid}"
         ),
     )
-    await bot.send_message(chat_id, text, reply_markup=b.as_markup())
+
+    from aiogram.types import ReplyParameters
+    try:
+        await bot.send_message(
+            chat_id, text,
+            reply_markup=b.as_markup(),
+            reply_parameters=ReplyParameters(message_id=reply_to) if reply_to else None
+        )
+    except Exception:
+        await bot.send_message(chat_id, text, reply_markup=b.as_markup())
 
 
 
 # ══════════════════════════════════════════════════════════════
 # GURUHDA ISHLASH TUGMASI — bot o'zi /quiz_start yozadi
 # ══════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data.startswith("grestart_"))
+async def grestart(callback: CallbackQuery):
+    """Test tugagach 'Yana bir marta' — o'sha guruhga avto-buyruq."""
+    await callback.answer()
+    parts = callback.data[9:].rsplit("_", 1)  # grestart_TID_mode
+    if len(parts) != 2:
+        return
+    tid, mode_sfx = parts
+    chat_id = callback.message.chat.id if callback.message else None
+    if not chat_id:
+        return
+    await callback.bot.send_message(
+        chat_id,
+        f"/quiz_start {tid} {mode_sfx}"
+    )
+
 
 @router.callback_query(F.data.startswith("gsend_poll_"))
 async def gsend_poll(callback: CallbackQuery):
