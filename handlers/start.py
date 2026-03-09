@@ -129,7 +129,7 @@ async def help_cb(callback: CallbackQuery):
 async def _send_help(msg, edit=False):
     text = (
         "❓ <b>BOTDAN FOYDALANISH</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "1️⃣ <b>▶️ Inline test</b> — har savoldan keyin\n"
         "   to'g'ri/noto'g'ri ko'rsatadi\n"
         "   30s avtomatik keyingi savolga o'tadi\n\n"
@@ -164,7 +164,7 @@ async def _send_test_card(event, test, tid, viewer_uid=None, edit=False):
 
     text = (
         f"📋 <b>TEST MA'LUMOTI</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"{pause_t}"
         f"📝 <b>{meta.get('title','Nomsiz')}</b>\n"
         f"📁 Fan: {meta.get('category','')}\n"
@@ -175,7 +175,7 @@ async def _send_test_card(event, test, tid, viewer_uid=None, edit=False):
         f"🎯 O'tish foizi: <b>{meta.get('passing_score',60)}%</b>\n"
         f"🔄 Urinishlar: {att_t}\n"
         f"👥 Ishlagan: <b>{meta.get('solve_count',0)} marta</b>\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"▶️ Inline — savoldan keyin javob, 30s avto-o'tish\n"
         f"📊 Poll — Telegram quiz, vaqt bilan"
     )
@@ -300,7 +300,7 @@ async def admin_reply(message: Message):
     try:
         await message.bot.send_message(
             int(parts[1]),
-            f"📬 <b>ADMINDAN JAVOB:</b>\n━━━━━━━━━━━━━━━━━━━━━━\n\n{parts[2]}"
+            f"📬 <b>ADMINDAN JAVOB:</b>\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n{parts[2]}"
         )
         await message.answer(f"✅ <code>{parts[1]}</code> ga yuborildi.")
     except Exception as e:
