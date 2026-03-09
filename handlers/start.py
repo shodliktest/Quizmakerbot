@@ -32,20 +32,34 @@ async def cmd_start(message: Message, state: FSMContext):
         return await message.answer("🚫 Siz bloklangansiz.")
 
     if is_new:
-        at = f"@{uname}" if uname else "Yo'q"
+        from datetime import datetime
+        at = f"@{uname}" if uname else "Mavjud emas"
+        vaqt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         for aid in ADMIN_IDS:
             try:
                 await message.bot.send_message(
-                    aid, f"🆕 <b>YANGI USER!</b>\n👤 <b>{name}</b> | {at} | <code>{uid}</code>"
+                    aid,
+                    f"🆕 <b>YANGI FOYDALANUVCHI:</b>\n\n"
+                    f"👤 Ism: {name}\n"
+                    f"🆔 ID: <code>{uid}</code>\n"
+                    f"🔗 Username: {at}\n"
+                    f"⏰ Vaqt: {vaqt}",
+                    parse_mode="HTML"
                 )
             except Exception: pass
         welcome = (
-            f"👋 Salom, <b>{name}</b>! 🎓\n"
-            f"<b>Quiz Bot</b> platformasiga xush kelibsiz!\n\n"
-            f"📚 Testlar — Fanlar bo'yicha\n"
-            f"➕ Test Yaratish — TXT/PDF/QuizBot\n"
-            f"📊 Natijalarim — tariхingiz\n"
-            f"🏆 Reyting — eng yaxshi natijalar"
+            f"👋 Salom, <b>{name}</b>!\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"🤖 <b>QuizMaker Bot</b> ga xush kelibsiz!\n\n"
+            f"📌 <b>Bot imkoniyatlari:</b>\n\n"
+            f"▶️ <b>Inline Test</b> — har savoldan keyin to'g'ri/noto'g'ri ko'rsatadi, 30s avtomatik o'tadi\n\n"
+            f"📊 <b>Quiz Poll</b> — Telegram native quiz rejimi, vaqt bilan\n\n"
+            f"➕ <b>Test Yaratish</b> — TXT, PDF, DOCX fayl yoki matn orqali, @QuizBot forward\n\n"
+            f"📤 <b>Ulashish</b> — testni inline orqali do'stlarga yuborish\n\n"
+            f"📈 <b>Natijalarim</b> — barcha testlar bo'yicha foiz va tahlil\n\n"
+            f"🏆 <b>Reyting</b> — eng yaxshi natijalar\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"👇 Pastdagi menyudan boshlang!"
         )
     else:
         welcome = f"🏠 Xush kelibsiz, <b>{name}</b>!"
