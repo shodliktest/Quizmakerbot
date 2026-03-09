@@ -42,13 +42,13 @@ async def _show_admin(ev, edit=False):
     users = ram.get_users()
     text  = (
         f"👑 <b>ADMIN PANEL</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"📋 Testlar: <b>{len(tests)}</b>\n"
         f"👥 Userlar: <b>{len(users)}</b>\n"
         f"📊 Kunlik: <b>{st.get('daily_r',0)}</b>\n"
         f"💾 RAM cache: <b>{st.get('cached_q',0)} test</b>\n"
         f"🧠 RAM: <b>{st.get('mb',0)} MB ({st.get('pct',0)}%)</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━"
     )
     try:
         if edit and hasattr(ev, 'message'):
@@ -78,7 +78,7 @@ async def admin_stats(callback: CallbackQuery):
     cache_info = ram.get_cache_stats() if hasattr(ram, 'get_cache_stats') else []
     text = (
         f"📈 <b>STATISTIKA</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"👥 Jami userlar: <b>{len(users)}</b>\n"
         f"📋 Jami testlar: <b>{len(tests)}</b>\n\n"
         f"📅 <b>Bugun:</b>\n"
@@ -87,7 +87,7 @@ async def admin_stats(callback: CallbackQuery):
         f"🧠 <b>RAM holati:</b>\n"
         f"  💾 {st.get('mb',0)} MB / {st.get('limit_mb',450)} MB ({st.get('pct',0)}%)\n"
         f"  📦 Cached testlar: <b>{st.get('cached_q',0)} ta</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━"
     )
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="⬅️ Admin panel", callback_data="admin_panel"))
@@ -117,7 +117,7 @@ async def _show_users_page(msg, page=0, edit=False):
     chunk = users[page*PG:(page+1)*PG]
     text  = (
         f"👥 <b>FOYDALANUVCHILAR</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"<i>Jami: {len(users)} ta | Sahifa {page+1}/{total}</i>\n\n"
     )
     b = InlineKeyboardBuilder()
@@ -159,7 +159,7 @@ async def adm_user_detail(callback: CallbackQuery):
     blk   = u.get("is_blocked", False)
     text  = (
         f"👤 <b>{name}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"🆔 <code>{uid_str}</code>\n"
         f"📱 {uname}\n"
         f"📋 Testlar: <b>{u.get('total_tests',0)}</b>\n"
@@ -218,7 +218,7 @@ async def _show_admin_test_cats(msg, edit=False):
     sorted_cats = sorted(cats.items(), key=lambda x: x[1]["total"], reverse=True)
     text = (
         f"📋 <b>TESTLAR — FANLAR BO'YICHA</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"<i>Jami: {len(tests)} ta test | {len(cats)} ta fan</i>\n\n"
     )
     b = InlineKeyboardBuilder()
@@ -267,7 +267,7 @@ async def _show_adm_cat_tests(msg, cat_name, page=0, edit=False):
 
     text = (
         f"<b>{title}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"<i>{len(tests)} ta | Sahifa {page+1}/{total}</i>\n\n"
     )
     b = InlineKeyboardBuilder()
@@ -319,7 +319,7 @@ async def adm_test_detail(callback: CallbackQuery):
 
     text = (
         f"🔍 <b>TEST BATAFSIL</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"{'🗑 <b>O\'CHIRILGAN</b>\n\n' if not active else ''}"
         f"{'⏸ <b>PAUZADA</b>\n\n' if paused else ''}"
         f"📝 <b>{meta.get('title','?')}</b>\n"
@@ -441,7 +441,7 @@ async def adm_flush(callback: CallbackQuery):
     results = await tg_db.manual_flush(
         ram.get_daily(), ram.get_users(), ram.get_all_settings()
     )
-    text = "⚡ <b>MANUAL FLUSH</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n" + "\n".join(results)
+    text = "⚡ <b>MANUAL FLUSH</b>\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n" + "\n".join(results)
     b    = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="⬅️ Admin", callback_data="admin_panel"))
     try: await callback.message.edit_text(text, reply_markup=b.as_markup())
@@ -488,7 +488,7 @@ async def adm_backups(callback: CallbackQuery):
     info  = tg_db.get_index_info()
     text  = (
         f"🗂 <b>BACKUPLAR</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"📦 Jami: {len(dates)} ta\n"
         f"📋 Testlar: {info.get('tests_count',0)} | Cache: {info.get('cached_tests',0)}\n\n"
     )
