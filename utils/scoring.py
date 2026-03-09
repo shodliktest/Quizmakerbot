@@ -72,8 +72,8 @@ def format_result(res, test):
     pct=res.get("percentage",0); passed=pct>=test.get("passing_score",60)
     m,s=divmod(res.get("time_spent",0),60)
     holat="🎉 MUVAFFAQIYATLI O'TDINGIZ!" if passed else f"❌ YIQILDINGIZ (o'tish: {test.get('passing_score',60)}%)"
-    return (f"{res.get('emoji','📝')} <b>TEST NATIJASI</b>\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    return (f"{res.get('emoji','📝')} <b>TEST NATIJASI</b>\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"📝 <b>{test.get('title','Test')}</b>\n📁 {test.get('category','')}\n\n"
             f"📊 <b>{pct}%</b> | 🎯 {res.get('grade','F')}\n"
             f"✅ {res.get('correct_count',0)}   ❌ {res.get('wrong_count',0)}   ⏭ {res.get('skipped_count',0)}\n"
-            f"⏱ {m} daq {s:02d} son\n━━━━━━━━━━━━━━━━━━━━━━\n🏆 {holat}")
+            f"⏱ {m} daq {s:02d} son\n━━━━━━━━━━━━━━━━━━━━━━━━\n🏆 {holat}")
