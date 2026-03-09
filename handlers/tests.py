@@ -148,7 +148,7 @@ async def _show_categories(msg, uid, edit=False):
     sorted_cats = sorted(cats.items(), key=lambda x: x[1]["count"], reverse=True)
     text = (
         f"📚 <b>TESTLAR — FANLAR BO'YICHA</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"<i>Jami: {len(visible)} ta test | {len(cats)} ta fan</i>\n\n"
     )
     b = InlineKeyboardBuilder()
@@ -216,7 +216,7 @@ async def _show_cat_tests(msg, uid, cat_name, page=0, edit=False):
 
     text = (
         f"<b>{title}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"<i>{len(tests)} ta test | Sahifa {page+1}/{total}</i>\n\n"
     )
     b = InlineKeyboardBuilder()
@@ -737,7 +737,7 @@ async def text_answer_handler(message: Message, state: FSMContext):
     qtxt_s   = qtxt[:80] + ("..." if len(qtxt) > 80 else "")
     result_text = (
         f"{icon_ok} <b>{idx+1}/{len(qs)} — {label_ok}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"<i>{qtxt_s}</i>\n\n"
         f"✍️ Sizning: <code>{user_ans[:60]}</code>\n"
         f"✔️ To'g'ri: <b>{str(corr)[:80]}</b>{expl_txt}\n\n"
