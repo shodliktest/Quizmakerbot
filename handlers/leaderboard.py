@@ -49,7 +49,7 @@ async def _show_global_lb(msg, edit=False):
         return
 
     medals = ["🥇","🥈","🥉"]
-    text   = f"🏆 <b>GLOBAL REYTING</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    text   = f"🏆 <b>GLOBAL REYTING</b>\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
     for i, u in enumerate(leaders):
         medal  = medals[i] if i < 3 else f"{i+1}."
         avg    = round(u.get("avg_score",0),1)
@@ -75,7 +75,7 @@ async def lb_tests_list(callback: CallbackQuery):
     tests = [t for t in get_all_tests() if t.get("solve_count",0) > 0]
     tests.sort(key=lambda x: x.get("solve_count",0), reverse=True)
 
-    text = "🏆 <b>TEST REYTINGLARI</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    text = "🏆 <b>TEST REYTINGLARI</b>\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
     b    = InlineKeyboardBuilder()
     for i, t in enumerate(tests[:10], 1):
         tid   = t.get("test_id","")
@@ -110,9 +110,9 @@ async def _show_test_lb(msg, tid, edit=False):
     medals = ["🥇","🥈","🥉"]
     text   = (
         f"🏆 <b>{title.upper()} — REYTING</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"👥 {len(solvers)} qatnashchi (bugun)\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
     )
     if not solvers:
         text += "Hali hech kim yechmagan."
