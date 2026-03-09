@@ -216,7 +216,7 @@ async def method_text(callback: CallbackQuery, state: FSMContext):
     )
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="✅ Tayyor (parse qilish)", callback_data="finish_text"))
-    b.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data="method_file"))
+    b.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data="start_create"))
     b.row(InlineKeyboardButton(text="❌ Bekor",  callback_data="cancel_create"))
     await callback.message.edit_text(
         "<b>💬 MATN ORQALI YUKLASH</b>\n"
