@@ -106,7 +106,7 @@ def _make_result(test: dict, bot_username: str) -> InlineQueryResultArticle:
 
     msg_text = (
         f"📝 <b>{title}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"📁 Fan: <b>{cat}</b>\n"
         f"📊 Qiyinlik: {diff}\n"
         f"📋 Savollar: <b>{qc} ta</b>\n"
