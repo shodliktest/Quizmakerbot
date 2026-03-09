@@ -108,7 +108,7 @@ async def _del(bot, cid, mid):
         pass
 
 
-# ── Debounce uchun global dictlar ──────────────────────────
+# ── Debounce uchun global dictlar ━━━━━━━━━━━━━━━━━━━━━━━━
 # Poll (QuizBot forward)
 _poll_debounce: dict = {}  # {uid: asyncio.Task}
 _poll_progress: dict = {}  # {uid: progress_msg_id}
@@ -184,7 +184,7 @@ async def create_start(message: Message, state: FSMContext):
     b.row(InlineKeyboardButton(text="❌ Bekor",               callback_data="cancel_create"))
     await message.answer(
         "<b>➕ TEST YARATISH</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "📁 <b>Fayl yuklash</b> — TXT, PDF yoki DOCX\n"
         "   Yaratilgan test ▶️ Inline va 📊 Poll\n"
         "   ikki rejimda ishlaydi!\n\n"
@@ -220,7 +220,7 @@ async def method_text(callback: CallbackQuery, state: FSMContext):
     b.row(InlineKeyboardButton(text="❌ Bekor",  callback_data="cancel_create"))
     await callback.message.edit_text(
         "<b>💬 MATN ORQALI YUKLASH</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "Savollarni <b>ketma-ket yuboring</b> (ko'p xabar bo'lsa ham yig'ib oladi)\n\n"
         f"<code>{example}</code>\n\n"
         "<i>💡 To'g'ri javob oldiga <b>===</b> qo'ying\n"
@@ -306,7 +306,7 @@ async def finish_text(callback: CallbackQuery, state: FSMContext):
         b_pt.row(InlineKeyboardButton(text="♾ Cheksiz", callback_data="ptime_0"))
         await status.edit_text(
             f"<b>✅ {len(questions)} TA SAVOL TOPILDI!</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"<i>{len(buf)} ta xabardan yig'ildi</i>\n\n"
             f"⏱ <b>Har bir savol uchun necha soniya?</b>",
             reply_markup=b_pt.as_markup()
@@ -327,7 +327,7 @@ async def method_file(callback: CallbackQuery, state: FSMContext):
     b.row(InlineKeyboardButton(text="❌ Bekor", callback_data="cancel_create"))
     await callback.message.edit_text(
         "<b>📁 TEST TURINI TANLANG</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "Turni bosing → namuna ko'rasiz\n"
         "Shu formatda fayl yuborasiz:\n\n"
         "<i>💡 Yaratilgan test ▶️ Inline va 📊 Poll\n"
@@ -355,7 +355,7 @@ async def send_sample(callback: CallbackQuery):
     b.row(InlineKeyboardButton(text="❌ Bekor",        callback_data="cancel_create"))
     await callback.message.edit_text(
         f"<b>📄 {type_name.upper()} FORMATI</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"Namuna:\n\n"
         f"<code>{mono_text}</code>\n\n"
         f"⏳ <b>Faylingizni yuboring...</b>",
@@ -396,7 +396,7 @@ async def upload_file(message: Message, state: FSMContext):
         b_pt.row(InlineKeyboardButton(text="♾ Cheksiz", callback_data="ptime_0"))
         await status.edit_text(
             f"<b>✅ {len(questions)} TA SAVOL TOPILDI!</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"⏱ <b>Har bir savol uchun necha soniya?</b>",
             reply_markup=b_pt.as_markup()
         )
@@ -423,7 +423,7 @@ async def method_poll(callback: CallbackQuery, state: FSMContext):
     b.row(InlineKeyboardButton(text="❌ Bekor",  callback_data="cancel_create"))
     await callback.message.edit_text(
         "<b>📊 QUIZBOT FORWARD</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "1️⃣ @QuizBot ga o'ting\n"
         "2️⃣ Quiz savollarini bu yerga forward qiling\n"
         "3️⃣ Hammasi yuborilgach — <b>✅ Tayyor</b> bosing\n\n"
@@ -551,7 +551,7 @@ async def set_title(message: Message, state: FSMContext):
     await _del(message.bot, message.chat.id, message.message_id)
     await message.answer(
         f"<b>📊 QIYINLIK DARAJASI</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"Mavzu: <b>{message.text.strip()}</b>",
         reply_markup=difficulty_kb()
     )
@@ -569,7 +569,7 @@ async def set_diff(callback: CallbackQuery, state: FSMContext):
     b.row(InlineKeyboardButton(text="♾ Cheksiz", callback_data="tlim_0"))
     await callback.message.edit_text(
         "<b>⏱ UMUMIY VAQT LIMITI</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "Test uchun umumiy necha daqiqa?",
         reply_markup=b.as_markup()
     )
@@ -586,7 +586,7 @@ async def set_tlim(callback: CallbackQuery, state: FSMContext):
     b.adjust(3)
     await callback.message.edit_text(
         "<b>🎯 O'TISH FOIZI</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "Testdan o'tish uchun minimum foiz?",
         reply_markup=b.as_markup()
     )
@@ -617,7 +617,7 @@ async def set_att(callback: CallbackQuery, state: FSMContext):
     await state.update_data(max_attempts=int(callback.data[4:]))
     await callback.message.edit_text(
         "<b>🔒 TEST MAXFIYLIGI</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "🌍 <b>Ommaviy</b> — hamma ko'ra oladi\n"
         "🔗 <b>Ssilka</b> — faqat havola orqali\n"
         "🔒 <b>Shaxsiy</b> — faqat siz",
@@ -664,7 +664,7 @@ async def save_test(callback: CallbackQuery, state: FSMContext):
     qs   = td["questions"]
     keys = (
         f"🔑 <b>JAVOBLAR KALITI</b> — <code>{tid}</code>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
     )
     for i, q in enumerate(qs, 1):
         corr = q.get("correct", "?")
@@ -673,7 +673,7 @@ async def save_test(callback: CallbackQuery, state: FSMContext):
     # Test haqida to'liq ma'lumot + kalit + tugmalar
     info_text = (
         "🎉 <b>TEST MUVAFFAQIYATLI YARATILDI!</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"🆔 Kod: <code>{tid}</code>\n"
         f"🔗 Ssilka: <code>{link}</code>\n\n"
         f"📝 Mavzu: <b>{td['title']}</b>\n"
