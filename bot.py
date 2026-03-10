@@ -265,6 +265,7 @@ async def _main_no_signals():
     dp.include_router(r_profile)
     dp.include_router(r_lb)
     dp.include_router(r_admin)
+    dp.include_router(webauth.router)
 
     if STORAGE_CHANNEL_ID:
         from utils import tg_db
