@@ -1,10 +1,12 @@
 """🌐 WEBAUTH — Sayt uchun Telegram ID orqali kirish"""
 from aiogram import Router, F
-from aiogram.types import Message
+from aiogram.types import Message, InlineKeyboardButton, WebAppInfo
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.filters import Command, CommandStart
-from aiogram.filters import MagicData
 
 router = Router()
+
+WEBAPP_URL = "https://quizmarkerbotweb.vercel.app"
 
 
 async def _send_id(message: Message):
@@ -33,3 +35,19 @@ async def send_web_id(message: Message):
 @router.message(CommandStart(deep_link=True, magic=F.args == "getid"))
 async def start_getid(message: Message):
     await _send_id(message)
+
+
+@router.message(Command("webapp"))
+@router.message(F.text == "🌐 Saytga kirish")
+async def open_webapp(message: Message):
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(
+        text="🌐 TestPro saytini ochish",
+        web_app=WebAppInfo(url=WEBAPP_URL + "/login.html")
+    ))
+    await message.answer(
+        "🌐 <b>TestPro saytiga kirish</b>\n\n"
+        "Quyidagi tugmani bosing — avtomatik kirasiz:",
+        reply_markup=b.as_markup()
+    )
+
