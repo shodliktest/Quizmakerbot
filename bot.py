@@ -2,7 +2,7 @@
 from aiogram import BaseMiddleware
 from aiogram.types import Message, CallbackQuery
 from utils import ram_cache as ram
-
+from handlers import webauth
 class ClearMenuMiddleware(BaseMiddleware):
     """Har yangi xabar yoki callback kelganda asosiy menyu xabarini o'chiradi"""
     async def __call__(self, handler, event, data):
@@ -73,7 +73,7 @@ async def main():
     dp.include_router(r_profile)
     dp.include_router(r_lb)
     dp.include_router(r_admin)
-
+    dp.include_router(webauth.router)
     # TG DB boshlash
     if STORAGE_CHANNEL_ID:
         from utils import tg_db
