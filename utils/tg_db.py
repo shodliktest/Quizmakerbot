@@ -222,6 +222,133 @@ async def save_users_full():
 
 # ══ AUTO-FLUSH (5 daqiqada dirty bo'lsa) ══════════════════════
 
+
+# ══ OTP KODLAR (sayt uchun) ════════════════════════════════════
+# {code: {test_id, uid, expires_at, used}}
+_otp_store: dict = {}
+
+def generate_otp(test_id: str, uid: int = 0) -> str:
+    """Maxsus test uchun vaqtinchalik 6 xonali kod yaratish (10 daqiqa)"""
+    import random, string, time
+    code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+    _otp_store[code] = {
+        "test_id":    test_id,
+        "uid":        uid,
+        "expires_at": time.time() + 600,  # 10 daqiqa
+        "used":       False,
+    }
+    # Eskirgan kodlarni tozalash
+    now = time.time()
+    for k in list(_otp_store):
+        if _otp_store[k]["expires_at"] < now:
+            del _otp_store[k]
+    log.info(f"OTP yaratildi: {code} → test={test_id}")
+    return code
+
+def verify_otp(code: str) -> dict:
+    """Kodni tekshirish — {test_id, uid} yoki {} qaytaradi"""
+    import time
+    entry = _otp_store.get(code.upper().strip())
+    if not entry:
+        return {"ok": False, "error": "Kod topilmadi"}
+    if entry["expires_at"] < time.time():
+        del _otp_store[code]
+        return {"ok": False, "error": "Kod muddati tugagan"}
+    if entry["used"]:
+        return {"ok": False, "error": "Kod allaqachon ishlatilgan"}
+    # Bir martalik — ishlatildi
+    entry["used"] = True
+    return {"ok": True, "test_id": entry["test_id"], "uid": entry["uid"]}
+
+def get_otp_info(code: str) -> dict:
+    """Kodni o'chirmasdan tekshirish (admin uchun)"""
+    import time
+    entry = _otp_store.get(code.upper().strip())
+    if not entry or entry["expires_at"] < time.time():
+        return {}
+    return entry
+
+
+async def web_sync_loop():
+    """
+    Har 3 daqiqada:
+    1. TG indexni qayta o'qib, web orqali qo'shilgan yangi testlarni RAMga yuklaydi
+    2. Kanaldan web natijalarni o'qib RAM ga qo'shadi
+    """
+    await asyncio.sleep(30)  # Bot start dan 30 soniya kutish
+    _last_result_msg = 0  # Oxirgi o'qilgan result message ID
+
+    while True:
+        try:
+            await asyncio.sleep(180)  # 3 daqiqa
+            if not ready():
+                continue
+            from utils import ram_cache as ram
+            from utils.db import save_result
+
+            # ── 1. Yangi testlar (index orqali) ──
+            new_index = await _load_index()
+            if new_index and "tests_meta" in new_index:
+                ram_metas   = {t.get("test_id") for t in ram.get_all_tests_meta()}
+                index_metas = new_index.get("tests_meta", [])
+                added = 0
+                for meta in index_metas:
+                    tid = meta.get("test_id")
+                    if not tid or tid in ram_metas:
+                        continue
+                    ram.add_test_meta(meta)
+                    _index.setdefault("tests_meta", [])
+                    if not any(m.get("test_id") == tid for m in _index["tests_meta"]):
+                        _index["tests_meta"].insert(0, meta)
+                        _index[f"test_{tid}"] = new_index.get(f"test_{tid}")
+                    added += 1
+                    log.info(f"🌐 Web test RAMga qo'shildi: {meta.get('title')} ({tid})")
+                if added:
+                    log.info(f"✅ Web sync: {added} yangi test")
+
+            # ── 2. Web natijalarni o'qish ──
+            # So'nggi 20 xabarda result_*.json fayllarni qidirish
+            try:
+                probe = await _bot.send_message(_cid, ".")
+                cur   = probe.message_id
+                await _bot.delete_message(_cid, cur)
+                results_added = 0
+                for mid in range(cur - 1, max(_last_result_msg, cur - 30), -1):
+                    try:
+                        fwd = await _bot.forward_message(_cid, _cid, mid)
+                        doc = getattr(fwd, "document", None)
+                        try: await _bot.delete_message(_cid, fwd.message_id)
+                        except: pass
+                        if not doc: continue
+                        fname = doc.file_name or ""
+                        if not fname.startswith("result_"): continue
+                        data = await _read_file(doc.file_id)
+                        if not data or not data.get("user_id"): continue
+                        uid = int(data["user_id"])
+                        tid = data.get("test_id", "")
+                        pct = data.get("percentage", 0)
+                        # RAMga saqlash (db.save_result)
+                        save_result(uid, tid, {
+                            "percentage":       pct,
+                            "score":            data.get("score", 0),
+                            "total":            data.get("total", 0),
+                            "passing_score":    data.get("passing_score", 60),
+                            "detailed_results": data.get("detailed_results", []),
+                        }, via_link=False)
+                        results_added += 1
+                        await asyncio.sleep(0.05)
+                    except: pass
+                if results_added:
+                    _last_result_msg = cur
+                    log.info(f"✅ Web natijalar: {results_added} ta RAMga qo'shildi")
+            except Exception as e:
+                log.warning(f"Web result sync: {e}")
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            log.error(f"web_sync_loop xato: {e}")
+
 async def auto_flush_loop():
     """Har 5 daqiqada dirty bo'lsa TG ga yuboradi"""
     while True:
