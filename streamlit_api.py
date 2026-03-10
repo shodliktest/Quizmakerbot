@@ -33,17 +33,21 @@ try:
 except Exception as e:
     HAS_TG = False
 
-# ── Async wrapper ──
+# ── Async wrapper — Streamlit uchun ──
 def run_async(coro):
     import asyncio, concurrent.futures
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                return pool.submit(asyncio.run, coro).result(timeout=20)
-        return loop.run_until_complete(coro)
-    except Exception:
-        return asyncio.run(coro)
+
+    def _run():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(_run)
+        return future.result(timeout=25)
 
 # ── Bot init (bir marta) ──
 @st.cache_resource(show_spinner=False)
@@ -51,18 +55,27 @@ def init_bot():
     if not HAS_TG or not BOT_TOKEN:
         return False
     try:
-        import asyncio
-        from aiogram import Bot
         from config import STORAGE_CHANNEL_ID
-        bot = Bot(token=BOT_TOKEN)
-        asyncio.run(tg_db.init(bot, STORAGE_CHANNEL_ID))
-        tests = asyncio.run(tg_db.get_tests())
-        if tests:
-            ram.set_tests(tests)
-        users = asyncio.run(tg_db.get_users())
-        if users:
-            ram.set_users(users)
-        return True
+        from aiogram import Bot
+
+        def _init():
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                bot   = Bot(token=BOT_TOKEN)
+                loop.run_until_complete(tg_db.init(bot, STORAGE_CHANNEL_ID))
+                tests = loop.run_until_complete(tg_db.get_tests())
+                if tests: ram.set_tests(tests)
+                users = loop.run_until_complete(tg_db.get_users())
+                if users: ram.set_users(users)
+                return True
+            finally:
+                loop.close()
+
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(_init).result(timeout=30)
     except Exception as e:
         st.error(f"Bot init xato: {e}")
         return False
