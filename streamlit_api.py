@@ -275,10 +275,25 @@ def store_bytes():
 # JSON API javob
 # ════════════════════════════════════════════════════════════════
 def api_resp(data):
+    """
+    JSON javob — proxy.js uchun 3 xil usulda chiqaradi:
+    1. <script type="application/json" id="__api__"> — SSR da ishlaydi
+    2. <div id="api-raw"> — fallback
+    3. st.json() — dashboard da ko'rish uchun
+    """
     raw = json.dumps(data, ensure_ascii=False)
+    # 1. script tag — SSR safe, proxy regex bilan oladi
+    st.markdown(
+        f'<script type="application/json" id="__api__">{raw}</script>',
+        unsafe_allow_html=True
+    )
+    # 2. hidden div — fallback
+    st.markdown(
+        f'<div id="api-raw" style="display:none">{raw}</div>',
+        unsafe_allow_html=True
+    )
+    # 3. Visual viewer
     st.json(data)
-    st.markdown(f'<div id="api-raw" style="display:none">{raw}</div>',
-                unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════
 # Router
