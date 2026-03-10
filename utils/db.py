@@ -208,3 +208,34 @@ def get_leaderboard(limit=20):
     users = [u for u in get_all_users() if u.get("total_tests", 0) > 0]
     users.sort(key=lambda x: x.get("avg_score", 0), reverse=True)
     return users[:limit]
+
+
+# ══ WEB SYNC (tg_db.web_sync_loop uchun) ══════════════════════
+
+async def _sync_from_tg():
+    """
+    Web orqali qo'shilgan testlarni TG kanaldan RAMga yuklash.
+    tg_db.web_sync_loop() tomonidan chaqiriladi.
+    To'g'ridan tg_db funksiyalaridan foydalanadi.
+    """
+    from utils import tg_db
+    if not tg_db.ready():
+        return 0
+
+    try:
+        new_index = await tg_db._load_index()
+        if not new_index or "tests_meta" not in new_index:
+            return 0
+
+        ram_ids = {t.get("test_id") for t in ram.get_all_tests_meta()}
+        added = 0
+        for meta in new_index.get("tests_meta", []):
+            tid = meta.get("test_id")
+            if tid and tid not in ram_ids:
+                ram.add_test_meta(meta)
+                added += 1
+                log.info(f"_sync_from_tg: {tid} qo'shildi")
+        return added
+    except Exception as e:
+        log.error(f"_sync_from_tg xato: {e}")
+        return 0
