@@ -440,29 +440,29 @@ async def _run_inline_session(
 
         session["q_msg_id"] = msg.message_id
 
-        # ── Countdown timer ──
-        # Faqat quyidagi nuqtalarda edit: 1,3,6,9,10,15,20,25,30,35,...
-        # Flood bo'lmasin uchun — har soniyada EMAS
-        edit_points = set()
-        edit_points.update([1, 3, 6, 9])
-        t = 10
-        while t <= poll_time:
-            edit_points.add(t)
-            t += 5
-
-        for remaining in range(poll_time - 1, -1, -1):
-            await asyncio.sleep(1)
+        # ── Countdown timer (flood-safe) ──
+        # Checkpointlar: poll_time, ..., 10, 5, 2, 1
+        # Misol: 12s → [12, 5, 2, 1] | 30s → [30, 25, 20, 15, 10, 5, 2, 1]
+        five_steps = list(range(poll_time - 5, 10 - 1, -5))
+        checkpoints = [poll_time] + five_steps + [5, 2, 1]
+        seen = set(); clean = []
+        for c in checkpoints:
+            if 0 < c <= poll_time and c not in seen:
+                seen.add(c); clean.append(c)
+        checkpoints = sorted(clean, reverse=True)
+        # Birinchi nuqta (poll_time) allaqachon ko'rsatilgan — skip
+        prev = poll_time
+        for target in checkpoints[1:]:
+            sleep_for = prev - target
+            if sleep_for > 0:
+                await asyncio.sleep(sleep_for)
             if chat_id not in _inline_sessions:
                 return
             if _inline_sessions[chat_id].get("locked"):
                 break
-
-            if remaining not in edit_points:
-                continue
-
             try:
                 await bot.edit_message_text(
-                    text=_q_text(remaining),
+                    text=_q_text(target),
                     chat_id=chat_id,
                     message_id=msg.message_id,
                     parse_mode="HTML",
@@ -477,6 +477,9 @@ async def _run_inline_session(
                     wait = int(m.group(1)) + 1 if m else 10
                     log.warning(f"⏳ Timer flood — {wait}s")
                     await asyncio.sleep(wait)
+            prev = target
+        # Oxirgi 1 soniya kutib, vaqt tugadi
+        await asyncio.sleep(1)
 
         if chat_id not in _inline_sessions:
             return
