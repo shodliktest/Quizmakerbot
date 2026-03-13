@@ -309,6 +309,34 @@ async def start_inline_test(callback: CallbackQuery, state: FSMContext):
     if not qs:
         return await callback.answer("❌ Savollar yo'q.", show_alert=True)
 
+    import random, copy
+    qs = copy.deepcopy(qs)
+
+    # Savollarni aralashtirish (test sozlamasiga qarab)
+    if test.get("shuffle_questions", True):
+        random.shuffle(qs)
+
+    # Variantlarni aralashtirish (multiple_choice uchun)
+    for q in qs:
+        if q.get("type") in ("multiple_choice", "multiple", "multi_select"):
+            opts = q.get("options", [])
+            if len(opts) >= 2:
+                # To'g'ri javobni eslab qolamiz
+                corr_val = q.get("correct")
+                # corr string bo'lsa (bot format)
+                if isinstance(corr_val, str):
+                    corr_str = corr_val
+                    random.shuffle(opts)
+                    q["options"] = opts
+                    # To'g'ri javob stringini yangilaymiz (shuffle o'zgarishsiz)
+                    q["correct"] = corr_str
+                # corr int bo'lsa (web format)
+                elif isinstance(corr_val, int) and 0 <= corr_val < len(opts):
+                    corr_text = opts[corr_val]
+                    random.shuffle(opts)
+                    q["options"] = opts
+                    q["correct"] = opts.index(corr_text)
+
     await state.set_state(TestSolving.answering)
     await state.set_data({
         "test": test, "qs": qs, "idx": 0, "ans": {},
@@ -441,23 +469,21 @@ def _build_question_content(qs, idx, time_left=None):
 
 
 async def _question_timeout(bot, cid, state, uid, expected_idx, wait_sec):
-    """Javobsiz QUESTION_SEC soniya o'tsa — har 5s timer yangilab, 0 da timeout"""
+    """Javobsiz QUESTION_SEC soniya o'tsa — smart timer (flood safe):
+    - > 5s qolsa: har 5s da bir update
+    - <= 5s qolsa: faqat 5, 2, 1 sekundlarda update (jami 3 ta edit)
+    """
     try:
-        tick   = 5
         elapsed = 0
-        while elapsed < wait_sec:
-            await asyncio.sleep(tick)
-            elapsed += tick
-            cur = await state.get_state()
-            if cur not in (TestSolving.answering.state, TestSolving.text_answer.state): return
+
+        async def _try_update(remaining):
+            """Timerli xabarni yangilash"""
             d = await state.get_data()
-            if d.get("idx") != expected_idx: return
-            if d.get("answered_this"): return
-            # Timer yangilash (flood safe — har 5s)
-            remaining = max(0, wait_sec - elapsed)
-            msg_id_t  = d.get("q_msg_id")
-            qs_t      = d.get("qs", [])
-            if msg_id_t and elapsed < wait_sec:
+            if d.get("idx") != expected_idx: return False
+            if d.get("answered_this"): return False
+            msg_id_t = d.get("q_msg_id")
+            qs_t     = d.get("qs", [])
+            if msg_id_t:
                 try:
                     t2, kb2, _ = _build_question_content(qs_t, expected_idx, time_left=remaining)
                     await bot.edit_message_text(chat_id=cid, message_id=msg_id_t,
@@ -466,6 +492,36 @@ async def _question_timeout(bot, cid, state, uid, expected_idx, wait_sec):
                     pass
                 except Exception:
                     pass
+            return True
+
+        # > 5s qolgan qismda har 5s da bir update
+        while (wait_sec - elapsed) > 5:
+            await asyncio.sleep(5)
+            elapsed += 5
+            cur = await state.get_state()
+            if cur not in (TestSolving.answering.state, TestSolving.text_answer.state): return
+            d = await state.get_data()
+            if d.get("idx") != expected_idx: return
+            if d.get("answered_this"): return
+            remaining = max(0, wait_sec - elapsed)
+            await _try_update(remaining)
+
+        # <= 5s qoldi — faqat 5, 2, 1 sekundlarda update
+        remaining_now = max(0.0, wait_sec - elapsed)
+        for target in [5, 2, 1]:
+            if target > remaining_now + 0.1:
+                continue  # Bu nuqta allaqachon o'tib ketgan
+            sleep_for = remaining_now - target
+            if sleep_for > 0:
+                await asyncio.sleep(sleep_for)
+                remaining_now = target
+            cur = await state.get_state()
+            if cur not in (TestSolving.answering.state, TestSolving.text_answer.state): return
+            ok = await _try_update(target)
+            if not ok: return
+
+        # Oxirgi 1 soniya kutib, timeout
+        await asyncio.sleep(1)
 
         cur = await state.get_state()
         if cur not in (TestSolving.answering.state, TestSolving.text_answer.state): return
