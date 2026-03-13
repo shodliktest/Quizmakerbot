@@ -24,6 +24,35 @@ QUESTION_SEC    = 30   # Savol chiqgandan so'ng javobsiz kutish
 _CIRCLE = {"A":"🅐","B":"🅑","C":"🅒","D":"🅓","E":"🅔","F":"🅕","G":"🅖","H":"🅗"}
 def _cl(l): return _CIRCLE.get(str(l).upper(), f"[{str(l).upper()}]")
 
+
+def _shuffle_options(qs):
+    """Variantlarni aralashtiradi, label qayta tartiblanadi (A B C D o'z joyida)."""
+    import re as _re
+    LABELS = ["A","B","C","D","E","F","G","H"]
+    def strip_lbl(o):
+        return _re.sub(r"^[A-Ha-h]\s*[).:]\s*", "", str(o)).strip()
+    for q in qs:
+        if q.get("type") not in ("multiple_choice", "multiple", "multi_select"):
+            continue
+        opts = q.get("options", [])
+        if len(opts) < 2:
+            continue
+        pure     = [strip_lbl(o) for o in opts]
+        corr_val = q.get("correct")
+        if isinstance(corr_val, int) and 0 <= corr_val < len(pure):
+            corr_text = pure[corr_val]
+        elif isinstance(corr_val, str):
+            corr_text = strip_lbl(corr_val)
+        else:
+            corr_text = None
+        import random
+        random.shuffle(pure)
+        q["options"] = [f"{LABELS[i]}) {t}" for i, t in enumerate(pure)]
+        if corr_text is not None:
+            new_idx = next((i for i,t in enumerate(pure) if t == corr_text), 0)
+            q["correct"] = f"{LABELS[new_idx]}) {corr_text}"
+
+
 def _timer_bar(remaining, total_sec, width=15):
     """●●●○○ — kamayib boradi"""
     if total_sec <= 0: return "○" * width
@@ -316,26 +345,7 @@ async def start_inline_test(callback: CallbackQuery, state: FSMContext):
     if test.get("shuffle_questions", True):
         random.shuffle(qs)
 
-    # Variantlarni aralashtirish (multiple_choice uchun)
-    for q in qs:
-        if q.get("type") in ("multiple_choice", "multiple", "multi_select"):
-            opts = q.get("options", [])
-            if len(opts) >= 2:
-                # To'g'ri javobni eslab qolamiz
-                corr_val = q.get("correct")
-                # corr string bo'lsa (bot format)
-                if isinstance(corr_val, str):
-                    corr_str = corr_val
-                    random.shuffle(opts)
-                    q["options"] = opts
-                    # To'g'ri javob stringini yangilaymiz (shuffle o'zgarishsiz)
-                    q["correct"] = corr_str
-                # corr int bo'lsa (web format)
-                elif isinstance(corr_val, int) and 0 <= corr_val < len(opts):
-                    corr_text = opts[corr_val]
-                    random.shuffle(opts)
-                    q["options"] = opts
-                    q["correct"] = opts.index(corr_text)
+    _shuffle_options(qs)
 
     await state.set_state(TestSolving.answering)
     await state.set_data({
@@ -469,15 +479,13 @@ def _build_question_content(qs, idx, time_left=None):
 
 
 async def _question_timeout(bot, cid, state, uid, expected_idx, wait_sec):
-    """Javobsiz QUESTION_SEC soniya o'tsa — smart timer (flood safe):
-    - > 5s qolsa: har 5s da bir update
-    - <= 5s qolsa: faqat 5, 2, 1 sekundlarda update (jami 3 ta edit)
+    """Flood-safe smart timer.
+    Har 5s yangilaydi, oxirida: ...5s, 2s, 1s ko'rsatadi.
+    Misol: 12s → update @ 12, 5, 2, 1 (boshlanganda + 3 ta edit)
+           30s → update @ 25, 20, 15, 10, 5, 2, 1
     """
     try:
-        elapsed = 0
-
         async def _try_update(remaining):
-            """Timerli xabarni yangilash"""
             d = await state.get_data()
             if d.get("idx") != expected_idx: return False
             if d.get("answered_this"): return False
@@ -494,31 +502,39 @@ async def _question_timeout(bot, cid, state, uid, expected_idx, wait_sec):
                     pass
             return True
 
-        # > 5s qolgan qismda har 5s da bir update
-        while (wait_sec - elapsed) > 5:
-            await asyncio.sleep(5)
-            elapsed += 5
+        async def _check_alive():
             cur = await state.get_state()
-            if cur not in (TestSolving.answering.state, TestSolving.text_answer.state): return
+            if cur not in (TestSolving.answering.state, TestSolving.text_answer.state):
+                return False
             d = await state.get_data()
-            if d.get("idx") != expected_idx: return
-            if d.get("answered_this"): return
-            remaining = max(0, wait_sec - elapsed)
-            await _try_update(remaining)
+            return d.get("idx") == expected_idx and not d.get("answered_this")
 
-        # <= 5s qoldi — faqat 5, 2, 1 sekundlarda update
-        remaining_now = max(0.0, wait_sec - elapsed)
-        for target in [5, 2, 1]:
-            if target > remaining_now + 0.1:
-                continue  # Bu nuqta allaqachon o'tib ketgan
-            sleep_for = remaining_now - target
+        # Update nuqtalarini dinamik hisoblash:
+        # wait_sec boshida ko'rsatiladi, keyin faqat 5, 2, 1
+        # Misol: 12 → [12, 5, 2, 1], 30 → [30, 25, 20, 15, 10, 5, 2, 1]
+        # Checkpointlar: wait_sec, keyin har 5s, oxirida 5→2→1
+        # 12s → [12, 5, 2, 1]  |  30s → [30, 25, 20, 15, 10, 5, 2, 1]
+        five_steps = list(range(wait_sec - 5, 10 - 1, -5))  # faqat >5 bo'lgan nuqtalar
+        checkpoints = [wait_sec] + five_steps + [5, 2, 1]
+        # Tozalash: takror, <=0, wait_sec dan katta olib tashlanadi
+        seen = set()
+        clean = []
+        for c in checkpoints:
+            if 0 < c <= wait_sec and c not in seen:
+                seen.add(c)
+                clean.append(c)
+        checkpoints = sorted(clean, reverse=True)
+
+        # Birinchi nuqta — wait_sec o'zi (savol chiqqanda ko'rsatiladi)
+        # Shuning uchun birinchi checkpointni skip qilamiz (allaqachon ko'rsatilgan)
+        prev = wait_sec
+        for target in checkpoints[1:]:  # wait_sec ni o'tkazib yuboramiz
+            sleep_for = prev - target
             if sleep_for > 0:
                 await asyncio.sleep(sleep_for)
-                remaining_now = target
-            cur = await state.get_state()
-            if cur not in (TestSolving.answering.state, TestSolving.text_answer.state): return
-            ok = await _try_update(target)
-            if not ok: return
+            if not await _check_alive(): return
+            await _try_update(target)
+            prev = target
 
         # Oxirgi 1 soniya kutib, timeout
         await asyncio.sleep(1)

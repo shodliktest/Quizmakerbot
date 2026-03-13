@@ -31,6 +31,35 @@ from utils.db import get_test_full, save_result
 from utils.scoring import calculate_score
 
 log    = logging.getLogger(__name__)
+
+def _shuffle_options(qs):
+    """Variantlarni aralashtiradi, label qayta tartiblanadi (A B C D o'z joyida)."""
+    import re as _re, random
+    LABELS = ["A","B","C","D","E","F","G","H"]
+    def strip_lbl(o):
+        return _re.sub(r"^[A-Ha-h]\s*[).:]\s*", "", str(o)).strip()
+    for q in qs:
+        if q.get("type") not in ("multiple_choice", "multiple", "multi_select"):
+            continue
+        opts = q.get("options", [])
+        if len(opts) < 2:
+            continue
+        pure     = [strip_lbl(o) for o in opts]
+        corr_val = q.get("correct")
+        if isinstance(corr_val, int) and 0 <= corr_val < len(pure):
+            corr_text = pure[corr_val]
+        elif isinstance(corr_val, str):
+            corr_text = strip_lbl(corr_val)
+        else:
+            corr_text = None
+        random.shuffle(pure)
+        q["options"] = [f"{LABELS[i]}) {t}" for i, t in enumerate(pure)]
+        if corr_text is not None:
+            new_idx = next((i for i,t in enumerate(pure) if t == corr_text), 0)
+            q["correct"] = f"{LABELS[new_idx]}) {corr_text}"
+
+
+
 router = Router()
 
 LETTERS      = ["A","B","C","D","E","F","G","H","I","J"]
@@ -146,6 +175,13 @@ async def group_start_poll(callback: CallbackQuery):
         )
 
     poll_time = test.get("poll_time", 30) or 30
+
+    import random, copy
+    qs = copy.deepcopy(qs)
+    if test.get("shuffle_questions", True):
+        random.shuffle(qs)
+    _shuffle_options(qs)
+
     _group_sessions[chat_id] = {
         "tid": tid, "test": test, "questions": qs,
         "answers": {}, "names": {}, "poll_map": {},
@@ -303,6 +339,12 @@ async def group_start_inline(callback: CallbackQuery):
     qs = test.get("questions", [])
     if not qs:
         return await callback.answer("⚠️ Bu testda savollar yo'q!", show_alert=True)
+
+    import random, copy
+    qs = copy.deepcopy(qs)
+    if test.get("shuffle_questions", True):
+        random.shuffle(qs)
+    _shuffle_options(qs)
 
     poll_time     = test.get("poll_time", 30) or 30
     passing_score = float(test.get("passing_score", 60))
@@ -1040,6 +1082,12 @@ async def _start_group_test(bot, chat_id: int, uid: int, tid: str, mode: str):
         if not qs:
             return await bot.send_message(chat_id, "⚠️ Bu testda savollar yo\'q!")
 
+        import random, copy
+        qs = copy.deepcopy(qs)
+        if test.get("shuffle_questions", True):
+            random.shuffle(qs)
+        _shuffle_options(qs)
+
         _inline_sessions[chat_id] = {
             "tid": tid, "test": test, "questions": qs,
             "answers": {}, "names": {}, "host_id": uid,
@@ -1076,6 +1124,13 @@ async def _start_group_test(bot, chat_id: int, uid: int, tid: str, mode: str):
             return await bot.send_message(chat_id, "⚠️ Bu testda poll uchun savollar yo\'q!")
 
         poll_time = test.get("poll_time", 30) or 30
+
+        import random, copy
+        qs = copy.deepcopy(qs)
+        if test.get("shuffle_questions", True):
+            random.shuffle(qs)
+        _shuffle_options(qs)
+
         _group_sessions[chat_id] = {
             "tid": tid, "test": test, "questions": qs,
             "answers": {}, "names": {}, "poll_map": {},
