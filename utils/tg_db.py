@@ -297,12 +297,17 @@ async def web_sync_loop():
                     if not tid or tid in ram_metas:
                         continue
                     ram.add_test_meta(meta)
+                    # _index ga test_{tid} message_id ni ham saqlash (lazy load uchun)
                     _index.setdefault("tests_meta", [])
                     if not any(m.get("test_id") == tid for m in _index["tests_meta"]):
                         _index["tests_meta"].insert(0, meta)
-                        _index[f"test_{tid}"] = new_index.get(f"test_{tid}")
+                    msg_id = new_index.get(f"test_{tid}")
+                    if msg_id:
+                        _index[f"test_{tid}"] = msg_id
+                        log.info(f"🌐 Web test RAMga qo'shildi: {meta.get('title')} ({tid}) msg={msg_id}")
+                    else:
+                        log.warning(f"⚠️ Web test {tid} uchun msg_id topilmadi — lazy load ishlamaydi")
                     added += 1
-                    log.info(f"🌐 Web test RAMga qo'shildi: {meta.get('title')} ({tid})")
                 if added:
                     log.info(f"✅ Web sync: {added} yangi test")
 
