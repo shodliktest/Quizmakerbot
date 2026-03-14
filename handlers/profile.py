@@ -11,7 +11,7 @@ from utils.db import (get_user, get_my_tests, get_user_results,
                       get_analysis, get_test_full, get_test_stats_for_user,
                       pause_test, get_test_solvers)
 from utils.ram_cache import get_test_by_id, get_test_meta
-from keyboards.keyboards import (main_kb, analysis_kb, mytest_settings_kb, CAT_ICONS)
+from keyboards.keyboards import main_kb, analysis_kb, mytest_settings_kb, CAT_ICONS, get_cat_icon
 
 log = logging.getLogger(__name__)
 router = Router()
@@ -299,7 +299,7 @@ async def _show_mytest_cats(msg, uid, edit=False):
     )
     b = InlineKeyboardBuilder()
     for cat, cnt in sorted_cats:
-        icon  = CAT_ICONS.get(cat,"📋")
+        icon  = get_cat_icon(cat)
         text += f"{icon} <b>{cat}</b> — {cnt} ta\n"
         b.row(InlineKeyboardButton(
             text=f"{icon} {cat} — {cnt} ta",

@@ -192,6 +192,7 @@ async def _send_help(msg, edit=False):
 
 
 async def _send_test_card(event, test, tid, viewer_uid=None, edit=False):
+    from keyboards.keyboards import get_cat_icon
     meta     = get_test_meta(tid) or test
     qc       = len(test.get("questions",[])) or meta.get("question_count",0)
     diff     = {"easy":"🟢 Oson","medium":"🟡 O'rtacha",
@@ -201,12 +202,15 @@ async def _send_test_card(event, test, tid, viewer_uid=None, edit=False):
                 "private":"🔒 Shaxsiy"}.get(meta.get("visibility",""),"")
     pause_t  = "⚠️ <b>Vaqtincha to'xtatilgan!</b>\n\n" if meta.get("is_paused") else ""
 
+    cat      = meta.get("category","")
+    cat_icon = get_cat_icon(cat)
+
     text = (
         f"📋 <b>TEST MA'LUMOTI</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"{pause_t}"
         f"📝 <b>{meta.get('title','Nomsiz')}</b>\n"
-        f"📁 Fan: {meta.get('category','')}\n"
+        f"{cat_icon} Fan: {cat}\n"
         f"📊 Qiyinlik: {diff}\n"
         f"🔒 Ko'rinish: {vis}\n"
         f"📋 Savollar: <b>{qc} ta</b>\n"

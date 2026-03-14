@@ -12,7 +12,7 @@ from aiogram.exceptions import TelegramBadRequest
 from config import ADMIN_IDS
 from utils import ram_cache as ram
 from utils.db import get_all_users, get_all_tests, block_user
-from keyboards.keyboards import admin_kb, main_kb, CAT_ICONS
+from keyboards.keyboards import admin_kb, main_kb, CAT_ICONS, get_cat_icon
 from utils.states import AdminPanel
 
 log    = logging.getLogger(__name__)
@@ -223,7 +223,7 @@ async def _show_admin_test_cats(msg, edit=False):
     )
     b = InlineKeyboardBuilder()
     for cat, info in sorted_cats:
-        icon  = CAT_ICONS.get(cat, "📋")
+        icon  = get_cat_icon(cat)
         parts = []
         if info["active"]:  parts.append(f"✅{info['active']}")
         if info["paused"]:  parts.append(f"⏸{info['paused']}")

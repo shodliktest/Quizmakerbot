@@ -11,7 +11,7 @@ from aiogram.filters import StateFilter
 from utils.db import get_all_tests, get_test_full, save_result
 from utils.ram_cache import get_test_by_id, is_test_paused, get_test_meta
 from utils.states import TestSolving
-from keyboards.keyboards import main_kb, inline_pause_kb, CAT_ICONS
+from keyboards.keyboards import main_kb, inline_pause_kb, CAT_ICONS, get_cat_icon
 
 log    = logging.getLogger(__name__)
 router = Router()
@@ -23,6 +23,42 @@ QUESTION_SEC    = 30   # Savol chiqgandan so'ng javobsiz kutish
 
 _CIRCLE = {"A":"🅐","B":"🅑","C":"🅒","D":"🅓","E":"🅔","F":"🅕","G":"🅖","H":"🅗"}
 def _cl(l): return _CIRCLE.get(str(l).upper(), f"[{str(l).upper()}]")
+
+def esc_text(s): return str(s).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
+
+
+# ── Majburiy to'xtatib yangi test boshlash ────────────────────
+@router.callback_query(F.data.startswith("force_start_test_"))
+async def force_start_test(callback: CallbackQuery, state: FSMContext):
+    """Joriy testni to'xtatib, yangi testni boshlaydi — faqat o'sha user yoki admin."""
+    from config import ADMIN_IDS
+    uid = callback.from_user.id
+    d   = await state.get_data()
+
+    # Faqat boshlagan user yoki admin
+    if uid != d.get("uid", uid) and uid not in ADMIN_IDS:
+        return await callback.answer("🚫 Faqat siz boshlagan testni to'xtata olasiz!", show_alert=True)
+
+    await callback.answer("⏹ Joriy test to'xtatildi")
+    _cancel_timer(uid)
+    await state.clear()
+
+    # Yangi testni boshlash
+    tid = callback.data[len("force_start_test_"):]
+    try:
+        await callback.message.edit_text("⏹ <b>Joriy test to'xtatildi.</b>")
+    except Exception: pass
+
+    # start_inline_test ni chaqiramiz — endi aktiv test yo'q
+    fake_cb = type('FakeCB', (), {
+        'data': f"start_test_{tid}",
+        'from_user': callback.from_user,
+        'message': callback.message,
+        'bot': callback.bot,
+        'answer': callback.answer,
+    })()
+    # Oddiy yo'l: to'g'ridan yuklab boshlaymiz
+    await _begin_inline_test(callback.bot, callback.message, state, uid, tid)
 
 
 def _shuffle_options(qs):
@@ -182,7 +218,7 @@ async def _show_categories(msg, uid, edit=False):
     )
     b = InlineKeyboardBuilder()
     for cat, info in sorted_cats:
-        icon = CAT_ICONS.get(cat, "📋")
+        icon = get_cat_icon(cat)
         prog = f" ✅{info['solved']}/{info['count']}" if info['solved'] else f" — {info['count']} ta"
         text += f"{icon} <b>{cat}</b>{prog}\n"
         b.row(InlineKeyboardButton(
@@ -321,12 +357,43 @@ async def start_inline_test(callback: CallbackQuery, state: FSMContext):
     uid = callback.from_user.id
     cid = callback.message.chat.id if callback.message else uid
 
-    # Avvalgi testni to'xtatish
+    # ── Aktiv test tekshiruvi ─────────────────────────────────
     cur = await state.get_state()
-    if cur in (TestSolving.answering.state, TestSolving.text_answer.state,
-               TestSolving.paused.state):
-        _cancel_timer(uid)
-        await state.clear()
+    active_states = (
+        TestSolving.answering.state,
+        TestSolving.text_answer.state,
+        TestSolving.paused.state,
+    )
+    if cur in active_states:
+        d = await state.get_data()
+        active_tid  = d.get("test", {}).get("test_id", "")
+        active_name = d.get("test", {}).get("title", "Joriy test")
+        active_idx  = d.get("idx", 0)
+        active_total= len(d.get("qs", []))
+
+        # Faqat boshlagan user yoki admin to'xtata oladi
+        from config import ADMIN_IDS
+        can_stop = (uid == d.get("uid", uid)) or (uid in ADMIN_IDS)
+
+        b = InlineKeyboardBuilder()
+        if can_stop:
+            b.row(InlineKeyboardButton(
+                text="⏹ Joriy testni to'xtatib, yangisini boshlash",
+                callback_data=f"force_start_test_{tid}"
+            ))
+        b.row(InlineKeyboardButton(
+            text="▶️ Joriy testni davom ettirish",
+            callback_data="noop"
+        ))
+        await callback.message.answer(
+            f"⚠️ <b>Siz hozir test yechyapsiz!</b>\n\n"
+            f"📝 <b>{esc_text(active_name)}</b>\n"
+            f"📊 Savol: {active_idx}/{active_total}\n\n"
+            f"{'Yangi test boshlash uchun avval joriy testni to\'xtating.' if can_stop else 'Faqat siz boshlagan test to\'xtatilishi mumkin.'}",
+            reply_markup=b.as_markup()
+        )
+        return
+    # ──────────────────────────────────────────────────────────
 
     test = get_test_by_id(tid)
     if not test or not test.get("questions"):
@@ -334,17 +401,33 @@ async def start_inline_test(callback: CallbackQuery, state: FSMContext):
     if not test:
         return await callback.answer("❌ Test topilmadi.", show_alert=True)
 
+    await _begin_inline_test(callback.bot, callback.message, state, uid, tid, test)
+
+
+async def _begin_inline_test(bot, msg, state, uid, tid, test=None):
+    """Inline testni boshlash — state allaqachon tozalangan bo'lishi kerak."""
+    from utils.db import get_test_full as _gtf
+    import random, copy
+
+    cid = msg.chat.id if msg and msg.chat else uid
+
+    if test is None:
+        test = get_test_by_id(tid)
+        if not test or not test.get("questions"):
+            test = await _gtf(tid)
+    if not test:
+        try: await bot.send_message(cid, "❌ Test topilmadi.")
+        except: pass
+        return
+
     qs = test.get("questions", [])
     if not qs:
-        return await callback.answer("❌ Savollar yo'q.", show_alert=True)
+        try: await bot.send_message(cid, "❌ Savollar yo'q.")
+        except: pass
+        return
 
-    import random, copy
     qs = copy.deepcopy(qs)
-
-    # Savollarni aralashtirish (test sozlamasiga qarab)
-    if test.get("shuffle_questions", True):
-        random.shuffle(qs)
-
+    random.shuffle(qs)
     _shuffle_options(qs)
 
     await state.set_state(TestSolving.answering)
@@ -354,9 +437,7 @@ async def start_inline_test(callback: CallbackQuery, state: FSMContext):
         "via_link": test.get("visibility") == "link",
         "no_ans_streak": 0, "q_msg_id": None,
     })
-
-    # Test kartochkasini o'chirmasdan, YANGI xabar sifatida birinchi savol
-    await _send_question_new(callback.bot, cid, state, uid)
+    await _send_question_new(bot, cid, state, uid)
 
 
 async def _send_question_new(bot, cid, state, uid):
@@ -901,14 +982,21 @@ async def resume_inline(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "cancel_test")
 async def cancel_test_cb(callback: CallbackQuery, state: FSMContext):
+    from config import ADMIN_IDS
     uid = callback.from_user.id
+    d   = await state.get_data()
+
+    # Faqat boshlagan user yoki admin
+    if uid != d.get("uid", uid) and uid not in ADMIN_IDS:
+        return await callback.answer("🚫 Faqat siz boshlagan testni to'xtata olasiz!", show_alert=True)
+
     _cancel_timer(uid)
     await state.clear()
     await callback.answer("❌ To'xtatildi")
     try:
         await callback.message.edit_text("❌ <b>Test to'xtatildi.</b>")
     except TelegramBadRequest: pass
-    await callback.bot.send_message(uid, "🏠 Asosiy menyu:", reply_markup=main_kb(uid))
+    await callback.bot.send_message(uid, "🏠 Asosiy menyu:", reply_markup=main_kb(uid, "private"))
 
 
 # ── Yakunlash ─────────────────────────────────────────────────
