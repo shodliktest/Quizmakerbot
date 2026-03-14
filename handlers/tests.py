@@ -35,7 +35,6 @@ async def force_start_test(callback: CallbackQuery, state: FSMContext):
     uid = callback.from_user.id
     d   = await state.get_data()
 
-    # Faqat boshlagan user yoki admin
     if uid != d.get("uid", uid) and uid not in ADMIN_IDS:
         return await callback.answer("🚫 Faqat siz boshlagan testni to'xtata olasiz!", show_alert=True)
 
@@ -43,21 +42,11 @@ async def force_start_test(callback: CallbackQuery, state: FSMContext):
     _cancel_timer(uid)
     await state.clear()
 
-    # Yangi testni boshlash
     tid = callback.data[len("force_start_test_"):]
     try:
         await callback.message.edit_text("⏹ <b>Joriy test to'xtatildi.</b>")
     except Exception: pass
 
-    # start_inline_test ni chaqiramiz — endi aktiv test yo'q
-    fake_cb = type('FakeCB', (), {
-        'data': f"start_test_{tid}",
-        'from_user': callback.from_user,
-        'message': callback.message,
-        'bot': callback.bot,
-        'answer': callback.answer,
-    })()
-    # Oddiy yo'l: to'g'ridan yuklab boshlaymiz
     await _begin_inline_test(callback.bot, callback.message, state, uid, tid)
 
 
