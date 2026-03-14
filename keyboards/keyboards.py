@@ -6,21 +6,81 @@ from config import SUBJECTS
 
 COLORS = ["🔵","🟣","🟢","🔴","🟡","🟠","⚪","⚫","🔷","🔶"]
 CAT_ICONS = {
-    "Matematika":"📐","Fizika":"⚛️","Kimyo":"🧪","Biologiya":"🌱",
-    "Tarix":"📜","Geografiya":"🌍","Ingliz tili":"🇬🇧","Rus tili":"🇷🇺",
-    "Ona tili":"📖","Informatika":"💻","Adabiyot":"📚","Huquq":"⚖️",
-    "Iqtisodiyot":"📈","Boshqa":"📋",
+    # O'zbekcha nomlar (botda yaratilgan testlar)
+    "Matematika":   "🧮",
+    "Fizika":       "⚡",
+    "Kimyo":        "⚗️",
+    "Biologiya":    "🧬",
+    "Tarix":        "🏛️",
+    "Geografiya":   "🌍",
+    "Ingliz tili":  "🇬🇧",
+    "Rus tili":     "🇷🇺",
+    "Ona tili":     "🇺🇿",
+    "Informatika":  "💻",
+    "Adabiyot":     "✍️",
+    "Huquq":        "⚖️",
+    "Iqtisodiyot":  "📈",
+    "Sport":        "⚽",
+    "Din":          "📖",
+    "Boshqa":       "📚",
+
+    # Inglizcha kalitlar (saytdan yaratilgan testlar)
+    "english":      "🇬🇧",
+    "russian":      "🇷🇺",
+    "uzbek":        "🇺🇿",
+    "arabic":       "🕌",
+    "turkish":      "🇹🇷",
+    "korean":       "🇰🇷",
+    "german":       "🇩🇪",
+    "french":       "🇫🇷",
+    "chinese":      "🇨🇳",
+    "math":         "🧮",
+    "mathematics":  "🧮",
+    "physics":      "⚡",
+    "chemistry":    "⚗️",
+    "biology":      "🧬",
+    "history":      "🏛️",
+    "geography":    "🌍",
+    "it":           "💻",
+    "informatika":  "💻",
+    "literature":   "✍️",
+    "science":      "🔬",
+    "religion":     "📖",
+    "sport":        "⚽",
+    "economics":    "📈",
+    "law":          "⚖️",
+    "other":        "📚",
 }
+
+
+def get_cat_icon(category: str) -> str:
+    """
+    Kategoriya nomiga mos emoji qaytaradi.
+    O'zbekcha yoki inglizcha, katta-kichik harfdan qat'i nazar.
+    Topilmasa — 📚
+    """
+    if not category:
+        return "📚"
+    # To'g'ridan qidirish
+    icon = CAT_ICONS.get(category)
+    if icon:
+        return icon
+    # Kichik harf bilan
+    low = category.lower().strip()
+    icon = CAT_ICONS.get(low)
+    if icon:
+        return icon
+    # Qisman moslik (masalan "Ingliz tili (B2)" → "Ingliz tili")
+    for key, val in CAT_ICONS.items():
+        if key.lower() in low or low in key.lower():
+            return val
+    return "📚"
 DIFFICULTY_LEVELS = {
     "easy":"🟢 Oson","medium":"🟡 O'rtacha","hard":"🔴 Qiyin","expert":"⚡ Ekspert",
 }
 
 def main_kb(uid=None, chat_type="private"):
-    """
-    Private chat: to'liq reply keyboard menyu.
-    Guruh/kanal: ReplyKeyboardRemove — menyu ko'rinmaydi.
-    """
-    if chat_type not in ("private",):
+    if chat_type != "private":
         return ReplyKeyboardRemove()
     kb = [
         [KeyboardButton(text="📚 Testlar"),         KeyboardButton(text="➕ Test Yaratish")],
@@ -32,7 +92,7 @@ def main_kb(uid=None, chat_type="private"):
         from config import ADMIN_IDS
         if uid in ADMIN_IDS:
             kb.append([KeyboardButton(text="👑 Admin Panel")])
-    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True, persistent=True)
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 
 # ── Test kartochkasi (katalogda) ──────────────────────────────
