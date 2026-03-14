@@ -16,7 +16,11 @@ DIFFICULTY_LEVELS = {
 }
 
 def main_kb(uid=None, chat_type="private"):
-    if chat_type != "private":
+    """
+    Private chat: to'liq reply keyboard menyu.
+    Guruh/kanal: ReplyKeyboardRemove — menyu ko'rinmaydi.
+    """
+    if chat_type not in ("private",):
         return ReplyKeyboardRemove()
     kb = [
         [KeyboardButton(text="📚 Testlar"),         KeyboardButton(text="➕ Test Yaratish")],
@@ -28,7 +32,7 @@ def main_kb(uid=None, chat_type="private"):
         from config import ADMIN_IDS
         if uid in ADMIN_IDS:
             kb.append([KeyboardButton(text="👑 Admin Panel")])
-    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True, persistent=True)
 
 
 # ── Test kartochkasi (katalogda) ──────────────────────────────
