@@ -107,12 +107,22 @@ async def start_poll(callback: CallbackQuery, state: FSMContext):
 
     LABELS = ["A","B","C","D","E","F","G","H"]
     def _strip(o): return _re.sub(r"^[A-Ha-h]\s*[).:]\s*", "", str(o)).strip()
+
     for q in all_qs:
         if q.get("type") not in ("multiple_choice", "multiple", "multi_select"):
             continue
         opts = q.get("options", [])
         if len(opts) < 2: continue
+
         pure = [_strip(o) for o in opts]
+
+        # Savol matni bilan aynan bir xil variant bo'lsa olib tashlash
+        q_text = _strip(q.get("question", q.get("text", ""))).strip()
+        if q_text:
+            pure = [o for o in pure if o.strip().lower() != q_text.lower()]
+
+        if len(pure) < 2: continue
+
         corr = q.get("correct")
         corr_text = pure[corr] if isinstance(corr, int) and 0 <= corr < len(pure) else (
             _strip(corr) if isinstance(corr, str) else None
