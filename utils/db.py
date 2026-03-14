@@ -63,6 +63,7 @@ async def get_test_full(tid):
     To'liq test (savollar bilan):
     1. 12 soat RAM cache
     2. TG kanaldan yuklab oladi + cache qiladi
+    3. Web testlar uchun index qayta tekshiriladi
     """
     cached = ram.get_cached_questions(tid)
     if cached:
@@ -73,6 +74,8 @@ async def get_test_full(tid):
         if full and full.get("questions"):
             ram.cache_questions(tid, full)
             return full
+        else:
+            log.warning(f"get_test_full: {tid} uchun savollar topilmadi (web test bo'lishi mumkin, 60s kuting)")
     # Meta bor bo'lsa qaytaramiz (savollarsiz)
     meta = ram.get_test_meta(tid)
     return meta if meta else {}

@@ -271,16 +271,18 @@ def get_otp_info(code: str) -> dict:
 
 async def web_sync_loop():
     """
-    Har 3 daqiqada:
+    Har 60 soniyada:
     1. TG indexni qayta o'qib, web orqali qo'shilgan yangi testlarni RAMga yuklaydi
+       - Meta + msg_id ikkalasi ham _index ga saqlanadi (lazy load ishlashi uchun)
+       - Savollarni darhol cache ga yuklab oladi (reboot kerakmaydi)
     2. Kanaldan web natijalarni o'qib RAM ga qo'shadi
     """
-    await asyncio.sleep(30)  # Bot start dan 30 soniya kutish
+    await asyncio.sleep(20)  # Bot start dan 20 soniya kutish
     _last_result_msg = 0  # Oxirgi o'qilgan result message ID
 
     while True:
         try:
-            await asyncio.sleep(180)  # 3 daqiqa
+            await asyncio.sleep(60)  # Har 60 soniyada tekshirish (avval 3 daqiqa edi)
             if not ready():
                 continue
             from utils import ram_cache as ram
@@ -296,20 +298,38 @@ async def web_sync_loop():
                     tid = meta.get("test_id")
                     if not tid or tid in ram_metas:
                         continue
+
+                    # 1a. Meta ni RAMga qo'shish
                     ram.add_test_meta(meta)
-                    # _index ga test_{tid} message_id ni ham saqlash (lazy load uchun)
+
+                    # 1b. _index ni yangilash (MUHIM: avval bu qilma degan xato bor edi)
                     _index.setdefault("tests_meta", [])
                     if not any(m.get("test_id") == tid for m in _index["tests_meta"]):
                         _index["tests_meta"].insert(0, meta)
+
+                    # 1c. msg_id ni _index ga saqlash (lazy load uchun SHART)
                     msg_id = new_index.get(f"test_{tid}")
                     if msg_id:
                         _index[f"test_{tid}"] = msg_id
-                        log.info(f"🌐 Web test RAMga qo'shildi: {meta.get('title')} ({tid}) msg={msg_id}")
+                        log.info(f"🌐 Web test topildi: {meta.get('title')} ({tid}) msg={msg_id}")
+
+                        # 1d. Savollarni DARHOL yuklab cache qilish (reboot kerak emas)
+                        try:
+                            full_data = await _download_doc(msg_id)
+                            if full_data and full_data.get("questions"):
+                                _tests_cache[tid] = full_data
+                                ram.cache_questions(tid, full_data)
+                                qc = len(full_data["questions"])
+                                log.info(f"✅ Web test savollar RAMga yuklandi: {tid} ({qc} savol)")
+                            else:
+                                log.warning(f"⚠️ Web test {tid} savollar bo'sh yoki yuklanmadi")
+                        except Exception as eq:
+                            log.error(f"Web test savol yuklash xato {tid}: {eq}")
                     else:
-                        log.warning(f"⚠️ Web test {tid} uchun msg_id topilmadi — lazy load ishlamaydi")
+                        log.warning(f"⚠️ Web test {tid} uchun msg_id topilmadi")
                     added += 1
                 if added:
-                    log.info(f"✅ Web sync: {added} yangi test")
+                    log.info(f"✅ Web sync: {added} yangi test RAMga qo'shildi")
 
             # ── 2. Web natijalarni o'qish ──
             # So'nggi 20 xabarda result_*.json fayllarni qidirish
@@ -444,22 +464,40 @@ def get_test_meta(tid):
 
 async def get_test_full(tid):
     from utils import ram_cache as ram
+    # 1. _tests_cache (tez)
     if tid in _tests_cache:
         ram.touch_test_access(tid)
         return _tests_cache[tid]
+    # 2. RAM cache (12 soat)
     cached = ram.get_cached_questions(tid)
     if cached:
         _tests_cache[tid] = cached
         return cached
+    # 3. TG kanaldan lazy load
     msg_id = _index.get(f"test_{tid}")
     if not msg_id:
-        return {}
+        # _index da yo'q — balki web test, yangi index o'qib ko'ramiz
+        log.info(f"⚠️ {tid} uchun msg_id yo'q — indexni qayta tekshiramiz")
+        new_index = await _load_index()
+        if new_index:
+            msg_id = new_index.get(f"test_{tid}")
+            if msg_id:
+                _index[f"test_{tid}"] = msg_id
+                # Metani ham qo'shamiz agar yo'q bo'lsa
+                if not any(m.get("test_id") == tid for m in _index.get("tests_meta", [])):
+                    for m in new_index.get("tests_meta", []):
+                        if m.get("test_id") == tid:
+                            _index.setdefault("tests_meta", []).insert(0, m)
+                            ram.add_test_meta(m)
+                            break
+        if not msg_id:
+            return {}
     log.info(f"⬇️ Lazy load: {tid} (msg={msg_id})")
     data = await _download_doc(msg_id)
     if data and data.get("questions"):
         _tests_cache[tid] = data
         ram.cache_questions(tid, data)
-        log.info(f"✅ {tid} RAMga yuklandi")
+        log.info(f"✅ {tid} RAMga yuklandi ({len(data['questions'])} savol)")
         return data
     if not data:
         log.warning(f"⚠️ {tid} TGdan yuklanmadi")
