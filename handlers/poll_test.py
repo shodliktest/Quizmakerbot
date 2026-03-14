@@ -99,8 +99,32 @@ async def start_poll(callback: CallbackQuery, state: FSMContext):
         return await callback.answer("❌ Test topilmadi.", show_alert=True)
 
     all_qs = test.get("questions", [])
-    qs     = [q for q in all_qs if q.get("type","multiple_choice") in POLL_TYPES]
-    skipped= len(all_qs) - len(qs)
+
+    # Savollar va variantlarni har safar aralashtirish
+    import random, copy, re as _re
+    all_qs = copy.deepcopy(all_qs)
+    random.shuffle(all_qs)
+
+    LABELS = ["A","B","C","D","E","F","G","H"]
+    def _strip(o): return _re.sub(r"^[A-Ha-h]\s*[).:]\s*", "", str(o)).strip()
+    for q in all_qs:
+        if q.get("type") not in ("multiple_choice", "multiple", "multi_select"):
+            continue
+        opts = q.get("options", [])
+        if len(opts) < 2: continue
+        pure = [_strip(o) for o in opts]
+        corr = q.get("correct")
+        corr_text = pure[corr] if isinstance(corr, int) and 0 <= corr < len(pure) else (
+            _strip(corr) if isinstance(corr, str) else None
+        )
+        random.shuffle(pure)
+        q["options"] = [f"{LABELS[i]}) {t}" for i, t in enumerate(pure)]
+        if corr_text is not None:
+            ni = next((i for i, t in enumerate(pure) if t == corr_text), 0)
+            q["correct"] = f"{LABELS[ni]}) {corr_text}"
+
+    qs = [q for q in all_qs if q.get("type", "multiple_choice") in POLL_TYPES]
+    skipped = len(all_qs) - len(qs)
 
     if not qs:
         b = InlineKeyboardBuilder()
