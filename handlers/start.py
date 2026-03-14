@@ -21,9 +21,31 @@ router = Router()
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
-    uid   = message.from_user.id
-    uname = message.from_user.username
-    name  = message.from_user.full_name or (f"@{uname}" if uname else f"User{uid}")
+    uid       = message.from_user.id
+    uname     = message.from_user.username
+    name      = message.from_user.full_name or (f"@{uname}" if uname else f"User{uid}")
+    chat_type = message.chat.type   # "private" | "group" | "supergroup" | "channel"
+
+    # ── GURUHDA /start — faqat ma'lumot xabari, menyu yo'q ──────
+    if chat_type in ("group", "supergroup"):
+        bot_info = await message.bot.get_me()
+        bot_link = f"https://t.me/{bot_info.username}"
+        from aiogram.types import InlineKeyboardButton
+        from aiogram.utils.keyboard import InlineKeyboardBuilder
+        b = InlineKeyboardBuilder()
+        b.row(InlineKeyboardButton(text="🤖 Botni ochish", url=bot_link))
+        b.row(InlineKeyboardButton(text="📚 Test tanlash", switch_inline_query_current_chat=""))
+        await message.answer(
+            f"👋 Salom, <b>{name}</b>!\n\n"
+            f"📌 <b>Guruhda test o'tkazish:</b>\n\n"
+            f"1️⃣ Botni inline rejimda ishlating:\n"
+            f"   Xabar maydoniga <code>@{bot_info.username} </code> yozing → test tanlang → yuboring\n\n"
+            f"2️⃣ Yoki test havolasini guruhga yuboring — barcha ishlay oladi\n\n"
+            f"✏️ <b>Test yaratish uchun</b> botga <b>private</b> xabar yozing 👇",
+            reply_markup=b.as_markup()
+        )
+        return
+    # ────────────────────────────────────────────────────────────
 
     user   = await get_or_create_user(uid, name, uname)
     is_new = user.pop("_just_created", False)
@@ -70,14 +92,14 @@ async def cmd_start(message: Message, state: FSMContext):
         from utils.db import get_test_full as _gtf
 
         if param.lower() == "create":
-            await message.answer(welcome, reply_markup=main_kb(uid))
+            await message.answer(welcome, reply_markup=main_kb(uid, chat_type))
             return
 
         if param.lower().startswith("poll_"):
             tid  = param[5:].upper()
             test = get_test_by_id(tid) or await _gtf(tid)
             if test:
-                await message.answer(welcome, reply_markup=main_kb(uid))
+                await message.answer(welcome, reply_markup=main_kb(uid, chat_type))
                 b = InlineKeyboardBuilder()
                 b.row(InlineKeyboardButton(
                     text="📊 Quiz Poll boshlash",
@@ -100,7 +122,7 @@ async def cmd_start(message: Message, state: FSMContext):
             else:
                 test = get_test_by_id(tid) or await _gtf(tid)
                 if test:
-                    await message.answer(welcome, reply_markup=main_kb(uid))
+                    await message.answer(welcome, reply_markup=main_kb(uid, chat_type))
                     await _send_test_card(message, test, tid, viewer_uid=uid)
             return
 
@@ -113,20 +135,20 @@ async def cmd_start(message: Message, state: FSMContext):
             else:
                 test = get_test_by_id(tid) or await _gtf(tid)
                 if test:
-                    await message.answer(welcome, reply_markup=main_kb(uid))
+                    await message.answer(welcome, reply_markup=main_kb(uid, chat_type))
                     await _send_test_card(message, test, tid, viewer_uid=uid)
             return
 
         tid  = param.upper()
         test = get_test_by_id(tid) or await _gtf(tid)
         if test:
-            await message.answer(welcome, reply_markup=main_kb(uid))
+            await message.answer(welcome, reply_markup=main_kb(uid, chat_type))
             await _send_test_card(message, test, tid, viewer_uid=uid)
             return
 
     await message.answer(
         f"{welcome}\n\nPastdagi menyudan kerakli bo'limni tanlang 👇",
-        reply_markup=main_kb(uid)
+        reply_markup=main_kb(uid, chat_type)
     )
 
 
@@ -252,7 +274,7 @@ async def back_main(callback: CallbackQuery, state: FSMContext):
     except: pass
     uid  = callback.from_user.id
     from utils import ram_cache as ram
-    msg  = await callback.bot.send_message(uid, "🏠 <b>Asosiy menyu</b> 👇", reply_markup=main_kb(uid))
+    msg  = await callback.bot.send_message(uid, "🏠 <b>Asosiy menyu</b> 👇", reply_markup=main_kb(uid, "private"))
     ram.set_menu_msg(uid, uid, msg.message_id)
 
 @router.callback_query(F.data == "noop")
@@ -285,7 +307,7 @@ async def cancel_contact(callback: CallbackQuery, state: FSMContext):
     try: await callback.message.delete()
     except: pass
     uid = callback.from_user.id
-    await callback.bot.send_message(uid, "✅ Bekor qilindi.", reply_markup=main_kb(uid))
+    await callback.bot.send_message(uid, "✅ Bekor qilindi.", reply_markup=main_kb(uid, "private"))
 
 @router.message(ContactAdmin.waiting_message)
 async def contact_admin_send(message: Message, state: FSMContext):
@@ -295,71 +317,27 @@ async def contact_admin_send(message: Message, state: FSMContext):
     sent  = 0
     for aid in ADMIN_IDS:
         try:
-            # User ID ni yashirin tag sifatida saqlaymiz — admin reply qilganda topiladi
-            header = await message.bot.send_message(
-                aid,
-                f"📩 <b>MUROJAAT</b>\n"
-                f"👤 <b>{name}</b> | {uname}\n"
-                f"🆔 <code>{uid}</code>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"💡 <i>Javob berish uchun shu xabarga Reply qiling</i>\n"
-                f"#uid_{uid}",
-                parse_mode="HTML"
+            await message.bot.send_message(
+                aid, f"📩 <b>MUROJAAT</b>\n👤 <b>{name}</b> | {uname} | <code>{uid}</code>"
             )
             await message.forward(aid)
             sent += 1
-        except Exception as e:
-            log.error(f"Admin {aid}: {e}")
+        except Exception as e: log.error(f"Admin {aid}: {e}")
     await state.clear()
     txt = "✅ Xabaringiz adminga yuborildi! 🙏" if sent else "⚠️ Yuborishda muammo."
-    await message.answer(txt, reply_markup=main_kb(uid))
-
-
-# ── Admin reply qilganda userga javob yuborish ─────────────────
-@router.message(F.reply_to_message)
-async def admin_reply_to_user(message: Message):
-    """Admin murojaatga reply qilsa — userga avtomatik javob boradi."""
-    if message.from_user.id not in ADMIN_IDS:
-        return
-
-    replied = message.reply_to_message
-    if not replied or not replied.text:
-        return
-
-    # #uid_XXXXXXX tagini izlaymiz
-    import re
-    match = re.search(r"#uid_(\d+)", replied.text)
-    if not match:
-        return
-
-    target_uid = int(match.group(1))
-    try:
-        await message.bot.send_message(
-            target_uid,
-            f"📬 <b>ADMINDAN JAVOB:</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"{message.text or message.caption or ''}",
-            parse_mode="HTML"
-        )
-        await message.answer(f"✅ <code>{target_uid}</code> ga javob yuborildi.", parse_mode="HTML")
-    except Exception as e:
-        await message.answer(f"❌ Yuborishda xato: {e}")
-
+    await message.answer(txt, reply_markup=main_kb(uid, "private"))
 
 @router.message(F.text.startswith("/reply "))
-async def admin_reply_cmd(message: Message):
-    """Eski usul: /reply USER_ID Matn — hali ham ishlaydi."""
-    if message.from_user.id not in ADMIN_IDS:
-        return
+async def admin_reply(message: Message):
+    if message.from_user.id not in ADMIN_IDS: return
     parts = message.text.split(" ", 2)
     if len(parts) < 3:
-        return await message.answer("Format: <code>/reply USER_ID Matn</code>", parse_mode="HTML")
+        return await message.answer("Format: <code>/reply USER_ID Matn</code>")
     try:
         await message.bot.send_message(
             int(parts[1]),
-            f"📬 <b>ADMINDAN JAVOB:</b>\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n{parts[2]}",
-            parse_mode="HTML"
+            f"📬 <b>ADMINDAN JAVOB:</b>\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n{parts[2]}"
         )
-        await message.answer(f"✅ <code>{parts[1]}</code> ga yuborildi.", parse_mode="HTML")
+        await message.answer(f"✅ <code>{parts[1]}</code> ga yuborildi.")
     except Exception as e:
         await message.answer(f"❌ Xato: {e}")
