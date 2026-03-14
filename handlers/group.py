@@ -186,6 +186,9 @@ async def group_start_poll(callback: CallbackQuery):
         "tid": tid, "test": test, "questions": qs,
         "answers": {}, "names": {}, "poll_map": {},
         "host_id": uid, "poll_time": poll_time, "task": None,
+        "no_ans_streak": 0,   # Ketma-ket javobsiz savollar soni
+        "paused": False,
+        "pause_event": asyncio.Event(),
     }
 
     try: await callback.message.delete()
@@ -222,6 +225,14 @@ async def _run_group_polls(bot, chat_id: int, tid: str, qs: list, poll_time: int
         if chat_id not in _group_sessions:
             return
         session = _group_sessions[chat_id]
+
+        # ── Pauza holatini kutish ──────────────────────────────
+        if session.get("paused"):
+            await session["pause_event"].wait()
+            session["pause_event"].clear()
+            if chat_id not in _group_sessions:
+                return
+
         qtype   = q.get("type","multiple_choice")
         opts    = q.get("options",[])
         if qtype == "true_false":
@@ -255,6 +266,12 @@ async def _run_group_polls(bot, chat_id: int, tid: str, qs: list, poll_time: int
         if len(hdr+qtxt) > 295:
             qtxt = qtxt[:295-len(hdr)] + "..."
 
+        # Javob berganlar sonini OLDINGI holatda eslab qolamiz
+        answered_before = set(
+            uid for uid, ans in session["answers"].items()
+            if str(i) in ans
+        )
+
         try:
             pm = await bot.send_poll(
                 chat_id=chat_id,
@@ -287,6 +304,41 @@ async def _run_group_polls(bot, chat_id: int, tid: str, qs: list, poll_time: int
         except Exception as e:
             log.error(f"Poll xato: {e}")
             await asyncio.sleep(2)
+
+        if chat_id not in _group_sessions:
+            return
+        session = _group_sessions[chat_id]
+
+        # ── Savol tugagach javob berganlarni tekshirish ────────
+        answered_now = set(
+            uid for uid, ans in session["answers"].items()
+            if str(i) in ans
+        )
+        new_answers = answered_now - answered_before
+        if not new_answers:
+            session["no_ans_streak"] = session.get("no_ans_streak", 0) + 1
+        else:
+            session["no_ans_streak"] = 0
+
+        # Ketma-ket 2 ta savolga hech kim javob bermasa — PAUZA
+        if session.get("no_ans_streak", 0) >= 2:
+            session["paused"] = True
+            session["no_ans_streak"] = 0
+            host_id = session.get("host_id", 0)
+            b = InlineKeyboardBuilder()
+            b.row(
+                InlineKeyboardButton(text="▶️ Davom ettirish", callback_data=f"g_resume_{host_id}"),
+                InlineKeyboardButton(text="⏹ Yakunlash",      callback_data=f"gstop_{host_id}"),
+            )
+            remaining = len(qs) - i - 1
+            await bot.send_message(
+                chat_id,
+                f"⏸ <b>TEST PAUZA QILINDI</b>\n\n"
+                f"📊 Ketma-ket 2 ta savolga hech kim javob bermadi.\n"
+                f"📝 <b>{i+1}/{len(qs)}</b> savol o'tdi — <b>{remaining}</b> ta qoldi.\n\n"
+                f"▶️ Davom ettirish yoki ⏹ Yakunlash tugmasini bosing:",
+                reply_markup=b.as_markup()
+            )
 
     if chat_id in _group_sessions:
         await asyncio.sleep(3)
@@ -353,8 +405,8 @@ async def group_start_inline(callback: CallbackQuery):
         "tid":           tid,
         "test":          test,
         "questions":     qs,
-        "answers":       {},          # {uid_str: {q_idx_str: answer_letter}}
-        "names":         {},          # {uid_str: full_name}
+        "answers":       {},
+        "names":         {},
         "host_id":       uid,
         "poll_time":     poll_time,
         "passing_score": passing_score,
@@ -362,6 +414,9 @@ async def group_start_inline(callback: CallbackQuery):
         "q_msg_id":      None,
         "task":          None,
         "locked":        False,
+        "no_ans_streak": 0,
+        "paused":        False,
+        "pause_event":   asyncio.Event(),
     }
 
     try: await callback.message.delete()
@@ -528,8 +583,48 @@ async def _run_inline_session(
 
         # ── Vaqt tugadi → to'g'ri javobni ko'rsat ──
         session["locked"] = True
+
+        # Savol uchun javob berganlar sonini tekshirish
+        answered_this_q = sum(
+            1 for ans in session["answers"].values()
+            if str(i) in ans
+        )
+        if answered_this_q == 0:
+            session["no_ans_streak"] = session.get("no_ans_streak", 0) + 1
+        else:
+            session["no_ans_streak"] = 0
+
         await _reveal_inline_answer(bot, chat_id, i, q, opts, msg.message_id)
         await asyncio.sleep(3)
+
+        if chat_id not in _inline_sessions:
+            return
+        session = _inline_sessions[chat_id]
+
+        # ── Ketma-ket 2 ta savolga javob yo'q → PAUZA ──────────
+        if session.get("no_ans_streak", 0) >= 2:
+            session["paused"] = True
+            session["no_ans_streak"] = 0
+            host_id   = session.get("host_id", 0)
+            remaining = len(qs) - i - 1
+            b = InlineKeyboardBuilder()
+            b.row(
+                InlineKeyboardButton(text="▶️ Davom ettirish", callback_data=f"gi_resume_{host_id}"),
+                InlineKeyboardButton(text="⏹ Yakunlash",      callback_data=f"gi_stop_{host_id}"),
+            )
+            await bot.send_message(
+                chat_id,
+                f"⏸ <b>TEST PAUZA QILINDI</b>\n\n"
+                f"📊 Ketma-ket 2 ta savolga hech kim javob bermadi.\n"
+                f"📝 <b>{i+1}/{len(qs)}</b> savol o'tdi — <b>{remaining}</b> ta qoldi.\n\n"
+                f"▶️ Davom ettirish yoki ⏹ Yakunlash tugmasini bosing:",
+                reply_markup=b.as_markup()
+            )
+            # Davom yoki to'xtatish kutiladi
+            await session["pause_event"].wait()
+            session["pause_event"].clear()
+            if chat_id not in _inline_sessions:
+                return
 
     # ── Test tugadi ──
     if chat_id in _inline_sessions:
@@ -693,6 +788,68 @@ async def handle_inline_answer(callback: CallbackQuery):
             f"❌ Noto'g'ri!\n✅ To'g'ri javob: {corr_clean}",
             show_alert=True
         )
+
+
+# ── Poll sessiyasi — pauza davom ettirish ─────────────────────
+
+@router.callback_query(F.data.startswith("g_resume_"))
+async def group_poll_resume(callback: CallbackQuery):
+    host_id = int(callback.data[9:])
+    chat_id = callback.message.chat.id
+    uid     = callback.from_user.id
+
+    if uid != host_id:
+        try:
+            member = await callback.bot.get_chat_member(chat_id, uid)
+            if member.status not in ("administrator", "creator"):
+                return await callback.answer("⚠️ Faqat boshlovchi yoki admin!", show_alert=True)
+        except Exception:
+            return await callback.answer("⚠️ Ruxsat yo'q!", show_alert=True)
+
+    session = _group_sessions.get(chat_id)
+    if not session:
+        return await callback.answer("❌ Faol sessiya topilmadi.", show_alert=True)
+
+    await callback.answer("▶️ Davom ettirildi!")
+    try: await callback.message.edit_reply_markup(reply_markup=None)
+    except: pass
+    await callback.bot.send_message(
+        chat_id,
+        "▶️ <b>Test davom ettirildi!</b> Keyingi savol yuklanmoqda..."
+    )
+    session["paused"] = False
+    session["pause_event"].set()
+
+
+# ── Inline sessiyasi — pauza davom ettirish ───────────────────
+
+@router.callback_query(F.data.startswith("gi_resume_"))
+async def group_inline_resume(callback: CallbackQuery):
+    host_id = int(callback.data[10:])
+    chat_id = callback.message.chat.id
+    uid     = callback.from_user.id
+
+    if uid != host_id:
+        try:
+            member = await callback.bot.get_chat_member(chat_id, uid)
+            if member.status not in ("administrator", "creator"):
+                return await callback.answer("⚠️ Faqat boshlovchi yoki admin!", show_alert=True)
+        except Exception:
+            return await callback.answer("⚠️ Ruxsat yo'q!", show_alert=True)
+
+    session = _inline_sessions.get(chat_id)
+    if not session:
+        return await callback.answer("❌ Faol sessiya topilmadi.", show_alert=True)
+
+    await callback.answer("▶️ Davom ettirildi!")
+    try: await callback.message.edit_reply_markup(reply_markup=None)
+    except: pass
+    await callback.bot.send_message(
+        chat_id,
+        "▶️ <b>Test davom ettirildi!</b> Keyingi savol yuklanmoqda..."
+    )
+    session["paused"] = False
+    session["pause_event"].set()
 
 
 # ── Inline to'xtatish ─────────────────────────────────────────
@@ -1093,6 +1250,7 @@ async def _start_group_test(bot, chat_id: int, uid: int, tid: str, mode: str):
             "answers": {}, "names": {}, "host_id": uid,
             "poll_time": poll_time, "passing_score": passing_score,
             "cur_q": 0, "q_msg_id": None, "task": None, "locked": False,
+            "no_ans_streak": 0, "paused": False, "pause_event": asyncio.Event(),
         }
         cdown = await bot.send_message(chat_id, f"📝 <b>{test.get('title')}</b>", parse_mode="HTML")
         for emoji in COUNT_EMOJIS:
@@ -1135,6 +1293,7 @@ async def _start_group_test(bot, chat_id: int, uid: int, tid: str, mode: str):
             "tid": tid, "test": test, "questions": qs,
             "answers": {}, "names": {}, "poll_map": {},
             "host_id": uid, "poll_time": poll_time, "task": None,
+            "no_ans_streak": 0, "paused": False, "pause_event": asyncio.Event(),
         }
         cdown = await bot.send_message(chat_id, f"📝 <b>{test.get('title')}</b>", parse_mode="HTML")
         for emoji in COUNT_EMOJIS:
