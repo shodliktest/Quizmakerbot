@@ -295,27 +295,71 @@ async def contact_admin_send(message: Message, state: FSMContext):
     sent  = 0
     for aid in ADMIN_IDS:
         try:
-            await message.bot.send_message(
-                aid, f"📩 <b>MUROJAAT</b>\n👤 <b>{name}</b> | {uname} | <code>{uid}</code>"
+            # User ID ni yashirin tag sifatida saqlaymiz — admin reply qilganda topiladi
+            header = await message.bot.send_message(
+                aid,
+                f"📩 <b>MUROJAAT</b>\n"
+                f"👤 <b>{name}</b> | {uname}\n"
+                f"🆔 <code>{uid}</code>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"💡 <i>Javob berish uchun shu xabarga Reply qiling</i>\n"
+                f"#uid_{uid}",
+                parse_mode="HTML"
             )
             await message.forward(aid)
             sent += 1
-        except Exception as e: log.error(f"Admin {aid}: {e}")
+        except Exception as e:
+            log.error(f"Admin {aid}: {e}")
     await state.clear()
     txt = "✅ Xabaringiz adminga yuborildi! 🙏" if sent else "⚠️ Yuborishda muammo."
     await message.answer(txt, reply_markup=main_kb(uid))
 
+
+# ── Admin reply qilganda userga javob yuborish ─────────────────
+@router.message(F.reply_to_message)
+async def admin_reply_to_user(message: Message):
+    """Admin murojaatga reply qilsa — userga avtomatik javob boradi."""
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    replied = message.reply_to_message
+    if not replied or not replied.text:
+        return
+
+    # #uid_XXXXXXX tagini izlaymiz
+    import re
+    match = re.search(r"#uid_(\d+)", replied.text)
+    if not match:
+        return
+
+    target_uid = int(match.group(1))
+    try:
+        await message.bot.send_message(
+            target_uid,
+            f"📬 <b>ADMINDAN JAVOB:</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"{message.text or message.caption or ''}",
+            parse_mode="HTML"
+        )
+        await message.answer(f"✅ <code>{target_uid}</code> ga javob yuborildi.", parse_mode="HTML")
+    except Exception as e:
+        await message.answer(f"❌ Yuborishda xato: {e}")
+
+
 @router.message(F.text.startswith("/reply "))
-async def admin_reply(message: Message):
-    if message.from_user.id not in ADMIN_IDS: return
+async def admin_reply_cmd(message: Message):
+    """Eski usul: /reply USER_ID Matn — hali ham ishlaydi."""
+    if message.from_user.id not in ADMIN_IDS:
+        return
     parts = message.text.split(" ", 2)
     if len(parts) < 3:
-        return await message.answer("Format: <code>/reply USER_ID Matn</code>")
+        return await message.answer("Format: <code>/reply USER_ID Matn</code>", parse_mode="HTML")
     try:
         await message.bot.send_message(
             int(parts[1]),
-            f"📬 <b>ADMINDAN JAVOB:</b>\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n{parts[2]}"
+            f"📬 <b>ADMINDAN JAVOB:</b>\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n{parts[2]}",
+            parse_mode="HTML"
         )
-        await message.answer(f"✅ <code>{parts[1]}</code> ga yuborildi.")
+        await message.answer(f"✅ <code>{parts[1]}</code> ga yuborildi.", parse_mode="HTML")
     except Exception as e:
         await message.answer(f"❌ Xato: {e}")
