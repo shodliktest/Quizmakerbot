@@ -26,26 +26,29 @@ async def cmd_start(message: Message, state: FSMContext):
     name      = message.from_user.full_name or (f"@{uname}" if uname else f"User{uid}")
     chat_type = message.chat.type   # "private" | "group" | "supergroup" | "channel"
 
-    # ── GURUHDA /start — faqat ma'lumot xabari, menyu yo'q ──────
+    # ── GURUHDA /start — parametrsiz bo'lsa ma'lumot, parametrli bo'lsa davom ──
     if chat_type in ("group", "supergroup"):
-        bot_info = await message.bot.get_me()
-        bot_link = f"https://t.me/{bot_info.username}"
-        from aiogram.types import InlineKeyboardButton
-        from aiogram.utils.keyboard import InlineKeyboardBuilder
-        b = InlineKeyboardBuilder()
-        b.row(InlineKeyboardButton(text="🤖 Botni ochish", url=bot_link))
-        b.row(InlineKeyboardButton(text="📚 Test tanlash", switch_inline_query_current_chat=""))
-        await message.answer(
-            f"👋 Salom, <b>{name}</b>!\n\n"
-            f"📌 <b>Guruhda test o'tkazish:</b>\n\n"
-            f"1️⃣ Botni inline rejimda ishlating:\n"
-            f"   Xabar maydoniga <code>@{bot_info.username} </code> yozing → test tanlang → yuboring\n\n"
-            f"2️⃣ Yoki test havolasini guruhga yuboring — barcha ishlay oladi\n\n"
-            f"✏️ <b>Test yaratish uchun</b> botga <b>private</b> xabar yozing 👇",
-            reply_markup=b.as_markup()
-        )
-        return
-    # ────────────────────────────────────────────────────────────
+        args = message.text.split()
+        if len(args) == 1:
+            # Parametr yo'q — faqat ma'lumot xabari, keyboard chiqmaydi
+            bot_info = await message.bot.get_me()
+            from aiogram.types import InlineKeyboardButton
+            from aiogram.utils.keyboard import InlineKeyboardBuilder
+            b = InlineKeyboardBuilder()
+            b.row(InlineKeyboardButton(text="🤖 Botni ochish", url=f"https://t.me/{bot_info.username}"))
+            b.row(InlineKeyboardButton(text="📚 Test tanlash", switch_inline_query_current_chat=""))
+            await message.answer(
+                f"👋 Salom, <b>{name}</b>!\n\n"
+                f"📌 <b>Guruhda test o'tkazish:</b>\n\n"
+                f"1️⃣ Botni inline rejimda ishlating:\n"
+                f"   Xabar maydoniga <code>@{bot_info.username} </code> yozing → test tanlang → yuboring\n\n"
+                f"2️⃣ Yoki test havolasini guruhga yuboring — barcha ishlay oladi\n\n"
+                f"✏️ <b>Test yaratish uchun</b> botga <b>private</b> xabar yozing 👇",
+                reply_markup=b.as_markup()
+            )
+            return
+        # Parametr bor (gpoll_, ginline_, test ID) — davom etsin
+    # ──────────────────────────────────────────────────────────────
 
     user   = await get_or_create_user(uid, name, uname)
     is_new = user.pop("_just_created", False)
