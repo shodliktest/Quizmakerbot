@@ -178,11 +178,11 @@ async def _web_sync_watchdog():
     web_sync_loop ni kuzatib turadi.
     Agar loop to'xtab qolsa — qayta ishga tushiradi.
     """
+    from utils import tg_db
     while True:
         try:
             task = asyncio.create_task(tg_db.web_sync_loop())
             await task
-            # Agar task normal tugasa (CancelledError emas) — qayta boshlash
             log.warning("⚠️ web_sync_loop tugadi — 10s dan keyin qayta boshlanadi")
             await asyncio.sleep(10)
         except asyncio.CancelledError:
