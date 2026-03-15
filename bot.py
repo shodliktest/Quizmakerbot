@@ -80,21 +80,21 @@ async def main():
         log.info("TG DB initsializatsiya...")
         await tg_db.init(bot, STORAGE_CHANNEL_ID)
         from utils import ram_cache as ram
+        # Faqat META yuklanadi — savollar yuklanmaydi (lazy load)
         tests = await tg_db.get_tests()
-        if tests: ram.set_tests(tests)
+        if tests: ram.set_tests(tests)   # set_tests endi faqat meta saqlaydi
         users = await tg_db.get_users()
         if users: ram.set_users(users)
         settings = await tg_db.get_settings_tg()
         if settings: ram.set_all_settings(settings)
-        log.info(f"✅ Yuklandi: {ram.stats()['tests']} test, {ram.stats()['users']} user")
+        log.info(f"✅ Yuklandi: {ram.stats()['tests']} test meta, {ram.stats()['users']} user (savollar lazy)")
 
     # Background tasklar
     asyncio.create_task(_midnight_flush_loop(bot))
     asyncio.create_task(_users_auto_flush_loop(bot))
     asyncio.create_task(_cache_cleanup_loop())
-    asyncio.create_task(tg_db.web_sync_loop())  # Web testlarni RAMga olish
+    asyncio.create_task(_web_sync_watchdog())   # Watchdog bilan web sync
     asyncio.create_task(tg_db.auto_flush_loop())
-    asyncio.create_task(tg_db.web_sync_loop())  # Web testlarni RAMga olish
 
     # Admin ga xabar
     for aid in ADMIN_IDS:
@@ -171,6 +171,25 @@ async def _midnight_flush_loop(bot):
 async def _users_auto_flush_loop(bot):
     """Disabled — users faqat midnight da yuklanadi"""
     pass
+
+
+async def _web_sync_watchdog():
+    """
+    web_sync_loop ni kuzatib turadi.
+    Agar loop to'xtab qolsa — qayta ishga tushiradi.
+    """
+    while True:
+        try:
+            task = asyncio.create_task(tg_db.web_sync_loop())
+            await task
+            # Agar task normal tugasa (CancelledError emas) — qayta boshlash
+            log.warning("⚠️ web_sync_loop tugadi — 10s dan keyin qayta boshlanadi")
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            log.error(f"web_sync_watchdog xato: {e} — 30s dan keyin qayta boshlanadi")
+            await asyncio.sleep(30)
 
 
 # ── CACHE CLEANUP — har 30 daqiqada ──────────────────────────
@@ -273,17 +292,19 @@ async def _main_no_signals():
         from utils import tg_db
         await tg_db.init(bot, STORAGE_CHANNEL_ID)
         from utils import ram_cache as ram
+        # Faqat META yuklanadi — savollar lazy load
         tests = await tg_db.get_tests()
         if tests: ram.set_tests(tests)
         users = await tg_db.get_users()
         if users: ram.set_users(users)
         settings = await tg_db.get_settings_tg()
         if settings: ram.set_all_settings(settings)
-        log.info(f"✅ Yuklandi: {ram.stats()['tests']} test, {ram.stats()['users']} user")
+        log.info(f"✅ Yuklandi: {ram.stats()['tests']} test meta, {ram.stats()['users']} user")
 
     asyncio.create_task(_midnight_flush_loop(bot))
     asyncio.create_task(_users_auto_flush_loop(bot))
     asyncio.create_task(_cache_cleanup_loop())
+    asyncio.create_task(_web_sync_watchdog())
 
     for aid in ADMIN_IDS:
         try:
