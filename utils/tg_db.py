@@ -462,14 +462,13 @@ async def get_test_full(tid):
     # 3. TG kanaldan lazy load
     msg_id = _index.get(f"test_{tid}")
     if not msg_id:
-        # msg_id yo'q — web test bo'lishi mumkin, indexni qayta o'qiymiz
-        log.info(f"⚠️ {tid} msg_id yo'q — indexni qayta tekshiramiz")
+        # msg_id yo'q — web test yoki hali index ga tushmagan
+        # Indexni qayta o'qib tekshiramiz (silent)
         new_index = await _load_index()
         if new_index:
             msg_id = new_index.get(f"test_{tid}")
             if msg_id:
                 _index[f"test_{tid}"] = msg_id
-                # Metani ham qo'shamiz agar yo'q bo'lsa
                 if not any(m.get("test_id") == tid for m in _index.get("tests_meta", [])):
                     for m in new_index.get("tests_meta", []):
                         if m.get("test_id") == tid:
@@ -478,7 +477,8 @@ async def get_test_full(tid):
                             ram.add_test_meta(clean)
                             break
         if not msg_id:
-            log.warning(f"⚠️ {tid} hech qayerda topilmadi")
+            # Normal holat — web test hali sync bo'lmagan (5 daqiqada bo'ladi)
+            log.info(f"ℹ️ {tid} msg_id yo'q (web test sync kutilmoqda)")
             return {}
     log.info(f"⬇️ Lazy load: {tid} (msg={msg_id})")
     data = await _download_doc(msg_id)
