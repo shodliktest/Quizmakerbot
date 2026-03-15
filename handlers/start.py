@@ -30,10 +30,7 @@ async def cmd_start(message: Message, state: FSMContext):
     if chat_type in ("group", "supergroup"):
         args = message.text.split()
         if len(args) == 1:
-            # Parametr yo'q — faqat ma'lumot xabari, keyboard chiqmaydi
             bot_info = await message.bot.get_me()
-            from aiogram.types import InlineKeyboardButton
-            from aiogram.utils.keyboard import InlineKeyboardBuilder
             b = InlineKeyboardBuilder()
             b.row(InlineKeyboardButton(text="🤖 Botni ochish", url=f"https://t.me/{bot_info.username}"))
             b.row(InlineKeyboardButton(text="📚 Test tanlash", switch_inline_query_current_chat=""))
