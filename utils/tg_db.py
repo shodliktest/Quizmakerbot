@@ -97,7 +97,6 @@ async def _load_tests_stats():
             "is_paused":   s.get("is_paused", False),
             "is_active":   s.get("is_active", True),
         })
-        # Solvers ham RAMga
         if s.get("solvers"):
             ram.load_solvers_to_ram(tid, s["solvers"])
         loaded += 1
@@ -120,12 +119,16 @@ async def save_tests_stats():
             entry = udata.get("by_test", {}).get(tid)
             if entry and entry.get("attempts", 0) > 0:
                 solvers[uid_str] = {
-                    "attempts":   entry["attempts"],
-                    "best_score": entry["best_score"],
-                    "avg_score":  entry["avg_score"],
-                    "all_pcts":   entry["all_pcts"],
-                    "first_pct":  entry["all_pcts"][0] if entry["all_pcts"] else 0,
-                    "last_at":    entry.get("last_at", ""),
+                    "attempts":      entry["attempts"],
+                    "best_score":    entry["best_score"],
+                    "avg_score":     entry["avg_score"],
+                    "all_pcts":      entry["all_pcts"],
+                    "first_pct":     entry["all_pcts"][0] if entry["all_pcts"] else 0,
+                    "last_at":       entry.get("last_at", ""),
+                    # Tahlil uchun saqlaymiz — rebootda tiklanadi
+                    "last_analysis": entry.get("last_analysis", []),
+                    "last_result":   entry.get("last_result", {}),
+                    "first_result":  entry.get("first_result", {}),
                 }
         stats[tid] = {
             "solve_count": m.get("solve_count", 0),
@@ -271,76 +274,96 @@ def get_otp_info(code: str) -> dict:
 
 async def web_sync_loop():
     """
-    Har 60 soniyada:
-    1. TG indexni qayta o'qib, web orqali qo'shilgan yangi testlarni RAMga yuklaydi
-       - Meta + msg_id ikkalasi ham _index ga saqlanadi (lazy load ishlashi uchun)
-       - Savollarni darhol cache ga yuklab oladi (reboot kerakmaydi)
-    2. Kanaldan web natijalarni o'qib RAM ga qo'shadi
+    Har 60 soniyada web orqali yaratilgan yangi testlarni tekshiradi.
+    FAQAT META + msg_id RAMga qo'shiladi.
+    Savollar yechish boshlanganda lazy load bo'ladi (oldindan yuklanmaydi).
     """
-    await asyncio.sleep(20)  # Bot start dan 20 soniya kutish
-    _last_result_msg = 0  # Oxirgi o'qilgan result message ID
+    await asyncio.sleep(20)
+    consecutive_errors = 0
 
     while True:
         try:
-            await asyncio.sleep(60)  # Har 60 soniyada tekshirish (avval 3 daqiqa edi)
+            await asyncio.sleep(60)
             if not ready():
                 continue
             from utils import ram_cache as ram
-            from utils.db import save_result
 
-            # ── 1. Yangi testlar (index orqali) ──
-            new_index = await _load_index()
-            if new_index and "tests_meta" in new_index:
-                ram_metas   = {t.get("test_id") for t in ram.get_all_tests_meta()}
-                index_metas = new_index.get("tests_meta", [])
-                added = 0
-                for meta in index_metas:
-                    tid = meta.get("test_id")
-                    if not tid or tid in ram_metas:
-                        continue
+            # Timeout bilan _load_index chaqirish — hang bo'lmasligi uchun
+            try:
+                new_index = await asyncio.wait_for(_load_index(), timeout=30)
+            except asyncio.TimeoutError:
+                log.warning("web_sync: _load_index timeout (30s) — skip")
+                consecutive_errors += 1
+                continue
 
-                    # 1a. Meta ni RAMga qo'shish
-                    ram.add_test_meta(meta)
+            if not (new_index and "tests_meta" in new_index):
+                continue
 
-                    # 1b. _index ni yangilash (MUHIM: avval bu qilma degan xato bor edi)
+            consecutive_errors = 0  # Muvaffaqiyatli — reset
+            ram_metas   = {t.get("test_id") for t in ram.get_all_tests_meta()}
+            index_metas = new_index.get("tests_meta", [])
+            added = 0
+            stats_updated = 0
+
+            for meta in index_metas:
+                tid = meta.get("test_id")
+                if not tid:
+                    continue
+
+                if tid not in ram_metas:
+                    # Yangi test — META qo'shamiz
+                    clean_meta = {k: v for k, v in meta.items() if k != "questions"}
+                    ram.add_test_meta(clean_meta)
                     _index.setdefault("tests_meta", [])
                     if not any(m.get("test_id") == tid for m in _index["tests_meta"]):
-                        _index["tests_meta"].insert(0, meta)
-
-                    # 1c. msg_id ni _index ga saqlash (lazy load uchun SHART)
+                        _index["tests_meta"].insert(0, clean_meta)
                     msg_id = new_index.get(f"test_{tid}")
                     if msg_id:
                         _index[f"test_{tid}"] = msg_id
-                        log.info(f"🌐 Web test topildi: {meta.get('title')} ({tid}) msg={msg_id}")
-
-                        # 1d. Savollarni DARHOL yuklab cache qilish (reboot kerak emas)
-                        try:
-                            full_data = await _download_doc(msg_id)
-                            if full_data and full_data.get("questions"):
-                                _tests_cache[tid] = full_data
-                                ram.cache_questions(tid, full_data)
-                                qc = len(full_data["questions"])
-                                log.info(f"✅ Web test savollar RAMga yuklandi: {tid} ({qc} savol)")
-                            else:
-                                log.warning(f"⚠️ Web test {tid} savollar bo'sh yoki yuklanmadi")
-                        except Exception as eq:
-                            log.error(f"Web test savol yuklash xato {tid}: {eq}")
-                    else:
-                        log.warning(f"⚠️ Web test {tid} uchun msg_id topilmadi")
+                        log.info(f"🌐 Web test meta RAMga qo'shildi: {meta.get('title')} ({tid})")
                     added += 1
-                if added:
-                    log.info(f"✅ Web sync: {added} yangi test RAMga qo'shildi")
+                else:
+                    # Mavjud test — solve_count va avg_score yangilaymiz
+                    web_sc  = meta.get("solve_count", 0)
+                    web_avg = meta.get("avg_score", 0.0)
+                    cur_meta = ram.get_test_meta(tid)
+                    ram_sc  = cur_meta.get("solve_count", 0)
 
-            # ── 2. Web natijalarni o'qish ──
-            # So'nggi 20 xabarda result_*.json fayllarni qidirish
+                    if web_sc > ram_sc:
+                        ram_avg = cur_meta.get("avg_score", 0.0)
+                        if web_sc > 0 and ram_sc > 0:
+                            merged_avg = round(
+                                (web_avg * web_sc + ram_avg * ram_sc) / (web_sc + ram_sc), 1
+                            )
+                        else:
+                            merged_avg = web_avg if web_sc > ram_sc else ram_avg
+                        ram.update_test_meta(tid, {
+                            "solve_count": web_sc,
+                            "avg_score":   merged_avg,
+                        })
+                        stats_updated += 1
+
+            if added:
+                log.info(f"✅ Web sync: {added} yangi test meta qo'shildi")
+            if stats_updated:
+                log.info(f"📊 Web sync: {stats_updated} test statistikasi yangilandi")
+                mark_stats_dirty()
+
+            # Web natijalarni o'qish — timeout bilan
             try:
-                probe = await _bot.send_message(_cid, ".")
-                cur   = probe.message_id
+                probe = await asyncio.wait_for(
+                    _bot.send_message(_cid, "."), timeout=10
+                )
+                cur = probe.message_id
                 await _bot.delete_message(_cid, cur)
+                from utils.db import save_result
                 results_added = 0
+                _last_result_msg = getattr(web_sync_loop, '_last_msg', 0)
                 for mid in range(cur - 1, max(_last_result_msg, cur - 30), -1):
                     try:
-                        fwd = await _bot.forward_message(_cid, _cid, mid)
+                        fwd = await asyncio.wait_for(
+                            _bot.forward_message(_cid, _cid, mid), timeout=8
+                        )
                         doc = getattr(fwd, "document", None)
                         try: await _bot.delete_message(_cid, fwd.message_id)
                         except: pass
@@ -350,10 +373,9 @@ async def web_sync_loop():
                         data = await _read_file(doc.file_id)
                         if not data or not data.get("user_id"): continue
                         uid = int(data["user_id"])
-                        tid = data.get("test_id", "")
-                        pct = data.get("percentage", 0)
-                        # RAMga saqlash (db.save_result)
-                        save_result(uid, tid, {
+                        tid_r = data.get("test_id", "")
+                        pct   = data.get("percentage", 0)
+                        save_result(uid, tid_r, {
                             "percentage":       pct,
                             "score":            data.get("score", 0),
                             "total":            data.get("total", 0),
@@ -364,7 +386,7 @@ async def web_sync_loop():
                         await asyncio.sleep(0.05)
                     except: pass
                 if results_added:
-                    _last_result_msg = cur
+                    web_sync_loop._last_msg = cur
                     log.info(f"✅ Web natijalar: {results_added} ta RAMga qo'shildi")
             except Exception as e:
                 log.warning(f"Web result sync: {e}")
@@ -372,7 +394,13 @@ async def web_sync_loop():
         except asyncio.CancelledError:
             break
         except Exception as e:
-            log.error(f"web_sync_loop xato: {e}")
+            consecutive_errors += 1
+            log.error(f"web_sync_loop xato ({consecutive_errors}): {e}")
+            # Ko'p ketma-ket xato bo'lsa — biroz ko'proq kutamiz
+            if consecutive_errors >= 5:
+                log.error("web_sync_loop: 5 ketma-ket xato — 5 daqiqa kutamiz")
+                await asyncio.sleep(300)
+                consecutive_errors = 0
 
 async def auto_flush_loop():
     """Har 5 daqiqada dirty bo'lsa TG ga yuboradi"""
@@ -463,12 +491,17 @@ def get_test_meta(tid):
                  if t.get("test_id") == tid and t.get("is_active", True)), {})
 
 async def get_test_full(tid):
+    """
+    Test savollarini yuklash (lazy load):
+    1. RAM qcache → 2. _index msg_id → 3. web index qayta o'qish
+    Savollar yuklanib bo'lgach bot ularni ishlatadi, keyin cache evict bo'ladi.
+    """
     from utils import ram_cache as ram
     # 1. _tests_cache (tez)
     if tid in _tests_cache:
         ram.touch_test_access(tid)
         return _tests_cache[tid]
-    # 2. RAM cache (12 soat)
+    # 2. RAM qcache
     cached = ram.get_cached_questions(tid)
     if cached:
         _tests_cache[tid] = cached
@@ -476,8 +509,8 @@ async def get_test_full(tid):
     # 3. TG kanaldan lazy load
     msg_id = _index.get(f"test_{tid}")
     if not msg_id:
-        # _index da yo'q — balki web test, yangi index o'qib ko'ramiz
-        log.info(f"⚠️ {tid} uchun msg_id yo'q — indexni qayta tekshiramiz")
+        # msg_id yo'q — web test bo'lishi mumkin, indexni qayta o'qiymiz
+        log.info(f"⚠️ {tid} msg_id yo'q — indexni qayta tekshiramiz")
         new_index = await _load_index()
         if new_index:
             msg_id = new_index.get(f"test_{tid}")
@@ -487,17 +520,19 @@ async def get_test_full(tid):
                 if not any(m.get("test_id") == tid for m in _index.get("tests_meta", [])):
                     for m in new_index.get("tests_meta", []):
                         if m.get("test_id") == tid:
-                            _index.setdefault("tests_meta", []).insert(0, m)
-                            ram.add_test_meta(m)
+                            clean = {k: v for k, v in m.items() if k != "questions"}
+                            _index.setdefault("tests_meta", []).insert(0, clean)
+                            ram.add_test_meta(clean)
                             break
         if not msg_id:
+            log.warning(f"⚠️ {tid} hech qayerda topilmadi")
             return {}
     log.info(f"⬇️ Lazy load: {tid} (msg={msg_id})")
     data = await _download_doc(msg_id)
     if data and data.get("questions"):
         _tests_cache[tid] = data
         ram.cache_questions(tid, data)
-        log.info(f"✅ {tid} RAMga yuklandi ({len(data['questions'])} savol)")
+        log.info(f"✅ {tid} yuklandi ({len(data['questions'])} savol)")
         return data
     if not data:
         log.warning(f"⚠️ {tid} TGdan yuklanmadi")
@@ -634,35 +669,21 @@ def get_backup_dates():
 # ══ PRELOAD ════════════════════════════════════════════════════
 
 async def _preload_from_last_backup():
+    """
+    Bot start'da oxirgi backup dan faqat msg_id larni _index ga yuklaymiz.
+    Savollar yuklanmaydi — kerak bo'lganda lazy load bo'ladi.
+    """
     backups = _index.get("backups", {})
     clean_dates = [d for d in backups.keys() if "_manual" not in d]
     if not clean_dates:
-        log.info("ℹ️ Backup yo'q — lazy load")
+        log.info("ℹ️ Backup yo'q — barcha testlar lazy load bo'ladi")
         return
-    last_date = sorted(clean_dates, reverse=True)[0]
-    msg_id    = backups[last_date]
-    log.info(f"📥 Oxirgi backup: {last_date} (msg={msg_id})")
-    backup_data = await _download_doc(msg_id)
-    if not backup_data:
-        return
-    daily    = backup_data.get("data", {})
-    hot_tids = set()
-    for uid_data in daily.values():
-        for tid in uid_data.get("by_test", {}).keys():
-            hot_tids.add(tid)
-    log.info(f"🔥 Hot testlar: {len(hot_tids)} ta — RAMga yuklanmoqda...")
-    loaded = 0
-    for tid in hot_tids:
-        msg_id = _index.get(f"test_{tid}")
-        if not msg_id: continue
-        data = await _download_doc(msg_id)
-        if data and data.get("questions"):
-            _tests_cache[tid] = data
-            from utils import ram_cache as ram
-            ram.cache_questions(tid, data)
-            loaded += 1
-        await asyncio.sleep(0.08)
-    log.info(f"✅ {loaded}/{len(hot_tids)} hot test RAMga yuklandi")
+    # Faqat index da test_{tid} msg_id lar borligini tekshiramiz
+    metas = _index.get("tests_meta", [])
+    missing = [m.get("test_id") for m in metas if not _index.get(f"test_{m.get('test_id')}")]
+    if missing:
+        log.info(f"ℹ️ {len(missing)} test uchun msg_id yo'q — ular lazy load bo'ladi: {missing[:5]}...")
+    log.info(f"✅ Preload o'tkazib yuborildi — {len(metas)} test meta, savollar on-demand yuklandi")
 
 
 # ══ MANUAL FLUSH ══════════════════════════════════════════════
