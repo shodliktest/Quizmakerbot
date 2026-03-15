@@ -479,75 +479,98 @@ async def _run_inline_session(
     bot, chat_id: int, tid: str,
     qs: list, poll_time: int, passing_score: float
 ):
-    """Inline sessiya: har savol uchun tugmalar + countdown."""
+    """
+    Inline sessiya: har savol uchun tugmalar + keyboard ichida countdown.
+    Flood minimizatsiya: faqat edit_message_reply_markup (matn o'zgartirilmaydi).
+    Telegram keyboard edit uchun ancha yumshoq limit qo'llaydi.
+    """
+    # Keyboard countdown uchun checkpointlar
+    # 30s → har 5s da 1 edit = 6 edit/savol (matn emas, faqat kb)
+    # 60s → har 10s da 1 edit = 6 edit/savol
+    def _get_checkpoints(pt):
+        if pt <= 10:
+            return list(range(pt, 0, -1))          # har soniyada
+        elif pt <= 30:
+            return list(range(pt, 0, -5)) + [1]    # har 5s
+        else:
+            return list(range(pt, 9, -10)) + [5, 1] # har 10s, oxirida 5,1
+
+    def _timer_bar(remaining, total):
+        if total <= 0: return ""
+        filled = round((remaining / total) * 8)
+        empty  = 8 - filled
+        bar    = "█" * filled + "░" * empty
+        return f"{bar}"
+
+    def _build_kb_with_timer(opts, q_idx, remaining, total_time):
+        """Variant tugmalari + pastda timer qatori."""
+        opt_labels = ["🅐","🅑","🅒","🅓","🅔","🅕"]
+        btns = []
+        for j, opt in enumerate(opts[:6]):
+            opt_clean = str(opt).split(")",1)[-1].strip() if ")" in str(opt) else str(opt)
+            btns.append([InlineKeyboardButton(
+                text=f"{opt_labels[j]}  {opt_clean[:40]}",
+                callback_data=f"gi_ans:{chat_id}:{q_idx}:{j}"
+            )])
+        # Timer qatori — pastda
+        bar  = _timer_bar(remaining, total_time)
+        btns.append([InlineKeyboardButton(
+            text=f"⏱ {remaining}s  {bar}",
+            callback_data="noop"
+        )])
+        return InlineKeyboardMarkup(inline_keyboard=btns)
+
     for i, q in enumerate(qs):
-        # Sessiya hali ham aktiv ekanligini tekshirish
         if chat_id not in _inline_sessions:
             return
 
         session = _inline_sessions[chat_id]
+
+        # Pauza kutish
+        if session.get("paused"):
+            await session["pause_event"].wait()
+            session["pause_event"].clear()
+            if chat_id not in _inline_sessions:
+                return
+
         session["cur_q"]  = i
         session["locked"] = False
 
         opts  = q.get("options", [])
-        qtype = q.get("type","multiple_choice")
+        qtype = q.get("type", "multiple_choice")
         if qtype == "true_false":
-            opts = ["Ha","Yo'q"]
-        qtxt = q.get("question", q.get("text","Savol"))
+            opts = ["Ha", "Yo'q"]
+        qtxt = q.get("question", q.get("text", "Savol"))
         qtxt = re.sub(r'^\[\d+/\d+\]\s*', '', qtxt).strip()
 
-        # ── Savol xabarini yasash ──
-        def _q_text(remaining: int) -> str:
-            filled = int((poll_time - remaining) / poll_time * 10) if poll_time else 0
-            bar    = "■" * filled + "□" * (10 - filled)
-            pct    = int((poll_time - remaining) / poll_time * 100) if poll_time else 0
-            opt_labels = ["🅐","🅑","🅒","🅓","🅔","🅕"]
-            opts_disp  = "\n".join(
-                f"  {opt_labels[j]}  {str(o).split(')',1)[-1].strip() if ')' in str(o) else str(o)}"
-                for j, o in enumerate(opts[:6])
-            )
-            return (
-                f"❓ <b>{i+1}/{len(qs)}. Savol</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━\n"
-                f"{qtxt}\n\n"
-                f"{opts_disp}\n\n"
-                f"{bar} {pct}%  ⏱ <b>{remaining}s</b>"
-            )
+        opt_labels = ["🅐","🅑","🅒","🅓","🅔","🅕"]
+        opts_disp  = "\n".join(
+            f"  {opt_labels[j]}  {str(o).split(')',1)[-1].strip() if ')' in str(o) else str(o)}"
+            for j, o in enumerate(opts[:6])
+        )
 
-        # ── Klaviatura ──
-        def _build_kb():
-            labels = ["🅐","🅑","🅒","🅓","🅔","🅕"]
-            btns   = []
-            for j, opt in enumerate(opts[:6]):
-                opt_clean = str(opt).split(")",1)[-1].strip() if ")" in str(opt) else str(opt)
-                btns.append([InlineKeyboardButton(
-                    text=f"{labels[j]}  {opt_clean[:40]}",
-                    callback_data=f"gi_ans:{chat_id}:{i}:{j}"
-                )])
-            return InlineKeyboardMarkup(inline_keyboard=btns)
+        # Savol matni — statik, hech qachon o'zgarmaydi
+        q_text = (
+            f"❓ <b>{i+1}/{len(qs)}. Savol</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"{qtxt}\n\n"
+            f"{opts_disp}"
+        )
 
-        kb  = _build_kb()
-        msg = await _flood_safe_send(bot, chat_id, _q_text(poll_time), reply_markup=kb)
+        # Birinchi keyboard — to'liq timer bilan
+        kb_init = _build_kb_with_timer(opts, i, poll_time, poll_time)
+        msg = await _flood_safe_send(bot, chat_id, q_text, reply_markup=kb_init)
 
         if not msg:
-            # Yuborib bo'lmadi — sessiyani tugatish
             log.error(f"Savol {i+1} yuborilmadi — sessiya tugatilmoqda")
             _inline_sessions.pop(chat_id, None)
             return
 
         session["q_msg_id"] = msg.message_id
 
-        # ── Countdown timer (flood-safe) ──
-        # Checkpointlar: poll_time, ..., 10, 5, 2, 1
-        # Misol: 12s → [12, 5, 2, 1] | 30s → [30, 25, 20, 15, 10, 5, 2, 1]
-        five_steps = list(range(poll_time - 5, 10 - 1, -5))
-        checkpoints = [poll_time] + five_steps + [5, 2, 1]
-        seen = set(); clean = []
-        for c in checkpoints:
-            if 0 < c <= poll_time and c not in seen:
-                seen.add(c); clean.append(c)
-        checkpoints = sorted(clean, reverse=True)
-        # Birinchi nuqta (poll_time) allaqachon ko'rsatilgan — skip
+        # ── Keyboard countdown (faqat reply_markup edit) ──
+        checkpoints = _get_checkpoints(poll_time)
+        # Birinchi checkpoint (poll_time) allaqachon ko'rsatilgan
         prev = poll_time
         for target in checkpoints[1:]:
             sleep_for = prev - target
@@ -558,33 +581,30 @@ async def _run_inline_session(
             if _inline_sessions[chat_id].get("locked"):
                 break
             try:
-                await bot.edit_message_text(
-                    text=_q_text(target),
+                kb_upd = _build_kb_with_timer(opts, i, target, poll_time)
+                await bot.edit_message_reply_markup(
                     chat_id=chat_id,
                     message_id=msg.message_id,
-                    parse_mode="HTML",
-                    reply_markup=kb
+                    reply_markup=kb_upd
                 )
             except TelegramBadRequest:
-                pass
+                pass  # Xabar o'chirilgan bo'lsa — skip
             except Exception as e:
                 err = str(e).lower()
-                if "retry after" in err or "flood" in err or "too many" in err:
+                if "retry after" in err or "flood" in err:
                     m    = re.search(r"retry after (\d+)", err)
-                    wait = int(m.group(1)) + 1 if m else 10
-                    log.warning(f"⏳ Timer flood — {wait}s")
+                    wait = int(m.group(1)) + 1 if m else 5
+                    log.warning(f"⏳ KB flood — {wait}s")
                     await asyncio.sleep(wait)
             prev = target
-        # Oxirgi 1 soniya kutib, vaqt tugadi
-        await asyncio.sleep(1)
 
+        await asyncio.sleep(prev)  # Oxirgi intervalni kutish
         if chat_id not in _inline_sessions:
             return
 
-        # ── Vaqt tugadi → to'g'ri javobni ko'rsat ──
+        # ── Vaqt tugadi ──
         session["locked"] = True
 
-        # Savol uchun javob berganlar sonini tekshirish
         answered_this_q = sum(
             1 for ans in session["answers"].values()
             if str(i) in ans
@@ -601,7 +621,7 @@ async def _run_inline_session(
             return
         session = _inline_sessions[chat_id]
 
-        # ── Ketma-ket 2 ta savolga javob yo'q → PAUZA ──────────
+        # ── Ketma-ket 2 ta savolga javob yo'q → PAUZA ──
         if session.get("no_ans_streak", 0) >= 2:
             session["paused"] = True
             session["no_ans_streak"] = 0
@@ -620,7 +640,6 @@ async def _run_inline_session(
                 f"▶️ Davom ettirish yoki ⏹ Yakunlash tugmasini bosing:",
                 reply_markup=b.as_markup()
             )
-            # Davom yoki to'xtatish kutiladi
             await session["pause_event"].wait()
             session["pause_event"].clear()
             if chat_id not in _inline_sessions:
