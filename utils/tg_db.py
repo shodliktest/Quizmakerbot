@@ -274,32 +274,32 @@ def get_otp_info(code: str) -> dict:
 
 async def web_sync_loop():
     """
-    Har 60 soniyada web orqali yaratilgan yangi testlarni tekshiradi.
-    FAQAT META + msg_id RAMga qo'shiladi.
-    Savollar yechish boshlanganda lazy load bo'ladi (oldindan yuklanmaydi).
+    Har 5 daqiqada web index dan yangi testlar va statistikani tekshiradi.
+    Faqat index faylini o'qiydi — kanal ga xabar yubormaydi.
+    Bot ishlashiga ta'sir qilmaydi (fon task, asyncio).
     """
-    await asyncio.sleep(20)
+    await asyncio.sleep(30)   # Bot start dan 30s kutish
     consecutive_errors = 0
 
     while True:
         try:
-            await asyncio.sleep(60)
+            await asyncio.sleep(300)   # Har 5 daqiqada (avval 60s edi)
             if not ready():
                 continue
             from utils import ram_cache as ram
 
-            # Timeout bilan _load_index chaqirish — hang bo'lmasligi uchun
+            # Faqat index faylini o'qiymiz — probe/forward yo'q
             try:
-                new_index = await asyncio.wait_for(_load_index(), timeout=30)
+                new_index = await asyncio.wait_for(_load_index(), timeout=20)
             except asyncio.TimeoutError:
-                log.warning("web_sync: _load_index timeout (30s) — skip")
+                log.warning("web_sync: _load_index timeout — skip")
                 consecutive_errors += 1
                 continue
 
             if not (new_index and "tests_meta" in new_index):
                 continue
 
-            consecutive_errors = 0  # Muvaffaqiyatli — reset
+            consecutive_errors = 0
             ram_metas   = {t.get("test_id") for t in ram.get_all_tests_meta()}
             index_metas = new_index.get("tests_meta", [])
             added = 0
@@ -311,7 +311,7 @@ async def web_sync_loop():
                     continue
 
                 if tid not in ram_metas:
-                    # Yangi test — META qo'shamiz
+                    # Yangi test — META qo'shamiz (savolsiz)
                     clean_meta = {k: v for k, v in meta.items() if k != "questions"}
                     ram.add_test_meta(clean_meta)
                     _index.setdefault("tests_meta", [])
@@ -320,23 +320,19 @@ async def web_sync_loop():
                     msg_id = new_index.get(f"test_{tid}")
                     if msg_id:
                         _index[f"test_{tid}"] = msg_id
-                        log.info(f"🌐 Web test meta RAMga qo'shildi: {meta.get('title')} ({tid})")
+                    log.info(f"🌐 Web test qo'shildi: {meta.get('title','?')} ({tid})")
                     added += 1
                 else:
-                    # Mavjud test — solve_count va avg_score yangilaymiz
+                    # Saytda solve_count yangilangan bo'lsa — merge
                     web_sc  = meta.get("solve_count", 0)
                     web_avg = meta.get("avg_score", 0.0)
-                    cur_meta = ram.get_test_meta(tid)
-                    ram_sc  = cur_meta.get("solve_count", 0)
-
+                    cur     = ram.get_test_meta(tid)
+                    ram_sc  = cur.get("solve_count", 0)
                     if web_sc > ram_sc:
-                        ram_avg = cur_meta.get("avg_score", 0.0)
-                        if web_sc > 0 and ram_sc > 0:
-                            merged_avg = round(
-                                (web_avg * web_sc + ram_avg * ram_sc) / (web_sc + ram_sc), 1
-                            )
-                        else:
-                            merged_avg = web_avg if web_sc > ram_sc else ram_avg
+                        ram_avg = cur.get("avg_score", 0.0)
+                        merged_avg = round(
+                            (web_avg * web_sc + ram_avg * ram_sc) / (web_sc + ram_sc), 1
+                        ) if ram_sc > 0 else web_avg
                         ram.update_test_meta(tid, {
                             "solve_count": web_sc,
                             "avg_score":   merged_avg,
@@ -344,62 +340,19 @@ async def web_sync_loop():
                         stats_updated += 1
 
             if added:
-                log.info(f"✅ Web sync: {added} yangi test meta qo'shildi")
+                log.info(f"✅ Web sync: {added} yangi test")
             if stats_updated:
-                log.info(f"📊 Web sync: {stats_updated} test statistikasi yangilandi")
+                log.info(f"📊 Web sync: {stats_updated} statistika yangilandi")
                 mark_stats_dirty()
-
-            # Web natijalarni o'qish — timeout bilan
-            try:
-                probe = await asyncio.wait_for(
-                    _bot.send_message(_cid, "."), timeout=10
-                )
-                cur = probe.message_id
-                await _bot.delete_message(_cid, cur)
-                from utils.db import save_result
-                results_added = 0
-                _last_result_msg = getattr(web_sync_loop, '_last_msg', 0)
-                for mid in range(cur - 1, max(_last_result_msg, cur - 30), -1):
-                    try:
-                        fwd = await asyncio.wait_for(
-                            _bot.forward_message(_cid, _cid, mid), timeout=8
-                        )
-                        doc = getattr(fwd, "document", None)
-                        try: await _bot.delete_message(_cid, fwd.message_id)
-                        except: pass
-                        if not doc: continue
-                        fname = doc.file_name or ""
-                        if not fname.startswith("result_"): continue
-                        data = await _read_file(doc.file_id)
-                        if not data or not data.get("user_id"): continue
-                        uid = int(data["user_id"])
-                        tid_r = data.get("test_id", "")
-                        pct   = data.get("percentage", 0)
-                        save_result(uid, tid_r, {
-                            "percentage":       pct,
-                            "score":            data.get("score", 0),
-                            "total":            data.get("total", 0),
-                            "passing_score":    data.get("passing_score", 60),
-                            "detailed_results": data.get("detailed_results", []),
-                        }, via_link=False)
-                        results_added += 1
-                        await asyncio.sleep(0.05)
-                    except: pass
-                if results_added:
-                    web_sync_loop._last_msg = cur
-                    log.info(f"✅ Web natijalar: {results_added} ta RAMga qo'shildi")
-            except Exception as e:
-                log.warning(f"Web result sync: {e}")
 
         except asyncio.CancelledError:
             break
         except Exception as e:
             consecutive_errors += 1
             log.error(f"web_sync_loop xato ({consecutive_errors}): {e}")
-            # Ko'p ketma-ket xato bo'lsa — biroz ko'proq kutamiz
             if consecutive_errors >= 5:
-                log.error("web_sync_loop: 5 ketma-ket xato — 5 daqiqa kutamiz")
-                await asyncio.sleep(300)
+                log.error("web_sync: 5 xato — 15 daqiqa tanaffus")
+                await asyncio.sleep(900)
                 consecutive_errors = 0
 
 async def auto_flush_loop():
