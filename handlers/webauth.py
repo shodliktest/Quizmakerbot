@@ -1,4 +1,5 @@
 """🌐 WEBAUTH — Sayt uchun Telegram ID orqali kirish"""
+import urllib.parse
 from aiogram import Router, F
 from aiogram.types import Message, InlineKeyboardButton, WebAppInfo
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -7,6 +8,19 @@ from aiogram.filters import Command, CommandStart
 router = Router()
 
 WEBAPP_URL = "https://quizmarkerbotweb.vercel.app"
+
+
+def _login_url(user) -> str:
+    """Foydalanuvchi ma'lumotlari bilan to'ldirilgan login URL qaytaradi."""
+    name  = user.full_name or "Foydalanuvchi"
+    uname = user.username or ""
+    params = urllib.parse.urlencode({
+        "uid":   user.id,
+        "name":  name,
+        "uname": uname,
+        "auto":  "1",
+    })
+    return f"{WEBAPP_URL}/login.html?{params}"
 
 
 async def _send_id(message: Message):
@@ -40,14 +54,22 @@ async def start_getid(message: Message):
 @router.message(Command("webapp"))
 @router.message(F.text == "🌐 Saytga kirish")
 async def open_webapp(message: Message):
+    url = _login_url(message.from_user)
     b = InlineKeyboardBuilder()
+    # 1. WebApp tugmasi — Telegram ichida to'g'ri ochiladi (eng qulay)
     b.row(InlineKeyboardButton(
-        text="🌐 TestPro saytini ochish",
-        web_app=WebAppInfo(url=WEBAPP_URL + "/login.html")
+        text="🌐 Saytni ochish (Telegram ichida)",
+        web_app=WebAppInfo(url=f"{WEBAPP_URL}/login.html")
+    ))
+    # 2. Oddiy URL — brauzerda ochiladi, uid parametr bilan avtomatik kiradi
+    b.row(InlineKeyboardButton(
+        text="🔗 Brauzerda ochish",
+        url=url
     ))
     await message.answer(
         "🌐 <b>TestPro saytiga kirish</b>\n\n"
-        "Quyidagi tugmani bosing — avtomatik kirasiz:",
+        "Birinchi tugma — Telegram ichida ochadi (tavsiya etiladi)\n"
+        "Ikkinchi tugma — brauzerda ochadi, avtomatik kirasiz:",
         reply_markup=b.as_markup()
     )
 
