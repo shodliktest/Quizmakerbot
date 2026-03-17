@@ -127,15 +127,23 @@ def set_tests(tests):
         meta = {k: v for k, v in t.items() if k != "questions"}
         meta["question_count"] = len(t.get("questions", []))
         metas.append(meta)
-        if t.get("is_active", True) and t.get("questions"):
-            cache_questions(t["test_id"], t)
+def set_tests(tests):
+    """Bot start'da indexdan META YUKLANADI — savollar yuklanmaydi (lazy load)"""
+    metas = []
+    for t in tests:
+        meta = {k: v for k, v in t.items() if k != "questions"}
+        meta["question_count"] = len(t.get("questions", []))
+        metas.append(meta)
+        # Savollarni oldindan yuklash YO'Q — faqat kerak bo'lganda lazy load
     _set("tests_meta", metas)
 
 def add_test(test):
+    """Yangi test (bot orqali yaratilgan) — meta RAMga, savollar qisqa cache"""
     meta = {k: v for k, v in test.items() if k != "questions"}
     meta["question_count"] = len(test.get("questions", []))
     add_test_meta(meta)
-    if test.get("questions"):
+    # Bot orqali yaratilganda savollar qisqa muddatga cache — web dan kelganda YO'Q
+    if test.get("questions") and test.get("source") != "web":
         cache_questions(test["test_id"], test)
 
 def update_test_meta_full(test):
@@ -148,61 +156,84 @@ def refresh_tests():
     _set("tests_meta", [])
 
 
-# ══ SAVOLLAR CACHE (12 soat) ══════════════════════════════════
-
-# ══ SAVOLLAR CACHE ════════════════════════════════════════════
+# ══ SAVOLLAR CACHE (on-demand, auto-evict) ════════════════════
 #
 # Qoidalar:
-#   - Bot start: faqat oxirgi backup dagi testlar yuklanadi
-#   - Birinchi so'rov: TGdan yuklab, RAMda ABADIY saqlaydi (o'chmaydi)
-#   - 2 kun (48 soat) hech kim yechmasa: RAMdan o'chadi (TGda qoladi)
-#   - Yangi yechish: last_access yangilanadi (yana 48 soat)
+#   - RAM da FAQAT META turadi (title, category, question_count, ...)
+#   - Savollar (qcache_) FAQAT test yechilayotganda yuklanadi (lazy load)
+#   - active_users > 0 bo'lsa — hech qachon o'chirilmaydi
+#   - active_users == 0 va 10 daqiqa murojaat yo'q bo'lsa — o'chiriladi
+#   - TG kanalda doim saqlanadi — keyingi so'rovda qayta lazy load
 #
-CACHE_TTL_HOURS = 48   # 2 kun
+CACHE_TTL_MINUTES = 10   # 10 daqiqa hech kim yechmasa RAMdan o'chadi
 
 def cache_questions(tid, test_full):
-    """Test RAMga yuklanadi — last_access bilan"""
+    """Test savollarini RAMga yuklash — faqat yechish boshlanganda chaqiriladi"""
     now = datetime.now(UTC)
     _set(f"qcache_{tid}", {
-        "test":        test_full,
-        "loaded_at":   now,
-        "last_access": now,
+        "test":         test_full,
+        "loaded_at":    now,
+        "last_access":  now,
+        "active_users": 0,
     })
-    log.debug(f"RAM cache: {tid} yuklandi")
+    log.debug(f"RAM qcache: {tid} yuklandi")
 
 def get_cached_questions(tid):
-    """RAMdan o'qish + last_access yangilash"""
+    """RAMdan o'qish — last_access yangilanadi"""
     e = _get(f"qcache_{tid}")
     if not e:
         return None
-    # last_access yangilash (har o'qishda)
     e["last_access"] = datetime.now(UTC)
     _set(f"qcache_{tid}", e)
     return e["test"]
 
 def touch_test_access(tid):
-    """Test yechilganda last_access yangilanadi"""
+    """Test yechilayotganda last_access yangilanadi"""
     e = _get(f"qcache_{tid}")
     if e:
         e["last_access"] = datetime.now(UTC)
         _set(f"qcache_{tid}", e)
 
+def mark_test_active(tid):
+    """User test yechishni BOSHLAGANDA — active_users oshirish"""
+    e = _get(f"qcache_{tid}")
+    if e:
+        e["active_users"] = e.get("active_users", 0) + 1
+        e["last_access"]  = datetime.now(UTC)
+        _set(f"qcache_{tid}", e)
+
+def mark_test_done(tid):
+    """User test yechishni TUGATGANDA — active_users kamaytirish.
+    Darhol o'chirmaymiz — TTL ga qoldiramiz (keyingi user tez kelishi mumkin)."""
+    e = _get(f"qcache_{tid}")
+    if e:
+        e["active_users"] = max(0, e.get("active_users", 1) - 1)
+        e["last_access"]  = datetime.now(UTC)
+        _set(f"qcache_{tid}", e)
+
+def evict_test_cache(tid):
+    """Testning savollarini RAMdan o'chirish (meta qoladi, TGda bor)"""
+    with _lck:
+        _RAM.pop(f"qcache_{tid}", None)
+    log.debug(f"RAM evict: {tid} savollari o'chirildi (meta qoldi)")
+
 def clear_expired_cache():
-    """2 kun yechilmagan testlarni RAMdan o'chirish (TGda qoladi)"""
+    """TTL o'tgan, hech kim yechmayotgan testlarni RAMdan o'chirish"""
     now      = datetime.now(UTC)
-    deadline = now - timedelta(hours=CACHE_TTL_HOURS)
+    deadline = now - timedelta(minutes=CACHE_TTL_MINUTES)
     removed  = []
     with _lck:
         keys = [
             k for k in list(_RAM)
             if k.startswith("qcache_")
+            and _RAM[k].get("active_users", 0) == 0  # hech kim yechmayotgan
             and _RAM[k].get("last_access", now) < deadline
         ]
         for k in keys:
             del _RAM[k]
             removed.append(k.replace("qcache_", ""))
     if removed:
-        log.info(f"RAM expired: {len(removed)} test o'chirildi — {removed}")
+        log.info(f"RAM cleanup: {len(removed)} test o'chirildi")
     return removed
 
 def get_cache_stats():
@@ -214,8 +245,12 @@ def get_cache_stats():
             if not k.startswith("qcache_"): continue
             tid  = k.replace("qcache_", "")
             la   = v.get("last_access", now)
-            ago  = int((now - la).total_seconds() / 3600)
-            items.append({"tid": tid, "last_access_hours_ago": ago})
+            ago  = int((now - la).total_seconds() / 60)
+            items.append({
+                "tid": tid,
+                "last_access_min_ago": ago,
+                "active_users": v.get("active_users", 0),
+            })
     return items
 
 
@@ -411,9 +446,10 @@ def load_solvers_to_ram(tid, solvers_dict):
                 "all_pcts":      s.get("all_pcts", []),
                 "best_score":    s.get("best_score", 0.0),
                 "avg_score":     s.get("avg_score", 0.0),
-                "first_result":  None,
-                "last_result":   None,
-                "last_analysis": [],
+                # Rebootdan keyin tiklanadi
+                "first_result":  s.get("first_result") or {},
+                "last_result":   s.get("last_result") or {},
+                "last_analysis": s.get("last_analysis") or [],
                 "accessed_link": False,
                 "last_at":       s.get("last_at", ""),
             }
