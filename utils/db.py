@@ -28,15 +28,8 @@ async def get_or_create_user(tg_id, name, username=None):
         "_just_created": True,
     }
     ram.upsert_user(tg_id, user)
-    # Yangi user — darhol TG ga yozish
+    # Yangi user RAM da saqlanadi, midnight da TG ga yuklanadi
     ram.mark_users_dirty()
-    try:
-        from utils import tg_db
-        if tg_db.ready():
-            import asyncio
-            asyncio.create_task(tg_db.save_users_full())
-    except Exception:
-        pass
     return user
 
 def update_user(tg_id, data):
@@ -70,6 +63,7 @@ async def get_test_full(tid):
     To'liq test (savollar bilan):
     1. 12 soat RAM cache
     2. TG kanaldan yuklab oladi + cache qiladi
+    3. Web testlar uchun index qayta tekshiriladi
     """
     cached = ram.get_cached_questions(tid)
     if cached:
@@ -80,6 +74,8 @@ async def get_test_full(tid):
         if full and full.get("questions"):
             ram.cache_questions(tid, full)
             return full
+        else:
+            log.warning(f"get_test_full: {tid} uchun savollar topilmadi (web test bo'lishi mumkin, 60s kuting)")
     # Meta bor bo'lsa qaytaramiz (savollarsiz)
     meta = ram.get_test_meta(tid)
     return meta if meta else {}
