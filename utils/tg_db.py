@@ -70,7 +70,15 @@ async def init(bot, channel_id):
     # 2. users_full.json — user statistikalar + history
     await _load_users_full()
 
-    # 3. Hot testlar — oxirgi backup dan
+    # 3. O'qib bo'lmagan fayllarni darhol qayta yozish (protect_content muammosi)
+    if _stats_dirty:
+        log.info("♻️ tests_stats qayta yozilmoqda...")
+        await save_tests_stats()
+    if _users_dirty:
+        log.info("♻️ users_full qayta yozilmoqda...")
+        await save_users_full()
+
+    # 4. Hot testlar — oxirgi backup dan
     await _preload_from_last_backup()
 
 
@@ -99,6 +107,8 @@ async def _load_tests_stats():
         return
     data = await _download_doc(mid)
     if not data:
+        log.warning(f"⚠️ tests_stats o'qilmadi (mid={mid}) — 5 daqiqada qayta yoziladi")
+        mark_stats_dirty()
         return
     from utils import ram_cache as ram
     stats = data.get("stats", {})
@@ -172,20 +182,20 @@ async def _load_users_full():
     """users_full.json dan user statistikalar + history yuklash"""
     mid = _index.get("users_full_msg_id")
     if not mid:
-        # Eski users.json bor bo'lsa
         mid = _index.get("users_msg_id")
         if not mid:
             log.info("ℹ️ users_full yo'q")
             return
     data = await _download_doc(mid)
     if not data:
+        # O'qib bo'lmadi (protect_content) — dirty flag, 5 daqiqada qayta yoziladi
+        log.warning(f"⚠️ users_full o'qilmadi (mid={mid}) — 5 daqiqada qayta yoziladi")
+        mark_users_dirty_tg()
         return
     from utils import ram_cache as ram
-    # Users
     users = data.get("users", {})
     if users:
         ram.set_users(users)
-    # Per-user history (results)
     history = data.get("history", {})
     if history:
         ram.load_history_to_ram(history)
@@ -697,21 +707,35 @@ def get_index_info():
 async def _download_doc(msg_id):
     """
     Kanaldan fayl yuklab olish.
-    Bot API 7.0+ getMessages metodi — forward shart emas.
+    1. Bot API getMessages (forward talab qilmaydi, protect_content muhim emas)
+    2. Fallback: forward_message
     """
+    import asyncio, urllib.request, json as _json, functools
+
+    token = _bot.token
+
+    # ── 1. getMessages (Bot API 7.0+) ─────────────────────────
+    def _get_messages_sync():
+        try:
+            url  = f"https://api.telegram.org/bot{token}/getMessages"
+            body = _json.dumps({"chat_id": _cid, "message_ids": [int(msg_id)]}).encode()
+            req  = urllib.request.Request(url, body, {"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=15) as r:
+                return _json.loads(r.read())
+        except Exception:
+            return {}
+
     try:
-        # aiogram TelegramMethod orqali getMessages chaqirish
-        from aiogram.methods import GetMessages
-        msgs = await _bot(GetMessages(chat_id=_cid, message_ids=[int(msg_id)]))
-        if msgs:
-            m   = msgs[0] if isinstance(msgs, list) else msgs
-            doc = getattr(m, "document", None)
+        loop = asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, _get_messages_sync)
+        if data.get("ok") and data.get("result"):
+            doc = data["result"][0].get("document")
             if doc:
-                return await _read_file(doc.file_id)
+                return await _read_file(doc["file_id"])
     except Exception:
         pass
 
-    # Fallback: eski usul (protect_content=False bo'lgan yangi xabarlar uchun)
+    # ── 2. Fallback: forward_message ──────────────────────────
     try:
         fwd = await _bot.forward_message(_cid, _cid, int(msg_id))
         doc = getattr(fwd, "document", None)
@@ -721,6 +745,8 @@ async def _download_doc(msg_id):
             return await _read_file(doc.file_id)
     except Exception as e:
         log.error(f"download_doc {msg_id}: {e}")
+
+    return {}
 
     return {}
 
