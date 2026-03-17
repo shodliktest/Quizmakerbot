@@ -52,7 +52,7 @@ async def route_poll_answer(poll_answer: PollAnswer, state: FSMContext, bot=None
             await _finish_poll(bot, cid, state, fresh)
 
 
-# ── Boshlash ──────────────────────────────────────────────────
+# ── Boshlash ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━──────
 
 @router.callback_query(F.data.startswith("start_poll_"))
 async def start_poll(callback: CallbackQuery, state: FSMContext):
@@ -71,47 +71,16 @@ async def start_poll(callback: CallbackQuery, state: FSMContext):
     msg    = callback.message
     chat_id= msg.chat.id if msg and msg.chat else uid
 
+    # Paused?
     if is_test_paused(tid):
         return await callback.answer("⚠️ Bu test vaqtincha to'xtatilgan!", show_alert=True)
 
-    # ── Aktiv test tekshiruvi ─────────────────────────────────
+    # FSM tozalash
     from utils.states import TestSolving as _TS
     cur = await state.get_state()
-    active_states = (
-        _TS.answering.state, _TS.text_answer.state, _TS.paused.state,
-        PollTest.active.state, PollTest.paused.state,
-    )
-    if cur in active_states:
-        d = await state.get_data()
-        active_name  = d.get("test", {}).get("title", "Joriy test")
-        active_idx   = d.get("idx", 0)
-        active_total = len(d.get("qs", []))
-
-        from config import ADMIN_IDS
-        can_stop = (uid == d.get("uid", uid)) or (uid in ADMIN_IDS)
-
-        import re as _re
-        def _esc(s): return _re.sub(r'[<>&]', lambda m: {'<':'&lt;','>':'&gt;','&':'&amp;'}[m.group()], str(s))
-
-        b = InlineKeyboardBuilder()
-        if can_stop:
-            b.row(InlineKeyboardButton(
-                text="⏹ Joriy testni to'xtatib, yangisini boshlash",
-                callback_data=f"force_start_poll_{tid}{'_link' if via_link else ''}"
-            ))
-        b.row(InlineKeyboardButton(
-            text="▶️ Joriy testni davom ettirish",
-            callback_data="noop"
-        ))
-        await msg.answer(
-            f"⚠️ <b>Siz hozir test yechyapsiz!</b>\n\n"
-            f"📝 <b>{_esc(active_name)}</b>\n"
-            f"📊 Savol: {active_idx}/{active_total}\n\n"
-            f"{'Yangi test boshlash uchun avval joriy testni to\'xtating.' if can_stop else 'Faqat siz boshlagan test to\'xtatilishi mumkin.'}",
-            reply_markup=b.as_markup()
-        )
-        return
-    # ──────────────────────────────────────────────────────────
+    if cur in (_TS.answering.state, _TS.text_answer.state,
+               PollTest.active.state, PollTest.paused.state):
+        await state.clear()
 
     test = get_test_by_id(tid)
     if not test or not test.get("questions"):
@@ -119,7 +88,8 @@ async def start_poll(callback: CallbackQuery, state: FSMContext):
         try:
             load_msg = await callback.bot.send_message(
                 chat_id, "⏳ <b>Test yuklanmoqda...</b>"
-            )
+            ,
+        protect_content=True)
         except Exception: pass
         test = await get_test_full(tid)
         if load_msg:
@@ -129,66 +99,17 @@ async def start_poll(callback: CallbackQuery, state: FSMContext):
     if not test:
         return await callback.answer("❌ Test topilmadi.", show_alert=True)
 
-    try: await msg.delete()
-    except Exception: pass
-
-    await _begin_poll(callback.bot, state, uid, chat_id, tid, via_link, test)
-
-
-async def _begin_poll(bot, state, uid, chat_id, tid, via_link=False, test=None):
-    """Poll testni boshlash — state allaqachon tozalangan bo'lishi kerak."""
-    import random, copy, re as _re
-
-    if test is None:
-        test = get_test_by_id(tid)
-        if not test or not test.get("questions"):
-            test = await get_test_full(tid)
-    if not test:
-        try: await bot.send_message(chat_id, "❌ Test topilmadi.")
-        except: pass
-        return
-
-    all_qs_raw = test.get("questions", [])
-    all_qs = copy.deepcopy(all_qs_raw)
-    random.shuffle(all_qs)
-
-    # Variantlarni aralashtirish + savol matni variantdan olib tashlash
-    LABELS = ["A","B","C","D","E","F","G","H"]
-    def _strip(o): return _re.sub(r"^[A-Ha-h]\s*[).:]\s*", "", str(o)).strip()
-    for q in all_qs:
-        if q.get("type") not in ("multiple_choice", "multiple", "multi_select"):
-            continue
-        opts = q.get("options", [])
-        if len(opts) < 2: continue
-        pure = [_strip(o) for o in opts]
-        q_text = _strip(q.get("question", q.get("text", ""))).strip()
-        if q_text:
-            pure = [o for o in pure if o.strip().lower() != q_text.lower()]
-        if len(pure) < 2: continue
-        corr = q.get("correct")
-        corr_text = (
-            pure[corr] if isinstance(corr, int) and 0 <= corr < len(pure)
-            else _strip(corr) if isinstance(corr, str) else None
-        )
-        random.shuffle(pure)
-        q["options"] = [f"{LABELS[i]}) {t}" for i, t in enumerate(pure)]
-        if corr_text is not None:
-            ni = next((i for i, t in enumerate(pure) if t == corr_text), 0)
-            q["correct"] = f"{LABELS[ni]}) {corr_text}"
-
-    qs = [q for q in all_qs if q.get("type", "multiple_choice") in POLL_TYPES]
-    skipped = len(all_qs) - len(qs)
+    all_qs = test.get("questions", [])
+    qs     = [q for q in all_qs if q.get("type","multiple_choice") in POLL_TYPES]
+    skipped= len(all_qs) - len(qs)
 
     if not qs:
-        try:
-            b = InlineKeyboardBuilder()
-            b.row(InlineKeyboardButton(text="▶️ Inline test", callback_data=f"start_test_{tid}"))
-            await bot.send_message(
-                chat_id, "⚠️ Bu testda variantli savollar yo'q.",
-                reply_markup=b.as_markup()
-            )
-        except: pass
-        return
+        b = InlineKeyboardBuilder()
+        b.row(InlineKeyboardButton(text="▶️ Inline test", callback_data=f"start_test_{tid}"))
+        return await msg.answer(
+            "⚠️ Bu testda variantli savollar yo'q.",
+            reply_markup=b.as_markup()
+        )
 
     pt = test.get("poll_time", 30) or 30
     await state.set_state(PollTest.active)
@@ -200,36 +121,40 @@ async def _begin_poll(bot, state, uid, chat_id, tid, via_link=False, test=None):
         "via_link": via_link,
     })
 
-    try:
-        countdown = await bot.send_message(chat_id, f"📝 <b>{test.get('title')}</b>")
-        for emoji in COUNT_EMOJIS:
-            await asyncio.sleep(0.8)
-            try: await countdown.edit_text(emoji)
-            except: pass
-        await asyncio.sleep(0.5)
-        try: await countdown.delete()
-        except: pass
-    except: pass
+    try: await msg.delete()
+    except Exception: pass
+
+    # 🚀 Faqat emoji countdown (test nomi bilan)
+    countdown = await callback.bot.send_message(
+        chat_id,
+        f"📝 <b>{test.get('title')}</b>"
+    ,
+        protect_content=True)
+    for emoji in COUNT_EMOJIS:
+        await asyncio.sleep(0.8)
+        try: await countdown.edit_text(emoji)
+        except Exception: pass
+    await asyncio.sleep(0.5)
+    try: await countdown.delete()
+    except Exception: pass
 
     b = InlineKeyboardBuilder()
     b.row(
-        InlineKeyboardButton(text="⏸ Pauza",       callback_data="pause_poll"),
-        InlineKeyboardButton(text="⏹ To'xtatish",  callback_data="cancel_poll"),
+        InlineKeyboardButton(text="⏸ Pauza",      callback_data="pause_poll"),
+        InlineKeyboardButton(text="⏹ To'xtatish", callback_data="cancel_poll"),
     )
     skip_txt = f"\n⚠️ <i>{skipped} ta matn savol o'tkazildi</i>" if skipped else ""
-    try:
-        info = await bot.send_message(
-            chat_id,
-            f"<b>📊 POLL TEST</b> | {len(qs)} savol | ⏱ {pt}s{skip_txt}",
-            reply_markup=b.as_markup()
-        )
-        await state.update_data(info_msg_id=info.message_id)
-    except: pass
-
-    await _send_poll(bot, chat_id, state)
+    info = await callback.bot.send_message(
+        chat_id,
+        f"<b>📊 POLL TEST</b> | {len(qs)} savol | ⏱ {pt}s{skip_txt}",
+        reply_markup=b.as_markup()
+    ,
+        protect_content=True)
+    await state.update_data(info_msg_id=info.message_id)
+    await _send_poll(callback.bot, chat_id, state)
 
 
-# ── Poll yuborish ─────────────────────────────────────────────
+# ── Poll yuborish ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━─
 
 async def _send_poll(bot, cid, state):
     d   = await state.get_data()
@@ -276,7 +201,8 @@ async def _send_poll(bot, cid, state):
             chat_id=cid, question=hdr+qtxt, options=opts,
             type="quiz", correct_option_id=ci, explanation=expl,
             is_anonymous=False, open_period=pt if pt > 0 else None
-        )
+        ,
+        protect_content=True)
         msgs = d.get("msg_ids", [])
         msgs.append(pm.message_id)
         pmap = d.get("poll_map", {})
@@ -323,7 +249,8 @@ async def _poll_timeout(bot, cid, state, expected_idx, wait_sec):
                     cid,
                     f"⏸ <b>PAUZA</b> — {expected_idx+1}/{qs_total} savolga javob berilmadi (2 marta).",
                     reply_markup=b.as_markup()
-                )
+                ,
+        protect_content=True)
             else:
                 new_idx = expected_idx + 1
                 await state.update_data(ans=ans, idx=new_idx)
@@ -336,7 +263,7 @@ async def _poll_timeout(bot, cid, state, expected_idx, wait_sec):
     except Exception as e: log.error(f"Timeout xato: {e}")
 
 
-# ── Pauza / Davom / To'xtatish ────────────────────────────────
+# ── Pauza / Davom / To'xtatish ━━━━━━━━━━━━━━━━━━━━━━━━──────────
 
 @router.callback_query(F.data == "pause_poll", PollTest.active)
 async def pause_poll(callback: CallbackQuery, state: FSMContext):
@@ -351,7 +278,8 @@ async def pause_poll(callback: CallbackQuery, state: FSMContext):
         cid,
         f"⏸ <b>PAUZA</b> | Savol {d.get('idx',0)}/{len(d.get('qs',[]))}",
         reply_markup=poll_pause_kb()
-    )
+    ,
+        protect_content=True)
 
 @router.callback_query(F.data == "resume_poll", PollTest.paused)
 async def resume_poll(callback: CallbackQuery, state: FSMContext):
@@ -364,16 +292,9 @@ async def resume_poll(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "cancel_poll")
 async def cancel_poll(callback: CallbackQuery, state: FSMContext):
-    from config import ADMIN_IDS
-    uid = callback.from_user.id
-    d   = await state.get_data()
-
-    # Faqat boshlagan user yoki admin
-    if uid != d.get("uid", uid) and uid not in ADMIN_IDS:
-        return await callback.answer("🚫 Faqat siz boshlagan testni to'xtata olasiz!", show_alert=True)
-
-    cid = callback.message.chat.id if callback.message and callback.message.chat else uid
+    cid = callback.message.chat.id if callback.message and callback.message.chat else callback.from_user.id
     _cancel_timer(cid)
+    d = await state.get_data()
     await state.clear()
     await callback.answer("❌")
     for mid in d.get("msg_ids", []):
@@ -388,45 +309,12 @@ async def cancel_poll(callback: CallbackQuery, state: FSMContext):
     except Exception: pass
     await callback.bot.send_message(
         cid, "❌ <b>POLL TEST TO'XTATILDI</b>",
-        reply_markup=main_kb(uid, "private")
-    )
+        reply_markup=main_kb(callback.from_user.id)
+    ,
+        protect_content=True)
 
 
-# ── Majburiy to'xtatib poll boshlaш ──────────────────────────
-@router.callback_query(F.data.startswith("force_start_poll_"))
-async def force_start_poll(callback: CallbackQuery, state: FSMContext):
-    from config import ADMIN_IDS
-    uid = callback.from_user.id
-    d   = await state.get_data()
-
-    if uid != d.get("uid", uid) and uid not in ADMIN_IDS:
-        return await callback.answer("🚫 Faqat siz boshlagan testni to'xtata olasiz!", show_alert=True)
-
-    await callback.answer("⏹ Joriy test to'xtatildi")
-    cid = callback.message.chat.id if callback.message and callback.message.chat else uid
-    _cancel_timer(cid)
-
-    # Avvalgi poll xabarlarini tozalash
-    for mid in d.get("msg_ids", []):
-        try: await callback.bot.stop_poll(cid, mid)
-        except: pass
-    info_mid = d.get("info_msg_id")
-    if info_mid:
-        try: await callback.bot.delete_message(cid, info_mid)
-        except: pass
-
-    await state.clear()
-    try: await callback.message.edit_text("⏹ <b>Joriy test to'xtatildi.</b>")
-    except: pass
-
-    # Yangi poll boshlash
-    raw = callback.data[len("force_start_poll_"):]
-    via_link = raw.endswith("_link")
-    tid = raw[:-5].upper() if via_link else raw.upper()
-    await _begin_poll(callback.bot, state, uid, cid, tid, via_link)
-
-
-# ── Yakunlash ─────────────────────────────────────────────────
+# ── Yakunlash ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━─────
 
 async def _finish_poll(bot, cid, state, d):
     test    = d["test"]
@@ -467,4 +355,5 @@ async def _finish_poll(bot, cid, state, d):
         cid,
         format_result(scored, test) + rank_txt,
         reply_markup=result_kb(tid, rid)
-    )
+    ,
+        protect_content=True)

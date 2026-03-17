@@ -178,7 +178,7 @@ async def _show_categories(msg, uid, edit=False):
     sorted_cats = sorted(cats.items(), key=lambda x: x[1]["count"], reverse=True)
     text = (
         f"📚 <b>TESTLAR — FANLAR BO'YICHA</b>\n"
-        f"──────────────────────\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"<i>Jami: {len(visible)} ta test | {len(cats)} ta fan</i>\n\n"
     )
     b = InlineKeyboardBuilder()
@@ -246,7 +246,7 @@ async def _show_cat_tests(msg, uid, cat_name, page=0, edit=False):
 
     text = (
         f"<b>{title}</b>\n"
-        f"──────────────────────\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"<i>{len(tests)} ta test | Sahifa {page+1}/{total}</i>\n\n"
     )
     b = InlineKeyboardBuilder()
@@ -630,7 +630,7 @@ async def _question_timeout(bot, cid, state, uid, expected_idx, wait_sec):
     except Exception as e: log.error(f"Timeout: {e}")
 
 
-# ── Javob handler ──────────────────────
+# ── Javob handler ━━━━━━━━━━━━━━━━━━━━━━━━
 @router.callback_query(F.data.startswith("ans_"), StateFilter(TestSolving.answering))
 async def answer_cb(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
@@ -769,7 +769,7 @@ async def next_q_now_cb(callback: CallbackQuery, state: FSMContext):
         await _finish_inline(callback.bot, cid, state, d_fresh)
 
 
-# ── Matn javob ──────────────────────
+# ── Matn javob ━━━━━━━━━━━━━━━━━━━━━━━━
 @router.message(StateFilter(TestSolving.text_answer))
 async def text_answer_handler(message: Message, state: FSMContext):
     uid      = message.from_user.id
@@ -813,7 +813,7 @@ async def text_answer_handler(message: Message, state: FSMContext):
     qtxt_s   = qtxt[:80] + ("..." if len(qtxt) > 80 else "")
     result_text = (
         f"{icon_ok} <b>{idx+1}/{len(qs)} — {label_ok}</b>\n"
-        f"──────────────────────\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"<i>{qtxt_s}</i>\n\n"
         f"✍️ Sizning: <code>{user_ans[:60]}</code>\n"
         f"✔️ To'g'ri: <b>{str(corr)[:80]}</b>{expl_txt}\n\n"
@@ -848,7 +848,7 @@ async def text_answer_handler(message: Message, state: FSMContext):
     _inline_timers[uid] = task
 
 
-# ── Skip ──────────────────────
+# ── Skip ━━━━━━━━━━━━━━━━━━━━━━━━
 @router.callback_query(F.data == "skip_q", StateFilter(TestSolving))
 async def skip_q_cb(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
@@ -871,7 +871,7 @@ async def skip_q_cb(callback: CallbackQuery, state: FSMContext):
         await _finish_inline(callback.bot, cid, state, d_fresh)
 
 
-# ── Pauza ──────────────────────
+# ── Pauza ━━━━━━━━━━━━━━━━━━━━━━━━
 @router.callback_query(F.data == "inline_pause_menu")
 async def inline_pause_menu(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
@@ -918,7 +918,7 @@ async def cancel_test_cb(callback: CallbackQuery, state: FSMContext):
         protect_content=True)
 
 
-# ── Yakunlash ──────────────────────
+# ── Yakunlash ━━━━━━━━━━━━━━━━━━━━━━━━
 async def _finish_inline(bot, cid, state, d):
     from utils.scoring import calculate_score, format_result
     from keyboards.keyboards import result_kb

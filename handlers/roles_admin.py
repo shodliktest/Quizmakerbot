@@ -40,7 +40,7 @@ class RoleAdmin(StatesGroup):
     resetall_confirm = State()
 
 
-# ── Guard: faqat admin ──────────────────────
+# ── Guard: faqat admin ━━━━━━━━━━━━━━━━━━━━━━━━
 def _is_admin(uid: int) -> bool:
     if uid in ADMIN_IDS:
         return True
@@ -411,7 +411,7 @@ def _settings_text() -> str:
     open_create = cfg.get("open_test_creation", False)
     return (
         "⚙️ <b>Global sozlamalar</b>\n"
-        "──────────────────────\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📝 <b>Test yaratish (shaxsiy/link):</b>\n"
         f"   {'✅ Hamma yarata oladi' if open_create else '❌ Faqat Student+ va referal'}\n\n"
         f"🌍 <b>Ommaviy test:</b>\n"

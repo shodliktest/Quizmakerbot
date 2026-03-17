@@ -42,13 +42,13 @@ async def _show_admin(ev, edit=False):
     users = ram.get_users()
     text  = (
         f"👑 <b>ADMIN PANEL</b>\n"
-        f"──────────────────────\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📋 Testlar: <b>{len(tests)}</b>\n"
         f"👥 Userlar: <b>{len(users)}</b>\n"
         f"📊 Kunlik: <b>{st.get('daily_r',0)}</b>\n"
         f"💾 RAM cache: <b>{st.get('cached_q',0)} test</b>\n"
         f"🧠 RAM: <b>{st.get('mb',0)} MB ({st.get('pct',0)}%)</b>\n"
-        f"──────────────────────"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━"
     )
     try:
         if edit and hasattr(ev, 'message'):
@@ -78,7 +78,7 @@ async def admin_stats(callback: CallbackQuery):
     cache_info = ram.get_cache_stats() if hasattr(ram, 'get_cache_stats') else []
     text = (
         f"📈 <b>STATISTIKA</b>\n"
-        f"──────────────────────\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"👥 Jami userlar: <b>{len(users)}</b>\n"
         f"📋 Jami testlar: <b>{len(tests)}</b>\n\n"
         f"📅 <b>Bugun:</b>\n"
@@ -87,7 +87,7 @@ async def admin_stats(callback: CallbackQuery):
         f"🧠 <b>RAM holati:</b>\n"
         f"  💾 {st.get('mb',0)} MB / {st.get('limit_mb',450)} MB ({st.get('pct',0)}%)\n"
         f"  📦 Cached testlar: <b>{st.get('cached_q',0)} ta</b>\n"
-        f"──────────────────────"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━"
     )
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="⬅️ Admin panel", callback_data="admin_panel"))
@@ -117,7 +117,7 @@ async def _show_users_page(msg, page=0, edit=False):
     chunk = users[page*PG:(page+1)*PG]
     text  = (
         f"👥 <b>FOYDALANUVCHILAR</b>\n"
-        f"──────────────────────\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"<i>Jami: {len(users)} ta | Sahifa {page+1}/{total}</i>\n\n"
     )
     b = InlineKeyboardBuilder()
@@ -159,7 +159,7 @@ async def adm_user_detail(callback: CallbackQuery):
     blk   = u.get("is_blocked", False)
     text  = (
         f"👤 <b>{name}</b>\n"
-        f"──────────────────────\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"🆔 <code>{uid_str}</code>\n"
         f"📱 {uname}\n"
         f"📋 Testlar: <b>{u.get('total_tests',0)}</b>\n"
@@ -218,7 +218,7 @@ async def _show_admin_test_cats(msg, edit=False):
     sorted_cats = sorted(cats.items(), key=lambda x: x[1]["total"], reverse=True)
     text = (
         f"📋 <b>TESTLAR — FANLAR BO'YICHA</b>\n"
-        f"──────────────────────\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"<i>Jami: {len(tests)} ta test | {len(cats)} ta fan</i>\n\n"
     )
     b = InlineKeyboardBuilder()
@@ -267,7 +267,7 @@ async def _show_adm_cat_tests(msg, cat_name, page=0, edit=False):
 
     text = (
         f"<b>{title}</b>\n"
-        f"──────────────────────\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"<i>{len(tests)} ta | Sahifa {page+1}/{total}</i>\n\n"
     )
     b = InlineKeyboardBuilder()
@@ -319,7 +319,7 @@ async def adm_test_detail(callback: CallbackQuery):
 
     text = (
         f"🔍 <b>TEST BATAFSIL</b>\n"
-        f"──────────────────────\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"{'🗑 <b>O\'CHIRILGAN</b>\n\n' if not active else ''}"
         f"{'⏸ <b>PAUZADA</b>\n\n' if paused else ''}"
         f"📝 <b>{meta.get('title','?')}</b>\n"
@@ -441,7 +441,7 @@ async def adm_flush(callback: CallbackQuery):
     results = await tg_db.manual_flush(
         ram.get_daily(), ram.get_users(), ram.get_all_settings()
     )
-    text = "⚡ <b>MANUAL FLUSH</b>\n──────────────────────\n" + "\n".join(results)
+    text = "⚡ <b>MANUAL FLUSH</b>\n━━━━━━━━━━━━━━━━━━━━━━━━\n" + "\n".join(results)
     b    = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="⬅️ Admin", callback_data="admin_panel"))
     try: await callback.message.edit_text(text, reply_markup=b.as_markup())
@@ -488,7 +488,7 @@ async def adm_backups(callback: CallbackQuery):
     info  = tg_db.get_index_info()
     text  = (
         f"🗂 <b>BACKUPLAR</b>\n"
-        f"──────────────────────\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📦 Jami: {len(dates)} ta\n"
         f"📋 Testlar: {info.get('tests_count',0)} | Cache: {info.get('cached_tests',0)}\n\n"
     )
@@ -498,3 +498,66 @@ async def adm_backups(callback: CallbackQuery):
     b.row(InlineKeyboardButton(text="⬅️ Admin", callback_data="admin_panel"))
     try: await callback.message.edit_text(text, reply_markup=b.as_markup())
     except TelegramBadRequest: await callback.message.answer(text, reply_markup=b.as_markup())
+
+
+# ══════════════════════════════════════════════════════════════
+# /reindex — Barcha testlarni qayta protect_content=False bilan saqlash
+# ══════════════════════════════════════════════════════════════
+@router.message(Command("reindex"))
+async def cmd_reindex(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    msg = await message.answer(
+        "♻️ <b>Reindex boshlandi...</b>\n"
+        "Barcha testlar qayta saqlanadi (protect_content=False).\n"
+        "Bu bir necha daqiqa davom etishi mumkin."
+    )
+    from utils import tg_db, ram_cache as ram
+    metas  = ram.get_all_tests_meta()
+    total  = len(metas)
+    ok     = 0
+    failed = 0
+
+    for i, meta in enumerate(metas):
+        tid = meta.get("test_id")
+        if not tid:
+            continue
+        # To'liq testni RAM yoki TGdan olish
+        test = ram.get_cached_questions(tid) or tg_db._tests_cache.get(tid)
+        if not test or not test.get("questions"):
+            try:
+                test = await tg_db.get_test_full(tid)
+            except Exception:
+                test = None
+        if not test or not test.get("questions"):
+            failed += 1
+            continue
+        # protect_content=False bilan qayta saqlash
+        saved = await tg_db.save_test_full(test)
+        if saved:
+            ok += 1
+        else:
+            failed += 1
+        # Progress har 5 testda
+        if (i + 1) % 5 == 0:
+            try:
+                await msg.edit_text(
+                    f"♻️ <b>Reindex:</b> {i+1}/{total}\n"
+                    f"✅ {ok} ta saqlandi | ❌ {failed} ta xato"
+                )
+            except Exception:
+                pass
+        await asyncio.sleep(0.3)  # Flood oldini olish
+
+    try:
+        await msg.edit_text(
+            f"✅ <b>Reindex yakunlandi!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📊 Jami: {total} ta test\n"
+            f"✅ Saqlandi: {ok} ta\n"
+            f"❌ Xato: {failed} ta\n\n"
+            f"Endi barcha testlar protect_content=False bilan saqlanmoqda.\n"
+            f"Keyingi rebootlarda muammo bo'lmaydi."
+        )
+    except Exception:
+        pass

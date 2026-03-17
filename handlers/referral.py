@@ -40,7 +40,7 @@ def _ref_text(uid: int, bot_username: str) -> str:
 
     lines = [
         "👥 <b>REFERAL TIZIMI</b>",
-        "──────────────────────",
+        "━━━━━━━━━━━━━━━━━━━━━━━━",
         "",
         f"🔗 <b>Sizning havolangiz:</b>",
         f"<code>{link}</code>",
@@ -52,7 +52,7 @@ def _ref_text(uid: int, bot_username: str) -> str:
         "",
         role_info,
         "",
-        "──────────────────────",
+        "━━━━━━━━━━━━━━━━━━━━━━━━",
         "ℹ️ <b>Qanday ishlaydi:</b>",
         "  • Har kuni 1 ta yangi taklif → test yaratish imkoni",
         "  • 1 kunda 10 ta taklif → <b>30 kun Student</b> status",
