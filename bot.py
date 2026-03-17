@@ -312,6 +312,7 @@ async def _main_no_signals():
     asyncio.create_task(_users_auto_flush_loop(bot))
     asyncio.create_task(_cache_cleanup_loop())
     asyncio.create_task(_web_sync_watchdog())
+    asyncio.create_task(tg_db.auto_flush_loop())   # FIX: Streamlit threadida ham
 
     for aid in ADMIN_IDS:
         try:
