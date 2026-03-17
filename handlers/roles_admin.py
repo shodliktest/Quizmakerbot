@@ -445,3 +445,11 @@ async def cb_toggle_setting(callback: CallbackQuery):
         )
     except Exception:
         pass
+
+
+# ── "⚙️ Sozlamalar" tugmasi (admin keyboard) ─────────────────
+@router.message(F.text == "⚙️ Sozlamalar")
+async def btn_settings(message: Message):
+    if not _is_admin(message.from_user.id):
+        return
+    await message.answer(_settings_text(), reply_markup=_settings_kb())
