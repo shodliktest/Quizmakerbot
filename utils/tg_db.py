@@ -58,8 +58,16 @@ async def init(bot, channel_id):
 
     _index = await _load_index()
     if not _index:
+        log.info("ℹ️ Yangi baza yaratilmoqda...")
         _index = {"tests_meta": [], "backups": {}}
-        log.info("ℹ️ Yangi baza boshlandi")
+        # Darhol saqlab pin qilamiz
+        await _save_index()
+        log.info("✅ Yangi baza yaratildi va pinlandi")
+        # Users va stats ham bo'sh bo'lsa ham yozib qo'yamiz
+        _stats_dirty = True
+        _users_dirty = True
+        await save_tests_stats()
+        await save_users_full()
         return
 
     log.info(f"✅ Index: {len(_index.get('tests_meta', []))} meta")
@@ -179,73 +187,112 @@ async def save_tests_stats():
 # ══ USERS FULL — doimiy saqlanadigan ══════════════════════════
 
 async def _load_users_full():
-    """users_full.json dan user statistikalar + history yuklash"""
-    mid = _index.get("users_full_msg_id")
+    """users_full.json dan user profil + minimal statistika yuklash"""
+    mid = _index.get("users_full_msg_id") or _index.get("users_msg_id")
     if not mid:
-        mid = _index.get("users_msg_id")
-        if not mid:
-            log.info("ℹ️ users_full yo'q")
-            return
+        log.info("ℹ️ users_full yo'q")
+        return
     data = await _download_doc(mid)
     if not data:
-        # O'qib bo'lmadi (protect_content) — dirty flag, 5 daqiqada qayta yoziladi
         log.warning(f"⚠️ users_full o'qilmadi (mid={mid}) — 5 daqiqada qayta yoziladi")
         mark_users_dirty_tg()
         return
     from utils import ram_cache as ram
+
+    # Profil
     users = data.get("users", {})
     if users:
         ram.set_users(users)
-    history = data.get("history", {})
-    if history:
-        ram.load_history_to_ram(history)
-    log.info(f"✅ users_full: {len(users)} user, {len(history)} history yuklandi")
+
+    # Yangi format: by_test — minimal statistika
+    by_test = data.get("by_test", {})
+    if by_test:
+        ram.load_history_to_ram(by_test)
+
+    # Eski format fallback: history
+    if not by_test:
+        history = data.get("history", {})
+        if history:
+            ram.load_history_to_ram(history)
+
+    log.info(f"✅ users_full: {len(users)} user yuklandi")
 
 async def save_users_full():
-    """Users + barcha history ni TG ga saqlash"""
+    """
+    Users profil + minimal statistika → users_full.json (bot uchun, kichik)
+    To'liq history → history_full.json (sayt uchun, katta)
+    """
     global _users_dirty
     if not ready(): return False
     from utils import ram_cache as ram
-    users   = ram.get_users()
-    daily   = ram.get_daily()
-    # History: har user uchun by_test (tahlilsiz, yengil)
-    history = {}
+    users = ram.get_users()
+    daily = ram.get_daily()
+    ts    = datetime.now(UTC).strftime("%Y-%m-%d %H:%M")
+
+    # ── users_full.json: profil + oxirgi natija/tahlil ─────────
+    by_test_light = {}
+    history_full  = {}
+
     for uid_str, udata in daily.items():
-        by_test = {}
+        bt_light = {}
+        bt_hist  = []
         for tid, entry in udata.get("by_test", {}).items():
-            by_test[tid] = {
-                "attempts":   entry["attempts"],
-                "best_score": entry["best_score"],
-                "avg_score":  entry["avg_score"],
-                "all_pcts":   entry["all_pcts"],
-                "last_at":    entry.get("last_at", ""),
-                "first_pct":  entry["all_pcts"][0] if entry["all_pcts"] else 0,
-                # Oxirgi tahlil ham saqlanadi
-                "last_analysis": entry.get("last_analysis", []),
-                "last_result": entry.get("last_result", {}),
-                "first_result": entry.get("first_result", {}),
+            # Bot uchun — minimal statistika + oxirgi natija/tahlil
+            bt_light[tid] = {
+                "attempts":      entry.get("attempts", 0),
+                "best_score":    entry.get("best_score", 0.0),
+                "avg_score":     entry.get("avg_score", 0.0),
+                "all_pcts":      entry.get("all_pcts", []),
+                "last_at":       entry.get("last_at", ""),
+                "last_result":   entry.get("last_result") or {},
+                "last_analysis": entry.get("last_analysis") or [],
+                "first_result":  entry.get("first_result") or {},
             }
-        if by_test:
-            history[uid_str] = by_test
-    ts = datetime.now(UTC).strftime("%Y-%m-%d %H:%M")
+        # Sayt uchun — to'liq history
+        for h in udata.get("history", []):
+            bt_hist.append(h)
+
+        if bt_light:
+            by_test_light[uid_str] = bt_light
+        if bt_hist:
+            history_full[uid_str] = bt_hist
+
+    # 1. users_full.json — kichik fayl (bot startup da yuklanadi)
     try:
         msg = await _bot.send_document(_cid,
             document=_buf({
                 "users":   users,
-                "history": history,
+                "by_test": by_test_light,
                 "count":   len(users),
                 "saved_at": ts,
             }, "users_full.json"),
             caption=f"👥 USERS_FULL | {len(users)} user | {ts}",
             protect_content=False)
         _index["users_full_msg_id"] = msg.message_id
-        await _save_index()
-        _users_dirty = False
-        log.info(f"✅ users_full saqlandi: {len(users)} user, {len(history)} history")
-        return True
+        log.info(f"✅ users_full saqlandi: {len(users)} user")
     except Exception as e:
         log.error(f"save_users_full: {e}")
         return False
+
+    # 2. history_full.json — katta fayl (sayt uchun, startup da yuklanmaydi)
+    if history_full:
+        try:
+            msg2 = await _bot.send_document(_cid,
+                document=_buf({
+                    "history":  history_full,
+                    "count":    len(history_full),
+                    "saved_at": ts,
+                }, "history_full.json"),
+                caption=f"📜 HISTORY_FULL | {len(history_full)} user | {ts}",
+                protect_content=False)
+            _index["history_full_msg_id"] = msg2.message_id
+            log.info(f"✅ history_full saqlandi: {len(history_full)} user tarixi")
+        except Exception as e:
+            log.warning(f"history_full saqlash: {e}")
+
+    await _save_index()
+    _users_dirty = False
+    return True
 
 
 # ══ AUTO-FLUSH (5 daqiqada dirty bo'lsa) ══════════════════════
@@ -395,6 +442,25 @@ async def auto_flush_loop():
             log.error(f"auto_flush: {e}")
 
 
+def _restore_stats_from_index(index_data: dict):
+    """Index dagi solve_count, avg_score ni RAM ga tiklash.
+    tests_stats.json o'chirilgan bo'lsa ham asosiy statistika saqlanadi."""
+    try:
+        from utils import ram_cache as ram
+        for m in index_data.get("tests_meta", []):
+            tid = m.get("test_id")
+            if not tid: continue
+            sc  = m.get("solve_count", 0)
+            avg = m.get("avg_score", 0.0)
+            if sc > 0 or avg > 0:
+                ram.update_test_meta(tid, {
+                    "solve_count": sc,
+                    "avg_score":   avg,
+                })
+    except Exception as e:
+        log.warning(f"_restore_stats_from_index: {e}")
+
+
 # ══ INDEX ══════════════════════════════════════════════════════
 
 async def _load_index():
@@ -408,6 +474,8 @@ async def _load_index():
                 data = await _read_file(doc.file_id)
                 if isinstance(data, dict) and "tests_meta" in data:
                     log.info("✅ Index pindan yuklandi")
+                    # Index dagi statistikani RAM ga o'tkazish
+                    _restore_stats_from_index(data)
                     return data
     except Exception as e:
         log.warning(f"Pin o'qish: {e}")
@@ -437,6 +505,21 @@ async def _save_index():
     global _can_pin
     if not ready(): return False
     try:
+        # RAM dagi solve_count, avg_score ni index meta ga ham yozib qo'yamiz
+        # Shunda tests_stats.json o'chirilsa ham index da asosiy statistika saqlanadi
+        from utils import ram_cache as ram
+        for m in _index.get("tests_meta", []):
+            tid = m.get("test_id")
+            if not tid: continue
+            rm = ram.get_test_meta(tid)
+            if not rm: continue
+            if rm.get("solve_count", 0) > m.get("solve_count", 0):
+                m["solve_count"] = rm.get("solve_count", 0)
+            if rm.get("avg_score", 0.0) > 0:
+                m["avg_score"] = rm.get("avg_score", 0.0)
+            if rm.get("is_paused") is not None:
+                m["is_paused"] = rm.get("is_paused", False)
+
         ts  = datetime.now(UTC).strftime("%Y-%m-%d %H:%M")
         msg = await _bot.send_document(_cid,
             document=_buf(_index, "index.json"),
