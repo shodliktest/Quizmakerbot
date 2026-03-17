@@ -69,44 +69,33 @@ def _ref_text(uid: int, bot_username: str) -> str:
     return "\n".join(lines)
 
 
+def _ref_kb(link: str) -> object:
+    b = InlineKeyboardBuilder()
+    share_text = "Men bu botda testlar yechyapman! Siz ham qo'shiling 👇"
+    share_url  = f"https://t.me/share/url?url={link}&text={share_text}"
+    b.row(InlineKeyboardButton(text="📤 Do'stlarga ulashish", url=share_url))
+    b.row(InlineKeyboardButton(text="🔄 Yangilash", callback_data="ref_refresh"))
+    return b.as_markup()
+
+
 @router.message(Command("referral"))
 @router.message(F.text.in_({"👥 Referallarim", "📊 Referallarim"}))
 async def cmd_referral(message: Message):
-    uid = message.from_user.id
+    uid      = message.from_user.id
     bot_info = await message.bot.get_me()
-    text = _ref_text(uid, bot_info.username)
-
-    b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(
-        text="📤 Havolani ulashish",
-        switch_inline_query=f"ref"
-    ))
-    b.row(InlineKeyboardButton(
-        text="🔄 Yangilash",
-        callback_data="ref_refresh"
-    ))
-
-    await message.answer(text, reply_markup=b.as_markup())
+    link     = f"https://t.me/{bot_info.username}?start=ref{uid}"
+    text     = _ref_text(uid, bot_info.username)
+    await message.answer(text, reply_markup=_ref_kb(link))
 
 
 @router.callback_query(F.data == "ref_refresh")
 async def cb_ref_refresh(callback: CallbackQuery):
-    uid = callback.from_user.id
+    uid      = callback.from_user.id
     bot_info = await callback.bot.get_me()
-    text = _ref_text(uid, bot_info.username)
-
-    b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(
-        text="📤 Havolani ulashish",
-        switch_inline_query=f"ref"
-    ))
-    b.row(InlineKeyboardButton(
-        text="🔄 Yangilash",
-        callback_data="ref_refresh"
-    ))
-
+    link     = f"https://t.me/{bot_info.username}?start=ref{uid}"
+    text     = _ref_text(uid, bot_info.username)
     try:
-        await callback.message.edit_text(text, reply_markup=b.as_markup())
+        await callback.message.edit_text(text, reply_markup=_ref_kb(link))
     except Exception:
         pass
     await callback.answer("✅ Yangilandi")

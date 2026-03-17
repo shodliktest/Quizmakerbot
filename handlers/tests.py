@@ -11,7 +11,7 @@ from aiogram.filters import StateFilter
 from utils.db import get_all_tests, get_test_full, save_result
 from utils.ram_cache import get_test_by_id, is_test_paused, get_test_meta
 from utils.states import TestSolving
-from keyboards.keyboards import main_kb, inline_pause_kb, CAT_ICONS
+from keyboards.keyboards import main_kb, inline_pause_kb, CAT_ICONS, get_cat_icon
 
 log    = logging.getLogger(__name__)
 router = Router()
@@ -183,7 +183,7 @@ async def _show_categories(msg, uid, edit=False):
     )
     b = InlineKeyboardBuilder()
     for cat, info in sorted_cats:
-        icon = CAT_ICONS.get(cat, "📋")
+        icon = get_cat_icon(cat)
         prog = f" ✅{info['solved']}/{info['count']}" if info['solved'] else f" — {info['count']} ta"
         text += f"{icon} <b>{cat}</b>{prog}\n"
         b.row(InlineKeyboardButton(
