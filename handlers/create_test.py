@@ -238,16 +238,18 @@ async def create_start(message: Message, state: FSMContext):
 @router.callback_query(F.data == "show_referral")
 async def cb_show_referral(callback: CallbackQuery):
     await callback.answer()
-    uid = callback.from_user.id
+    uid      = callback.from_user.id
     bot_info = await callback.bot.get_me()
-    from utils.roles import get_referral_code, format_role_info, get_referral_stats
-    code  = get_referral_code(uid)
-    link  = f"https://t.me/{bot_info.username}?start={code}"
-    stats = get_referral_stats(uid)
+    from utils.roles import get_referral_stats
+    link     = f"https://t.me/{bot_info.username}?start=ref{uid}"
+    stats    = get_referral_stats(uid)
+    share_url = f"https://t.me/share/url?url={link}&text=Men%20bu%20botda%20testlar%20yechyapman!%20Siz%20ham%20qo'shiling%20👇"
     b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="📤 Do'stlarga ulashish", url=share_url))
     b.row(InlineKeyboardButton(text="✉️ Adminga murojaat", callback_data="contact_admin"))
     await callback.message.edit_text(
-        f"👥 <b>Referal havolangiz</b>\n\n"
+        f"👥 <b>Referal havolangiz</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"<code>{link}</code>\n\n"
         f"📊 Jami: <b>{stats['total']}</b> | Bugun: <b>{stats['today']}</b>\n\n"
         f"Havolani do'stlaringizga yuboring — har kuni 1 ta yangi taklif test yaratish imkonini beradi!",
