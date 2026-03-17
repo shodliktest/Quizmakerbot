@@ -37,11 +37,24 @@ _users_dirty  = False
 
 async def init(bot, channel_id):
     global _bot, _cid, _index, _tests_cache, _stats_dirty, _users_dirty
-    _bot, _cid = bot, int(channel_id)
+    _cid = int(channel_id)
     _index = {}
     _tests_cache = {}
     _stats_dirty = False
     _users_dirty = False
+
+    # Storage uchun alohida bot instance — protect_content=False
+    # Bu faqat kanal ichki operatsiyalar uchun (forward, send_document)
+    from aiogram import Bot as _BotClass
+    from aiogram.client.default import DefaultBotProperties
+    from aiogram.enums import ParseMode
+    _bot = _BotClass(
+        token=bot.token,
+        default=DefaultBotProperties(
+            parse_mode=ParseMode.HTML,
+            protect_content=False,  # Storage kanal uchun forward ishlaydi
+        )
+    )
 
     _index = await _load_index()
     if not _index:
