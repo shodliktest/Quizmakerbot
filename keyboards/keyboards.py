@@ -261,7 +261,10 @@ def mytest_settings_kb(tid, is_paused=False):
         ),
         InlineKeyboardButton(text="📄 TXT yuklab olish",   callback_data=f"mytest_txt_{tid}"),
     )
-    b.row(InlineKeyboardButton(text="🔄 Urinishlar sonini o'zgartirish", callback_data=f"edit_att_{tid}"))
+    b.row(
+        InlineKeyboardButton(text="🔄 Urinishlar soni", callback_data=f"edit_att_{tid}"),
+        InlineKeyboardButton(text="⏱ Poll vaqti",         callback_data=f"edit_poll_time_{tid}"),
+    )
     b.row(InlineKeyboardButton(text="🗑 Testni o'chirish", callback_data=f"del_mytest_{tid}"))
     b.row(InlineKeyboardButton(text="⬅️ Orqaga",           callback_data="back_to_mytests_cat"))
     return b.as_markup()
