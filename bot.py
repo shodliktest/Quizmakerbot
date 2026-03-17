@@ -200,20 +200,19 @@ async def _web_sync_watchdog():
 
 async def _cache_cleanup_loop():
     """
-    Har 6 soatda — 48 soat yechilmagan testlarni RAMdan o'chiradi.
-    TGda saqlanadi, keyingi so'rovda lazy load bo'ladi.
+    Har 15 daqiqada — TTL o'tgan (10 daqiqa hech kim yechmagan) testlarni
+    RAMdan o'chiradi. active_users > 0 bo'lsa hech qachon o'chirilmaydi.
     """
-    await asyncio.sleep(3600 * 6)   # Bot start dan 6 soat kutish
+    await asyncio.sleep(900)   # Bot start dan 15 daqiqa kutish
     while True:
         try:
-            await asyncio.sleep(3600 * 6)   # Har 6 soatda tekshirish
+            await asyncio.sleep(900)   # Har 15 daqiqada
             from utils import ram_cache as ram, tg_db
             removed = ram.clear_expired_cache()
             if removed:
-                # tg_db ichki cache dan ham o'chirish
                 for tid in removed:
                     tg_db._tests_cache.pop(tid, None)
-                log.info(f"🧹 Cache: {len(removed)} test RAMdan o'chirildi (TGda bor)")
+                log.info(f"🧹 Cache: {len(removed)} test RAMdan o'chirildi")
         except asyncio.CancelledError:
             break
         except Exception as e:
