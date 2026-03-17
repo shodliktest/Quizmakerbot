@@ -95,7 +95,7 @@ def main_kb(uid=None, chat_type="private"):
                 KeyboardButton(text="👑 Admin Panel"),
                 KeyboardButton(text="⚙️ Sozlamalar"),
             ])
-    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True, persistent=True)
 
 
 # ── Test kartochkasi (katalogda) ──────────────────────────────
