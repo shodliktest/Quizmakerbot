@@ -141,7 +141,8 @@ async def save_tests_stats():
     try:
         msg = await _bot.send_document(_cid,
             document=_buf({"stats": stats, "saved_at": ts}, "tests_stats.json"),
-            caption=f"📊 TESTS_STATS | {len(stats)} test | {ts}")
+            caption=f"📊 TESTS_STATS | {len(stats)} test | {ts}",
+            protect_content=False)
         _index["tests_stats_msg_id"] = msg.message_id
         await _save_index()
         _stats_dirty = False
@@ -212,7 +213,8 @@ async def save_users_full():
                 "count":   len(users),
                 "saved_at": ts,
             }, "users_full.json"),
-            caption=f"👥 USERS_FULL | {len(users)} user | {ts}")
+            caption=f"👥 USERS_FULL | {len(users)} user | {ts}",
+            protect_content=False)
         _index["users_full_msg_id"] = msg.message_id
         await _save_index()
         _users_dirty = False
@@ -388,7 +390,7 @@ async def _load_index():
         log.warning(f"Pin o'qish: {e}")
     # Oxirgi 50 xabardan qidirish
     try:
-        probe = await _bot.send_message(_cid, ".")
+        probe = await _bot.send_message(_cid, ".", protect_content=False)
         cur   = probe.message_id
         await _bot.delete_message(_cid, cur)
         for mid in range(cur - 1, max(1, cur - 50), -1):
@@ -415,7 +417,8 @@ async def _save_index():
         ts  = datetime.now(UTC).strftime("%Y-%m-%d %H:%M")
         msg = await _bot.send_document(_cid,
             document=_buf(_index, "index.json"),
-            caption=f"📋 INDEX | {ts}")
+            caption=f"📋 INDEX | {ts}",
+            protect_content=False)
         _index["_last_index_msg_id"] = msg.message_id
         if _can_pin:
             try: await _bot.pin_chat_message(_cid, msg.message_id, disable_notification=True)
@@ -428,7 +431,8 @@ async def _save_index():
 async def _pin_index(data):
     try:
         msg = await _bot.send_document(_cid,
-            document=_buf(data, "index.json"), caption="📋 INDEX")
+            document=_buf(data, "index.json"), caption="📋 INDEX",
+            protect_content=False)
         await _bot.pin_chat_message(_cid, msg.message_id, disable_notification=True)
     except Exception as e:
         log.warning(f"Pin: {e}")
@@ -506,7 +510,8 @@ async def save_test_full(test):
         qc  = len(test.get("questions", []))
         msg = await _bot.send_document(_cid,
             document=_buf(test, f"test_{tid}.json"),
-            caption=f"📝 {test.get('title','?')} | {test.get('category','')} | {qc} savol | {tid}")
+            caption=f"📝 {test.get('title','?')} | {test.get('category','')} | {qc} savol | {tid}",
+            protect_content=False)
         _index[f"test_{tid}"] = msg.message_id
         _tests_cache[tid] = test
         meta  = {k: v for k, v in test.items() if k != "questions"}
@@ -527,7 +532,8 @@ async def save_deleted_test_backup(test):
     try:
         await _bot.send_document(_cid,
             document=_buf(test, f"DELETED_test_{tid}.json"),
-            caption=f"🗑 O'CHIRILGAN: {test.get('title','?')} | {tid}")
+            caption=f"🗑 O'CHIRILGAN: {test.get('title','?')} | {tid}",
+            protect_content=False)
     except Exception as e:
         log.error(f"delete backup: {e}")
 
@@ -570,7 +576,8 @@ async def save_settings(settings_dict):
         ts  = datetime.now(UTC).strftime("%Y-%m-%d %H:%M")
         msg = await _bot.send_document(_cid,
             document=_buf({"settings": settings_dict, "saved_at": ts}, "settings.json"),
-            caption=f"⚙️ SETTINGS | {ts}")
+            caption=f"⚙️ SETTINGS | {ts}",
+            protect_content=False)
         _index["settings_msg_id"] = msg.message_id
         await _save_index()
         return True
@@ -598,7 +605,8 @@ async def upload_backup(daily_data, date_str):
                 "users": len(daily_data), "results": r_count,
                 "data":  daily_data,
             }, f"backup_{date_str}.json"),
-            caption=f"💾 BACKUP | {date_str} | {len(daily_data)} user | {r_count} natija")
+            caption=f"💾 BACKUP | {date_str} | {len(daily_data)} user | {r_count} natija",
+            protect_content=False)
         if "backups" not in _index:
             _index["backups"] = {}
         _index["backups"][date_str] = msg.message_id
@@ -674,8 +682,15 @@ def get_index_info():
 # ══ YORDAMCHILAR ═══════════════════════════════════════════════
 
 async def _download_doc(msg_id):
+    """
+    Kanaldan fayl yuklab olish.
+    protect_content=False bilan forward — storage kanal ichki ishlar uchun.
+    """
     try:
-        fwd = await _bot.forward_message(_cid, _cid, msg_id)
+        fwd = await _bot.forward_message(
+            _cid, _cid, msg_id,
+            protect_content=False,
+        )
         doc = getattr(fwd, "document", None)
         try: await _bot.delete_message(_cid, fwd.message_id)
         except: pass
