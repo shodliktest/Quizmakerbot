@@ -85,13 +85,16 @@ def main_kb(uid=None, chat_type="private"):
     kb = [
         [KeyboardButton(text="📚 Testlar"),         KeyboardButton(text="➕ Test Yaratish")],
         [KeyboardButton(text="📊 Natijalarim"),      KeyboardButton(text="🏆 Reyting")],
-        [KeyboardButton(text="🗂 Mening testlarim"), KeyboardButton(text="👤 Profil")],
-        [KeyboardButton(text="ℹ️ Yordam")],
+        [KeyboardButton(text="🗂 Mening testlarim"), KeyboardButton(text="👥 Referallarim")],
+        [KeyboardButton(text="👤 Profil"),           KeyboardButton(text="ℹ️ Yordam")],
     ]
     if uid:
         from config import ADMIN_IDS
         if uid in ADMIN_IDS:
-            kb.append([KeyboardButton(text="👑 Admin Panel")])
+            kb.append([
+                KeyboardButton(text="👑 Admin Panel"),
+                KeyboardButton(text="⚙️ Sozlamalar"),
+            ])
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 
