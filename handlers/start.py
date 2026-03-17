@@ -45,7 +45,7 @@ async def cmd_start(message: Message, state: FSMContext):
             )
             return
         # Parametr bor (gpoll_, ginline_, test ID) — davom etsin
-    # ──────────────────────────────────────────────────────────────
+    # ──────────────────────
 
     user   = await get_or_create_user(uid, name, uname)
     is_new = user.pop("_just_created", False)
@@ -71,7 +71,7 @@ async def cmd_start(message: Message, state: FSMContext):
             except Exception: pass
         welcome = (
             f"👋 Salom, <b>{name}</b>!\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"──────────────────────\n"
             f"🤖 <b>QuizMaker Bot</b> ga xush kelibsiz!\n\n"
             f"📌 <b>Bot imkoniyatlari:</b>\n\n"
             f"▶️ <b>Inline Test</b> — har savoldan keyin to'g'ri/noto'g'ri ko'rsatadi, 30s avtomatik o'tadi\n\n"
@@ -80,7 +80,7 @@ async def cmd_start(message: Message, state: FSMContext):
             f"📤 <b>Ulashish</b> — testni inline orqali do'stlarga yuborish\n\n"
             f"📈 <b>Natijalarim</b> — barcha testlar bo'yicha foiz va tahlil\n\n"
             f"🏆 <b>Reyting</b> — eng yaxshi natijalar\n\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"──────────────────────\n"
             f"👇 Pastdagi menyudan boshlang!"
         )
     else:
@@ -90,6 +90,28 @@ async def cmd_start(message: Message, state: FSMContext):
     if len(args) > 1:
         param = args[1].strip()
         from utils.db import get_test_full as _gtf
+
+        # ── REFERAL DEEP LINK ──────────────────────
+        if param.lower().startswith("ref") and param[3:].isdigit():
+            referrer_uid = int(param[3:])
+            if referrer_uid != uid:
+                from utils.roles import process_referral
+                result = process_referral(uid, referrer_uid, ADMIN_IDS)
+                if result.get("ok"):
+                    # Referentga xabar yuborish
+                    try:
+                        await message.bot.send_message(
+                            referrer_uid,
+                            f"🎉 <b>Yangi taklif!</b>\n\n"
+                            f"👤 <b>{name}</b> sizning havolangiz orqali keldi.\n"
+                            f"📊 {result['msg']}\n\n"
+                            f"{'✅ Bugun test yaratish imkoningiz bor!' if result.get('today_count', 0) >= 1 else ''}"
+                        )
+                    except Exception:
+                        pass
+            await message.answer(welcome, reply_markup=main_kb(uid, chat_type))
+            return
+        # ──────────────────────
 
         if param.lower() == "create":
             await message.answer(welcome, reply_markup=main_kb(uid, chat_type))
@@ -112,7 +134,7 @@ async def cmd_start(message: Message, state: FSMContext):
                 )
                 return
 
-        # ── GURUHDA ISHLASH — startgroup deep link ──────────────
+        # ── GURUHDA ISHLASH — startgroup deep link ──────────────────────
         if param.lower().startswith("gpoll_"):
             tid  = param[6:].upper()
             chat = message.chat
@@ -165,7 +187,7 @@ async def help_cb(callback: CallbackQuery):
 async def _send_help(msg, edit=False):
     text = (
         "❓ <b>BOTDAN FOYDALANISH</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "──────────────────────\n"
         "1️⃣ <b>▶️ Inline test</b> — har savoldan keyin\n"
         "   to'g'ri/noto'g'ri ko'rsatadi\n"
         "   30s avtomatik keyingi savolga o'tadi\n\n"
@@ -204,7 +226,7 @@ async def _send_test_card(event, test, tid, viewer_uid=None, edit=False):
 
     text = (
         f"📋 <b>TEST MA'LUMOTI</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"──────────────────────\n"
         f"{pause_t}"
         f"📝 <b>{meta.get('title','Nomsiz')}</b>\n"
         f"{cat_icon} Fan: {cat}\n"
@@ -215,7 +237,7 @@ async def _send_test_card(event, test, tid, viewer_uid=None, edit=False):
         f"🎯 O'tish foizi: <b>{meta.get('passing_score',60)}%</b>\n"
         f"🔄 Urinishlar: {att_t}\n"
         f"👥 Ishlagan: <b>{meta.get('solve_count',0)} marta</b>\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"──────────────────────\n"
         f"▶️ Inline — savoldan keyin javob, 30s avto-o'tish\n"
         f"📊 Poll — Telegram quiz, vaqt bilan"
     )
@@ -231,7 +253,7 @@ async def _send_test_card(event, test, tid, viewer_uid=None, edit=False):
         await target.answer(text, reply_markup=kb)
 
 
-# ── Pause/Resume (creator/admin) ───────────────────────────────
+# ── Pause/Resume (creator/admin) ──────────────────────
 @router.callback_query(F.data.startswith("test_pause_"))
 async def test_pause_cb(callback: CallbackQuery):
     await callback.answer()
@@ -269,7 +291,7 @@ async def test_resume_cb(callback: CallbackQuery):
         await _send_test_card(callback, test, tid, viewer_uid=uid, edit=True)
 
 
-# ── Asosiy menyu ───────────────────────────────────────────────
+# ── Asosiy menyu ──────────────────────
 @router.callback_query(F.data == "main_menu")
 async def back_main(callback: CallbackQuery, state: FSMContext):
     await state.clear()
@@ -286,7 +308,7 @@ async def noop(callback: CallbackQuery):
     await callback.answer()
 
 
-# ── Adminga murojaat ───────────────────────────────────────────
+# ── Adminga murojaat ──────────────────────
 @router.callback_query(F.data == "contact_admin")
 async def contact_admin_start(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
@@ -340,7 +362,7 @@ async def admin_reply(message: Message):
     try:
         await message.bot.send_message(
             int(parts[1]),
-            f"📬 <b>ADMINDAN JAVOB:</b>\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n{parts[2]}"
+            f"📬 <b>ADMINDAN JAVOB:</b>\n──────────────────────\n{parts[2]}"
         )
         await message.answer(f"✅ <code>{parts[1]}</code> ga yuborildi.")
     except Exception as e:

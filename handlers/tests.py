@@ -11,7 +11,7 @@ from aiogram.filters import StateFilter
 from utils.db import get_all_tests, get_test_full, save_result
 from utils.ram_cache import get_test_by_id, is_test_paused, get_test_meta
 from utils.states import TestSolving
-from keyboards.keyboards import main_kb, inline_pause_kb, CAT_ICONS, get_cat_icon
+from keyboards.keyboards import main_kb, inline_pause_kb, CAT_ICONS
 
 log    = logging.getLogger(__name__)
 router = Router()
@@ -23,31 +23,6 @@ QUESTION_SEC    = 30   # Savol chiqgandan so'ng javobsiz kutish
 
 _CIRCLE = {"A":"🅐","B":"🅑","C":"🅒","D":"🅓","E":"🅔","F":"🅕","G":"🅖","H":"🅗"}
 def _cl(l): return _CIRCLE.get(str(l).upper(), f"[{str(l).upper()}]")
-
-def esc_text(s): return str(s).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
-
-
-# ── Majburiy to'xtatib yangi test boshlash ────────────────────
-@router.callback_query(F.data.startswith("force_start_test_"))
-async def force_start_test(callback: CallbackQuery, state: FSMContext):
-    """Joriy testni to'xtatib, yangi testni boshlaydi — faqat o'sha user yoki admin."""
-    from config import ADMIN_IDS
-    uid = callback.from_user.id
-    d   = await state.get_data()
-
-    if uid != d.get("uid", uid) and uid not in ADMIN_IDS:
-        return await callback.answer("🚫 Faqat siz boshlagan testni to'xtata olasiz!", show_alert=True)
-
-    await callback.answer("⏹ Joriy test to'xtatildi")
-    _cancel_timer(uid)
-    await state.clear()
-
-    tid = callback.data[len("force_start_test_"):]
-    try:
-        await callback.message.edit_text("⏹ <b>Joriy test to'xtatildi.</b>")
-    except Exception: pass
-
-    await _begin_inline_test(callback.bot, callback.message, state, uid, tid)
 
 
 def _shuffle_options(qs):
@@ -95,7 +70,8 @@ async def _show_next_question(bot, cid, msg_id, qs, idx, state, uid):
         await bot.edit_message_text(chat_id=cid, message_id=msg_id, text=text, reply_markup=kb)
         new_msg_id = msg_id
     except TelegramBadRequest:
-        msg = await bot.send_message(cid, text, reply_markup=kb)
+        msg = await bot.send_message(cid, text, reply_markup=kb,
+        protect_content=True)
         new_msg_id = msg.message_id
 
     await state.update_data(q_msg_id=new_msg_id, answered_this=False)
@@ -202,12 +178,12 @@ async def _show_categories(msg, uid, edit=False):
     sorted_cats = sorted(cats.items(), key=lambda x: x[1]["count"], reverse=True)
     text = (
         f"📚 <b>TESTLAR — FANLAR BO'YICHA</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"──────────────────────\n"
         f"<i>Jami: {len(visible)} ta test | {len(cats)} ta fan</i>\n\n"
     )
     b = InlineKeyboardBuilder()
     for cat, info in sorted_cats:
-        icon = get_cat_icon(cat)
+        icon = CAT_ICONS.get(cat, "📋")
         prog = f" ✅{info['solved']}/{info['count']}" if info['solved'] else f" — {info['count']} ta"
         text += f"{icon} <b>{cat}</b>{prog}\n"
         b.row(InlineKeyboardButton(
@@ -270,7 +246,7 @@ async def _show_cat_tests(msg, uid, cat_name, page=0, edit=False):
 
     text = (
         f"<b>{title}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"──────────────────────\n"
         f"<i>{len(tests)} ta test | Sahifa {page+1}/{total}</i>\n\n"
     )
     b = InlineKeyboardBuilder()
@@ -346,43 +322,12 @@ async def start_inline_test(callback: CallbackQuery, state: FSMContext):
     uid = callback.from_user.id
     cid = callback.message.chat.id if callback.message else uid
 
-    # ── Aktiv test tekshiruvi ─────────────────────────────────
+    # Avvalgi testni to'xtatish
     cur = await state.get_state()
-    active_states = (
-        TestSolving.answering.state,
-        TestSolving.text_answer.state,
-        TestSolving.paused.state,
-    )
-    if cur in active_states:
-        d = await state.get_data()
-        active_tid  = d.get("test", {}).get("test_id", "")
-        active_name = d.get("test", {}).get("title", "Joriy test")
-        active_idx  = d.get("idx", 0)
-        active_total= len(d.get("qs", []))
-
-        # Faqat boshlagan user yoki admin to'xtata oladi
-        from config import ADMIN_IDS
-        can_stop = (uid == d.get("uid", uid)) or (uid in ADMIN_IDS)
-
-        b = InlineKeyboardBuilder()
-        if can_stop:
-            b.row(InlineKeyboardButton(
-                text="⏹ Joriy testni to'xtatib, yangisini boshlash",
-                callback_data=f"force_start_test_{tid}"
-            ))
-        b.row(InlineKeyboardButton(
-            text="▶️ Joriy testni davom ettirish",
-            callback_data="noop"
-        ))
-        await callback.message.answer(
-            f"⚠️ <b>Siz hozir test yechyapsiz!</b>\n\n"
-            f"📝 <b>{esc_text(active_name)}</b>\n"
-            f"📊 Savol: {active_idx}/{active_total}\n\n"
-            f"{'Yangi test boshlash uchun avval joriy testni to\'xtating.' if can_stop else 'Faqat siz boshlagan test to\'xtatilishi mumkin.'}",
-            reply_markup=b.as_markup()
-        )
-        return
-    # ──────────────────────────────────────────────────────────
+    if cur in (TestSolving.answering.state, TestSolving.text_answer.state,
+               TestSolving.paused.state):
+        _cancel_timer(uid)
+        await state.clear()
 
     test = get_test_by_id(tid)
     if not test or not test.get("questions"):
@@ -390,33 +335,17 @@ async def start_inline_test(callback: CallbackQuery, state: FSMContext):
     if not test:
         return await callback.answer("❌ Test topilmadi.", show_alert=True)
 
-    await _begin_inline_test(callback.bot, callback.message, state, uid, tid, test)
-
-
-async def _begin_inline_test(bot, msg, state, uid, tid, test=None):
-    """Inline testni boshlash — state allaqachon tozalangan bo'lishi kerak."""
-    from utils.db import get_test_full as _gtf
-    import random, copy
-
-    cid = msg.chat.id if msg and msg.chat else uid
-
-    if test is None:
-        test = get_test_by_id(tid)
-        if not test or not test.get("questions"):
-            test = await _gtf(tid)
-    if not test:
-        try: await bot.send_message(cid, "❌ Test topilmadi.")
-        except: pass
-        return
-
     qs = test.get("questions", [])
     if not qs:
-        try: await bot.send_message(cid, "❌ Savollar yo'q.")
-        except: pass
-        return
+        return await callback.answer("❌ Savollar yo'q.", show_alert=True)
 
+    import random, copy
     qs = copy.deepcopy(qs)
-    random.shuffle(qs)
+
+    # Savollarni aralashtirish (test sozlamasiga qarab)
+    if test.get("shuffle_questions", True):
+        random.shuffle(qs)
+
     _shuffle_options(qs)
 
     await state.set_state(TestSolving.answering)
@@ -426,7 +355,9 @@ async def _begin_inline_test(bot, msg, state, uid, tid, test=None):
         "via_link": test.get("visibility") == "link",
         "no_ans_streak": 0, "q_msg_id": None,
     })
-    await _send_question_new(bot, cid, state, uid)
+
+    # Test kartochkasini o'chirmasdan, YANGI xabar sifatida birinchi savol
+    await _send_question_new(callback.bot, cid, state, uid)
 
 
 async def _send_question_new(bot, cid, state, uid):
@@ -439,7 +370,8 @@ async def _send_question_new(bot, cid, state, uid):
         return
 
     text, kb, is_text = _build_question_content(qs, idx, time_left=QUESTION_SEC)
-    msg = await bot.send_message(cid, text, reply_markup=kb)
+    msg = await bot.send_message(cid, text, reply_markup=kb,
+        protect_content=True)
     await state.update_data(q_msg_id=msg.message_id, answered_this=False)
 
     if is_text:
@@ -470,7 +402,8 @@ async def _edit_question(bot, cid, msg_id, state, uid):
         )
     except TelegramBadRequest:
         # Edit imkoni bo'lmasa yangi yuborish
-        msg = await bot.send_message(cid, text, reply_markup=kb)
+        msg = await bot.send_message(cid, text, reply_markup=kb,
+        protect_content=True)
         msg_id = msg.message_id
         await state.update_data(q_msg_id=msg_id)
 
@@ -642,7 +575,8 @@ async def _question_timeout(bot, cid, state, uid, expected_idx, wait_sec):
                     cid,
                     "⏸ <b>TEST PAUZALAND</b>\n\nDavom etish yoki to'xtatish:",
                     reply_markup=inline_pause_kb()
-                )
+                ,
+        protect_content=True)
         else:
             # Xato deb belgilab, izoh bilan edit qil, 30s keyingi
             q    = qs[expected_idx] if expected_idx < len(qs) else {}
@@ -696,7 +630,7 @@ async def _question_timeout(bot, cid, state, uid, expected_idx, wait_sec):
     except Exception as e: log.error(f"Timeout: {e}")
 
 
-# ── Javob handler ─────────────────────────────────────────────
+# ── Javob handler ──────────────────────
 @router.callback_query(F.data.startswith("ans_"), StateFilter(TestSolving.answering))
 async def answer_cb(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
@@ -835,7 +769,7 @@ async def next_q_now_cb(callback: CallbackQuery, state: FSMContext):
         await _finish_inline(callback.bot, cid, state, d_fresh)
 
 
-# ── Matn javob ────────────────────────────────────────────────
+# ── Matn javob ──────────────────────
 @router.message(StateFilter(TestSolving.text_answer))
 async def text_answer_handler(message: Message, state: FSMContext):
     uid      = message.from_user.id
@@ -879,7 +813,7 @@ async def text_answer_handler(message: Message, state: FSMContext):
     qtxt_s   = qtxt[:80] + ("..." if len(qtxt) > 80 else "")
     result_text = (
         f"{icon_ok} <b>{idx+1}/{len(qs)} — {label_ok}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"──────────────────────\n"
         f"<i>{qtxt_s}</i>\n\n"
         f"✍️ Sizning: <code>{user_ans[:60]}</code>\n"
         f"✔️ To'g'ri: <b>{str(corr)[:80]}</b>{expl_txt}\n\n"
@@ -894,12 +828,14 @@ async def text_answer_handler(message: Message, state: FSMContext):
         else:
             msg = await message.bot.send_message(
                 cid, result_text, reply_markup=next_kb.as_markup()
-            )
+            ,
+        protect_content=True)
             await state.update_data(q_msg_id=msg.message_id)
     except TelegramBadRequest:
         msg = await message.bot.send_message(
             cid, result_text, reply_markup=next_kb.as_markup()
-        )
+        ,
+        protect_content=True)
         await state.update_data(q_msg_id=msg.message_id)
 
     # 30s keyingi savol
@@ -912,7 +848,7 @@ async def text_answer_handler(message: Message, state: FSMContext):
     _inline_timers[uid] = task
 
 
-# ── Skip ──────────────────────────────────────────────────────
+# ── Skip ──────────────────────
 @router.callback_query(F.data == "skip_q", StateFilter(TestSolving))
 async def skip_q_cb(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
@@ -935,7 +871,7 @@ async def skip_q_cb(callback: CallbackQuery, state: FSMContext):
         await _finish_inline(callback.bot, cid, state, d_fresh)
 
 
-# ── Pauza ─────────────────────────────────────────────────────
+# ── Pauza ──────────────────────
 @router.callback_query(F.data == "inline_pause_menu")
 async def inline_pause_menu(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
@@ -971,24 +907,18 @@ async def resume_inline(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "cancel_test")
 async def cancel_test_cb(callback: CallbackQuery, state: FSMContext):
-    from config import ADMIN_IDS
     uid = callback.from_user.id
-    d   = await state.get_data()
-
-    # Faqat boshlagan user yoki admin
-    if uid != d.get("uid", uid) and uid not in ADMIN_IDS:
-        return await callback.answer("🚫 Faqat siz boshlagan testni to'xtata olasiz!", show_alert=True)
-
     _cancel_timer(uid)
     await state.clear()
     await callback.answer("❌ To'xtatildi")
     try:
         await callback.message.edit_text("❌ <b>Test to'xtatildi.</b>")
     except TelegramBadRequest: pass
-    await callback.bot.send_message(uid, "🏠 Asosiy menyu:", reply_markup=main_kb(uid, "private"))
+    await callback.bot.send_message(uid, "🏠 Asosiy menyu:", reply_markup=main_kb(uid),
+        protect_content=True)
 
 
-# ── Yakunlash ─────────────────────────────────────────────────
+# ── Yakunlash ──────────────────────
 async def _finish_inline(bot, cid, state, d):
     from utils.scoring import calculate_score, format_result
     from keyboards.keyboards import result_kb
@@ -1024,4 +954,5 @@ async def _finish_inline(bot, cid, state, d):
             return
         except TelegramBadRequest: pass
 
-    await bot.send_message(cid, result_text, reply_markup=kb)
+    await bot.send_message(cid, result_text, reply_markup=kb,
+        protect_content=True)
