@@ -367,3 +367,41 @@ async def admin_reply(message: Message):
         await message.answer(f"✅ <code>{parts[1]}</code> ga yuborildi.")
     except Exception as e:
         await message.answer(f"❌ Xato: {e}")
+
+
+@router.message(F.reply_to_message)
+async def admin_reply_to_forward(message: Message):
+    """
+    Admin forward qilingan xabarga reply qilsa — userga javob yuboradi.
+    Murojaat xabaridagi caption dan user_id olinadi.
+    """
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    reply = message.reply_to_message
+    if not reply:
+        return
+    # Caption yoki text dan user_id qidirish
+    # Format: "MUROJAAT: Name | @uname | 123456789"
+    caption = reply.caption or reply.text or ""
+    uid_str = None
+    import re
+    # ID ni oxirgi <code> tagidan yoki so'nggi raqamlar ketma-ketligidan olamiz
+    m = re.search(r"<code>(\d+)</code>", caption)
+    if m:
+        uid_str = m.group(1)
+    else:
+        # Fallback: caption da oxirgi raqamlar
+        m2 = re.search(r"\b(\d{5,12})\b", caption)
+        if m2:
+            uid_str = m2.group(1)
+    if not uid_str:
+        return  # Bu murojaat xabari emas, e'tibor bermaymiz
+    try:
+        text = message.text or message.caption or ""
+        await message.bot.send_message(
+            int(uid_str),
+            f"📬 <b>ADMINDAN JAVOB:</b>\n━━━━━━━━━━━━━━━━━━━━━━━━\n{text}"
+        )
+        await message.answer(f"✅ <code>{uid_str}</code> ga yuborildi.")
+    except Exception as e:
+        await message.answer(f"❌ Xato: {e}")
