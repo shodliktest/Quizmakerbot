@@ -273,6 +273,8 @@ async def _main_no_signals():
     from handlers.profile     import router as r_profile
     from handlers.leaderboard import router as r_lb
     from handlers.admin       import router as r_admin
+    from handlers.roles_admin import router as r_roles
+    from handlers.referral    import router as r_referral
 
     bot = Bot(token=BOT_TOKEN,
               default=DefaultBotProperties(parse_mode=ParseMode.HTML, protect_content=True))
@@ -290,6 +292,8 @@ async def _main_no_signals():
     dp.include_router(r_profile)
     dp.include_router(r_lb)
     dp.include_router(r_admin)
+    dp.include_router(r_roles)
+    dp.include_router(r_referral)
     dp.include_router(webauth.router)
 
     if STORAGE_CHANNEL_ID:
