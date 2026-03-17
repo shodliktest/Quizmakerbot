@@ -47,13 +47,13 @@ async def _show_profile(msg, uid, edit=False):
     if avg >= 80:   badges.append("🔥 A'lochi")
     text = (
         f"👤 <b>SHAXSIY PROFIL</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"──────────────────────\n"
         f"🆔 ID: <code>{uid}</code>\n"
         f"👤 Ism: <b>{user.get('name','?')}</b>\n\n"
         f"📋 Yechilgan: <b>{total} ta</b>\n"
         f"📊 O'rtacha: <b>{avg}%</b>\n"
         f"🏅 {('  '.join(badges)) if badges else 'Hali yo\'q'}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━"
+        f"──────────────────────"
     )
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="📋 Natijalarim",      callback_data="results_p0"))
@@ -81,7 +81,7 @@ async def _show_results(msg, uid, page=0, edit=False):
     all_r = get_user_results(uid)
     if not all_r:
         text = (
-            "📭 <b>NATIJALARIM</b>\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "📭 <b>NATIJALARIM</b>\n──────────────────────\n"
             "Hali test ishlamagansiz.\n📚 Testlar bo'limidan boshlang! 🚀"
         )
         b = InlineKeyboardBuilder()
@@ -100,7 +100,7 @@ async def _show_results(msg, uid, page=0, edit=False):
 
     text = (
         f"<b>📋 NATIJALARIM</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"──────────────────────\n"
         f"<i>Sahifa {page+1}/{total_pg} | Jami: {len(all_r)} ta</i>\n\n"
     )
     b = InlineKeyboardBuilder()
@@ -168,7 +168,7 @@ async def _show_result_card(callback, rid):
     )
     text = (
         f"{'✅' if passed else '❌'} <b>TEST NATIJASI</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"──────────────────────\n"
         f"📝 <b>{title}</b>\n"
         f"📅 {res.get('completed_at','')[:16]}\n\n"
         f"📊 Oxirgi: <b>{last_pct}%</b> | ⭐ Eng yaxshi: <b>{best}%</b>\n"
@@ -218,10 +218,10 @@ async def analysis_handler(callback: CallbackQuery):
     corr   = sum(1 for d in det if d.get("is_correct"))
     text   = (
         f"📊 <b>{title.upper()} — TAHLIL</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"──────────────────────\n"
         f"✅ {corr}/{len(det)} to'g'ri | {page+1}/{tot}\n"
         f"<i>Faqat OXIRGI yechilgan test tahlili</i>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"──────────────────────\n"
     )
     for d in chunk:
         i    = d.get("question_index",0)
@@ -273,7 +273,7 @@ async def _show_mytest_cats(msg, uid, edit=False):
     tests = get_my_tests(uid)
     if not tests:
         text = (
-            "📭 <b>MENING TESTLARIM</b>\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "📭 <b>MENING TESTLARIM</b>\n──────────────────────\n"
             "Hali test yaratmagansiz.\n➕ Test Yaratish bo'limidan boshlang!"
         )
         b = InlineKeyboardBuilder()
@@ -294,7 +294,7 @@ async def _show_mytest_cats(msg, uid, edit=False):
     sorted_cats = sorted(cats.items(), key=lambda x: x[1], reverse=True)
     text = (
         f"🗂 <b>MENING TESTLARIM — FANLAR</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"──────────────────────\n"
         f"<i>Jami: {len(tests)} ta test | {len(cats)} ta fan</i>\n\n"
     )
     b = InlineKeyboardBuilder()
@@ -314,7 +314,7 @@ async def _show_mytest_cats(msg, uid, edit=False):
         await msg.answer(text, reply_markup=b.as_markup())
 
 
-# ── Fan ichidagi testlar (5 tadan, to'liq ma'lumot) ──────────
+# ── Fan ichidagi testlar (5 tadan, to'liq ma'lumot) ──────────────────────
 @router.callback_query(F.data.startswith("mycat_"))
 async def mycat_cb(callback: CallbackQuery):
     await callback.answer()
@@ -345,7 +345,7 @@ async def _show_mycat_tests(msg, uid, cat_name, page=0, edit=False):
 
     text = (
         f"<b>{title}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"──────────────────────\n"
         f"<i>{len(tests)} ta test | Sahifa {page+1}/{total}</i>\n\n"
     )
     b = InlineKeyboardBuilder()
@@ -366,7 +366,7 @@ async def _show_mycat_tests(msg, uid, cat_name, page=0, edit=False):
         created= t.get("created_at","")[:10]
 
         text += (
-            f"{'━━━━━━━━━━━━━━━━━━━━━━━━'}\n"
+            f"{'──────────────────────'}\n"
             f"{paused}<b>{t_t}</b> <code>[{tid}]</code>\n"
             f"📁 {t.get('category','')} | {diff}\n"
             f"🔒 {vis}\n"
@@ -419,7 +419,7 @@ async def _show_test_settings(msg, meta, tid, edit=False):
     tl_t   = f"{meta.get('time_limit',0)} daqiqa" if meta.get("time_limit",0) else "Cheksiz"
     text = (
         f"⚙️ <b>TEST SOZLAMALARI</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"──────────────────────\n"
         f"{'⏸ <b>VAQTINCHA TO\'XTATILGAN</b>\n\n' if paused else ''}"
         f"📝 <b>{meta.get('title','?')}</b>\n"
         f"🆔 Kod: <code>{tid}</code>\n"
@@ -433,7 +433,7 @@ async def _show_test_settings(msg, meta, tid, edit=False):
         f"🔄 Urinishlar: {att_t}\n"
         f"👥 Yechilgan: <b>{meta.get('solve_count',0)} marta</b>\n"
         f"⭐ O'rtacha: <b>{round(meta.get('avg_score',0),1)}%</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━"
+        f"──────────────────────"
     )
     kb = mytest_settings_kb(tid, is_paused=paused)
     try:
@@ -455,7 +455,7 @@ async def edit_att_cb(callback: CallbackQuery):
     b.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"mytest_settings_{tid}"))
     await callback.message.edit_text(
         "<b>🔄 Urinishlar sonini ozgartirish</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "──────────────────────\n"
         "Har foydalanuvchi necha marta ishlashi mumkin?",
         reply_markup=b.as_markup()
     )
@@ -507,7 +507,7 @@ async def my_test_to_txt(callback: CallbackQuery):
     )
 
 
-# ── Test o'chirish (faqat mening testlarim dan) ───────────────
+# ── Test o'chirish (faqat mening testlarim dan) ──────────────────────
 @router.callback_query(F.data.startswith("del_mytest_"))
 async def del_mytest_confirm(callback: CallbackQuery):
     tid  = callback.data[11:]
@@ -558,7 +558,7 @@ async def del_mytest_exec(callback: CallbackQuery):
     await _show_mytest_cats(callback.message, uid)
 
 
-# ── Kim yechgan ───────────────────────────────────────────────
+# ── Kim yechgan ──────────────────────
 @router.callback_query(F.data.startswith("test_solvers_"))
 async def test_solvers_cb(callback: CallbackQuery):
     await callback.answer()
@@ -591,9 +591,9 @@ async def test_solvers_cb(callback: CallbackQuery):
     chunk = solvers[page*PG:(page+1)*PG]
     text  = (
         f"📊 <b>{meta.get('title','?')} — KIM YECHGAN</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"──────────────────────\n"
         f"👥 {len(solvers)} kishi | Sahifa {page+1}/{total}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"──────────────────────\n"
     )
     b = InlineKeyboardBuilder()
     for sv in chunk:
@@ -648,7 +648,7 @@ async def solver_detail_cb(callback: CallbackQuery):
     )
     text = (
         f"👤 <b>{sv['name']}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"──────────────────────\n"
         f"🔄 {sv['attempts']} urinish | ⭐ {sv['best_score']}% | 📈 {sv['avg_score']}%\n\n"
         f"<b>Barcha urinishlar:</b>\n<code>{att_txt}</code>\n\n"
         f"<b>1-urinish:</b> {first.get('percentage',0)}% | "
