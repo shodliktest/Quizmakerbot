@@ -338,6 +338,10 @@ async def adm_test_detail(callback: CallbackQuery):
             text="▶️ Davom ettirish" if paused else "⏸ To'xtatish",
             callback_data=f"{'test_resume' if paused else 'test_pause'}_{tid}"
         ))
+        b.row(
+            InlineKeyboardButton(text="👥 Kim yechgan",    callback_data=f"test_solvers_{tid}_0"),
+            InlineKeyboardButton(text="⏱ Poll vaqti",          callback_data=f"edit_poll_time_{tid}"),
+        )
         b.row(InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"del_test_{tid}"))
     cat = meta.get("category","")[:30]
     b.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"adm_cat_{cat}_0"))

@@ -480,6 +480,60 @@ async def set_att_cb(callback: CallbackQuery):
     )
 
 
+@router.callback_query(F.data.startswith("edit_poll_time_"))
+async def edit_poll_time_cb(callback: CallbackQuery):
+    await callback.answer()
+    tid  = callback.data[15:]
+    meta = get_test_meta(tid) or {}
+    cur  = meta.get("poll_time", 30)
+    b    = InlineKeyboardBuilder()
+    for sec in [10, 15, 20, 30, 45, 60, 90, 120]:
+        mark = "✅ " if sec == cur else ""
+        b.add(InlineKeyboardButton(
+            text=f"{mark}{sec}s",
+            callback_data=f"set_poll_time_{tid}_{sec}"
+        ))
+    b.adjust(4)
+    b.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"mytest_settings_{tid}"))
+    try:
+        await callback.message.edit_text(
+            f"⏱ <b>POLL VAQTINI O'ZGARTIRISH</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Test: <b>{meta.get('title', tid)}</b>\n"
+            f"Hozir: <b>{cur}s</b>/savol\n\n"
+            f"Har savol uchun necha sekund berilsin?",
+            reply_markup=b.as_markup()
+        )
+    except Exception as e:
+        await callback.message.answer(str(e))
+
+
+@router.callback_query(F.data.startswith("set_poll_time_"))
+async def set_poll_time_cb(callback: CallbackQuery):
+    await callback.answer()
+    parts    = callback.data.split("_")
+    # format: set_poll_time_TID_SEC
+    new_sec  = int(parts[-1])
+    tid      = "_".join(parts[3:-1])
+    from utils.ram_cache import update_test_meta
+    from utils import tg_db
+    update_test_meta(tid, {"poll_time": new_sec})
+    tg_db.mark_stats_dirty()
+    # Index ga ham yozish (TG da doim saqlash)
+    import asyncio
+    asyncio.create_task(tg_db.update_test_meta_tg(tid, {"poll_time": new_sec}))
+    meta = get_test_meta(tid) or {}
+    b    = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="⚙️ Sozlamalar", callback_data=f"mytest_settings_{tid}"))
+    try:
+        await callback.message.edit_text(
+            f"✅ Poll vaqti <b>{new_sec}s</b> ga o'zgartirildi!\n"
+            f"Test: {meta.get('title', tid)}",
+            reply_markup=b.as_markup()
+        )
+    except Exception: pass
+
+
 @router.callback_query(F.data.startswith("mytest_view_"))
 async def my_test_view(callback: CallbackQuery):
     await callback.answer()
