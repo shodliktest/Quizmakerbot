@@ -388,35 +388,65 @@ async def cb_resetall(callback: CallbackQuery):
 
 
 # ══════════════════════════════════════════════════════════════
-# /settings — Global test yaratish sozlamalari
+# /settings — Bosh sozlamalar markazi
 # ══════════════════════════════════════════════════════════════
 
 def _settings_kb() -> object:
     cfg = get_global_config()
     open_create = cfg.get("open_test_creation", False)
     b = InlineKeyboardBuilder()
+
+    # ── Global sozlamalar ──
     b.row(InlineKeyboardButton(
         text=f"{'✅' if open_create else '❌'} Hammaga test yaratish (shaxsiy/link)",
         callback_data="ra_toggle:open_test_creation"
     ))
+
+    # ── Foydalanuvchi boshqaruvi ──
     b.row(InlineKeyboardButton(
-        text="❌ Yopish",
-        callback_data="ra_close"
+        text="👥 Foydalanuvchilar ro'yxati",
+        callback_data="ra_users_list:0"
     ))
+    b.row(InlineKeyboardButton(
+        text="🔍 ID bo'yicha qidirish",
+        callback_data="ra_search_user"
+    ))
+    b.row(
+        InlineKeyboardButton(text="🎓 Barchani → Student", callback_data="ra_resetall:student"),
+        InlineKeyboardButton(text="👤 Barchani → User",    callback_data="ra_resetall:user"),
+    )
+    b.row(InlineKeyboardButton(text="❌ Yopish", callback_data="ra_close"))
     return b.as_markup()
 
 
 def _settings_text() -> str:
     cfg = get_global_config()
     open_create = cfg.get("open_test_creation", False)
+    from utils import ram_cache as ram
+    users = ram.get_users()
+    by_role = {}
+    for u in users.values():
+        r = u.get("role", "user")
+        by_role[r] = by_role.get(r, 0) + 1
+
+    role_lines = ""
+    for r in ["admin", "teacher", "student", "user"]:
+        cnt = by_role.get(r, 0)
+        if cnt:
+            role_lines += f"  {ROLE_LABELS.get(r, r)}: <b>{cnt}</b>\n"
+
     return (
-        "⚙️ <b>Global sozlamalar</b>\n"
+        "⚙️ <b>SOZLAMALAR</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📝 <b>Test yaratish (shaxsiy/link):</b>\n"
-        f"   {'✅ Hamma yarata oladi' if open_create else '❌ Faqat Student+ va referal'}\n\n"
-        f"🌍 <b>Ommaviy test:</b>\n"
-        f"   Har doim faqat Teacher va Admin\n\n"
-        "Tugma orqali yoqing/o'chiring:"
+        f"   {'✅ Hamma yarata oladi' if open_create else '❌ Faqat Student+ va referal'}\n"
+        f"🌍 <b>Ommaviy test:</b> Faqat Teacher va Admin\n\n"
+        f"👥 <b>Foydalanuvchilar:</b> {len(users)} ta\n"
+        f"{role_lines}"
+        f"\n💡 Buyruqlar:\n"
+        f"  /user &lt;ID&gt; — user batafsil\n"
+        f"  /setrole — daraja o'zgartirish\n"
+        f"  /resetall — barchani tushirish"
     )
 
 
@@ -445,6 +475,92 @@ async def cb_toggle_setting(callback: CallbackQuery):
         )
     except Exception:
         pass
+
+
+@router.callback_query(F.data.startswith("ra_users_list:"))
+async def cb_users_list(callback: CallbackQuery):
+    if not _is_admin(callback.from_user.id):
+        return await callback.answer("🚫", show_alert=True)
+
+    page  = int(callback.data.split(":")[1])
+    users = get_all_users()
+    PER   = 8
+    total = len(users)
+    chunk = users[page*PER : (page+1)*PER]
+
+    lines = [f"👥 <b>Foydalanuvchilar</b> ({total} ta) — bet {page+1}\n"]
+    for u in chunk:
+        uid  = u.get("telegram_id", "?")
+        nm   = u.get("name", "?")[:18]
+        role = ROLE_LABELS.get(u.get("role","user"), "👤")
+        blk  = "🚫" if u.get("is_blocked") else ""
+        lines.append(f"{blk}{role} <code>{uid}</code> {nm}")
+
+    b = InlineKeyboardBuilder()
+    # Har user uchun tugma
+    for u in chunk:
+        uid = u.get("telegram_id")
+        nm  = u.get("name","?")[:15]
+        b.row(InlineKeyboardButton(
+            text=f"{ROLE_LABELS.get(u.get('role','user'), '👤')} {nm}",
+            callback_data=f"ra_user_detail:{uid}"
+        ))
+    # Navigatsiya
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"ra_users_list:{page-1}"))
+    if (page+1)*PER < total:
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"ra_users_list:{page+1}"))
+    if nav:
+        b.row(*nav)
+    b.row(InlineKeyboardButton(text="⬅️ Sozlamalar", callback_data="ra_back_settings"))
+    try:
+        await callback.message.edit_text("\n".join(lines), reply_markup=b.as_markup())
+    except Exception:
+        pass
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("ra_user_detail:"))
+async def cb_user_detail_inline(callback: CallbackQuery):
+    if not _is_admin(callback.from_user.id):
+        return await callback.answer("🚫", show_alert=True)
+
+    uid  = int(callback.data.split(":")[1])
+    user = ram.get_user(uid)
+    if not user:
+        return await callback.answer("❌ Topilmadi", show_alert=True)
+
+    try:
+        await callback.message.edit_text(
+            _format_user_detail(uid, user),
+            reply_markup=_user_action_kb(uid, user.get("role","user"))
+        )
+    except Exception:
+        pass
+    await callback.answer()
+
+
+@router.callback_query(F.data == "ra_search_user")
+async def cb_search_user(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        return await callback.answer("🚫", show_alert=True)
+    await callback.answer()
+    await state.set_state(RoleAdmin.waiting_uid)
+    await callback.message.answer(
+        "🔍 <b>User qidirish</b>\n\nFoydalanuvchi ID sini kiriting:"
+    )
+
+
+@router.callback_query(F.data == "ra_back_settings")
+async def cb_back_settings(callback: CallbackQuery):
+    if not _is_admin(callback.from_user.id):
+        return await callback.answer("🚫", show_alert=True)
+    try:
+        await callback.message.edit_text(_settings_text(), reply_markup=_settings_kb())
+    except Exception:
+        pass
+    await callback.answer()
 
 
 # ── "⚙️ Sozlamalar" tugmasi (admin keyboard) ─────────────────
