@@ -52,10 +52,12 @@ async def main():
     from handlers.poll_test   import router as r_poll
     from handlers.start       import router as r_start
     from handlers.tests       import router as r_tests
-    from handlers.create_test import router as r_create
-    from handlers.profile     import router as r_profile
-    from handlers.leaderboard import router as r_lb
-    from handlers.admin       import router as r_admin
+    from handlers.create_test  import router as r_create
+    from handlers.profile      import router as r_profile
+    from handlers.leaderboard  import router as r_lb
+    from handlers.admin        import router as r_admin
+    from handlers.roles_admin  import router as r_roles
+    from handlers.referral     import router as r_referral
 
     bot = Bot(token=BOT_TOKEN,
               default=DefaultBotProperties(parse_mode=ParseMode.HTML, protect_content=True))
@@ -73,6 +75,8 @@ async def main():
     dp.include_router(r_profile)
     dp.include_router(r_lb)
     dp.include_router(r_admin)
+    dp.include_router(r_roles)
+    dp.include_router(r_referral)
     dp.include_router(webauth.router)
     # TG DB boshlash
     if STORAGE_CHANNEL_ID:
