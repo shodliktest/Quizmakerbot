@@ -33,7 +33,7 @@ async def route_poll_answer(poll_answer: PollAnswer, state: FSMContext, bot=None
     if not poll_answer.option_ids:
         return
     qi  = pmap[pid]
-    q   = d["qs"][qi] if qi < len(d["qs"]) else {}
+    q   = d.get("qs", [])[qi] if qi < len(d.get("qs", [])) else {}
     ans = d.get("ans", {})
     ch  = LT[poll_answer.option_ids[0]] if poll_answer.option_ids[0] < len(LT) else str(poll_answer.option_ids[0])
     if q.get("type") == "true_false":
@@ -158,8 +158,21 @@ async def start_poll(callback: CallbackQuery, state: FSMContext):
 
 async def _send_poll(bot, cid, state):
     d   = await state.get_data()
-    qs  = d["qs"]
-    idx = d["idx"]
+    qs  = d.get("qs", [])
+    idx = d.get("idx", 0)
+
+    # State buzilgan bo'lsa — tozalash
+    if not qs:
+        await state.clear()
+        from keyboards.keyboards import main_kb
+        uid = d.get("uid", cid)
+        try:
+            await bot.send_message(cid, "⚠️ Test ma'lumoti topilmadi. Qayta boshlang.",
+                                   reply_markup=main_kb(uid, "private"))
+        except Exception:
+            pass
+        return
+
     if idx >= len(qs):
         await _finish_poll(bot, cid, state, d)
         return
@@ -317,8 +330,8 @@ async def cancel_poll(callback: CallbackQuery, state: FSMContext):
 # ── Yakunlash ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━─────
 
 async def _finish_poll(bot, cid, state, d):
-    test    = d["test"]
-    qs      = d["qs"]
+    test    = d.get("test", {})
+    qs      = d.get("qs", [])
     ans     = d.get("ans", {})
     elapsed = int(time.time() - d.get("t0", time.time()))
     uid     = d.get("uid", cid)

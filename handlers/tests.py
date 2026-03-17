@@ -363,8 +363,20 @@ async def start_inline_test(callback: CallbackQuery, state: FSMContext):
 async def _send_question_new(bot, cid, state, uid):
     """Yangi xabar yuboradi — faqat birinchi savolda yoki pauza qaytganda"""
     d   = await state.get_data()
-    qs  = d["qs"]
-    idx = d["idx"]
+    qs  = d.get("qs", [])
+    idx = d.get("idx", 0)
+
+    # State buzilgan bo'lsa (reboot dan keyin) — tozalash
+    if not qs:
+        await state.clear()
+        from keyboards.keyboards import main_kb
+        try:
+            await bot.send_message(cid, "⚠️ Test ma'lumoti topilmadi. Qayta boshlang.",
+                                   reply_markup=main_kb(uid, "private"))
+        except Exception:
+            pass
+        return
+
     if idx >= len(qs):
         await _finish_inline(bot, cid, state, d)
         return
@@ -389,8 +401,8 @@ async def _send_question_new(bot, cid, state, uid):
 async def _edit_question(bot, cid, msg_id, state, uid):
     """Mavjud xabarni edit qiladi — keyingi savol"""
     d   = await state.get_data()
-    qs  = d["qs"]
-    idx = d["idx"]
+    qs  = d.get("qs", [])
+    idx = d.get("idx", 0)
     if idx >= len(qs):
         await _finish_inline(bot, cid, state, d)
         return
@@ -923,8 +935,8 @@ async def _finish_inline(bot, cid, state, d):
     from utils.scoring import calculate_score, format_result
     from keyboards.keyboards import result_kb
 
-    test     = d["test"]
-    qs       = d["qs"]
+    test     = d.get("test", {})
+    qs       = d.get("qs", [])
     ans      = d.get("ans", {})
     elapsed  = int(time.time() - d.get("t0", time.time()))
     uid      = d.get("uid", cid)
