@@ -113,7 +113,15 @@ async def _load_tests_stats():
     if not mid:
         log.info("ℹ️ tests_stats yo'q")
         return
-    data = await _download_doc(mid)
+    # Avval file_id dan yuklab ko'rish
+    fid = _index.get(f"fid_{mid}")
+    if fid:
+        data = await _read_file(fid)
+        if not data:
+            _index.pop(f"fid_{mid}", None)
+            data = await _download_doc(mid)
+    else:
+        data = await _download_doc(mid)
     if not data:
         log.warning(f"⚠️ tests_stats o'qilmadi (mid={mid}) — 5 daqiqada qayta yoziladi")
         mark_stats_dirty()
@@ -175,6 +183,7 @@ async def save_tests_stats():
             caption=f"📊 TESTS_STATS | {len(stats)} test | {ts}",
             protect_content=False)
         _index["tests_stats_msg_id"] = msg.message_id
+        _index[f"fid_{msg.message_id}"] = msg.document.file_id   # file_id cache
         await _save_index()
         _stats_dirty = False
         log.info(f"✅ tests_stats saqlandi: {len(stats)} test")
@@ -192,7 +201,14 @@ async def _load_users_full():
     if not mid:
         log.info("ℹ️ users_full yo'q")
         return
-    data = await _download_doc(mid)
+    fid = _index.get(f"fid_{mid}")
+    if fid:
+        data = await _read_file(fid)
+        if not data:
+            _index.pop(f"fid_{mid}", None)
+            data = await _download_doc(mid)
+    else:
+        data = await _download_doc(mid)
     if not data:
         log.warning(f"⚠️ users_full o'qilmadi (mid={mid}) — 5 daqiqada qayta yoziladi")
         mark_users_dirty_tg()
@@ -269,6 +285,7 @@ async def save_users_full():
             caption=f"👥 USERS_FULL | {len(users)} user | {ts}",
             protect_content=False)
         _index["users_full_msg_id"] = msg.message_id
+        _index[f"fid_{msg.message_id}"] = msg.document.file_id   # file_id cache
         log.info(f"✅ users_full saqlandi: {len(users)} user")
     except Exception as e:
         log.error(f"save_users_full: {e}")
@@ -286,6 +303,7 @@ async def save_users_full():
                 caption=f"📜 HISTORY_FULL | {len(history_full)} user | {ts}",
                 protect_content=False)
             _index["history_full_msg_id"] = msg2.message_id
+            _index[f"fid_{msg2.message_id}"] = msg2.document.file_id   # file_id cache
             log.info(f"✅ history_full saqlandi: {len(history_full)} user tarixi")
         except Exception as e:
             log.warning(f"history_full saqlash: {e}")
@@ -428,13 +446,16 @@ async def web_sync_loop():
                 consecutive_errors = 0
 
 async def auto_flush_loop():
-    """Har 5 daqiqada dirty bo'lsa TG ga yuboradi"""
+    """Har 2 daqiqada dirty bo'lsa TG ga yuboradi (avval 5 daqiqa edi)"""
+    await asyncio.sleep(30)   # Startup dan 30s kuting
     while True:
         try:
-            await asyncio.sleep(300)   # 5 daqiqa
+            await asyncio.sleep(120)   # Har 2 daqiqada tekshirish
             if _stats_dirty:
+                log.info("⚡ auto_flush: tests_stats yuborilmoqda...")
                 await save_tests_stats()
             if _users_dirty:
+                log.info("⚡ auto_flush: users_full yuborilmoqda...")
                 await save_users_full()
         except asyncio.CancelledError:
             break
@@ -493,6 +514,8 @@ async def _load_index():
                 if doc and "index" in (doc.file_name or "").lower():
                     data = await _read_file(doc.file_id)
                     if isinstance(data, dict) and "tests_meta" in data:
+                        # file_id ni indexga qo'shish (keyingi o'qishlar tez bo'ladi)
+                        data[f"fid_{mid}"] = doc.file_id
                         await _pin_index(data)
                         return data
                 await asyncio.sleep(0.05)
@@ -526,6 +549,7 @@ async def _save_index():
             caption=f"📋 INDEX | {ts}",
             protect_content=False)
         _index["_last_index_msg_id"] = msg.message_id
+        _index[f"fid_{msg.message_id}"] = msg.document.file_id   # index file_id
         if _can_pin:
             try: await _bot.pin_chat_message(_cid, msg.message_id, disable_notification=True)
             except: _can_pin = False
@@ -539,6 +563,7 @@ async def _pin_index(data):
         msg = await _bot.send_document(_cid,
             document=_buf(data, "index.json"), caption="📋 INDEX",
             protect_content=False)
+        _index[f"fid_{msg.message_id}"] = msg.document.file_id   # file_id cache
         await _bot.pin_chat_message(_cid, msg.message_id, disable_notification=True)
     except Exception as e:
         log.warning(f"Pin: {e}")
@@ -569,8 +594,18 @@ async def get_test_full(tid):
     if cached:
         _tests_cache[tid] = cached
         return cached
-    # 3. TG kanaldan lazy load
+    # 3. TG kanaldan lazy load — avval file_id dan, keyin forward
     msg_id = _index.get(f"test_{tid}")
+    # Agar fid_ allaqachon saqlangan bo'lsa, to'g'ridan yuklaymiz (forward siz)
+    if msg_id and _index.get(f"fid_{msg_id}"):
+        data = await _read_file(_index[f"fid_{msg_id}"])
+        if data and data.get("questions"):
+            _tests_cache[tid] = data
+            ram.cache_questions(tid, data)
+            log.info(f"✅ {tid} fid dan yuklandi ({len(data['questions'])} savol)")
+            return data
+        else:
+            _index.pop(f"fid_{msg_id}", None)   # Ishlamagan fid ni o'chir
     if not msg_id:
         # msg_id yo'q — web test yoki hali index ga tushmagan
         # Indexni qayta o'qib tekshiramiz (silent)
@@ -619,6 +654,7 @@ async def save_test_full(test):
             caption=f"📝 {test.get('title','?')} | {test.get('category','')} | {qc} savol | {tid}",
             protect_content=False)
         _index[f"test_{tid}"] = msg.message_id
+        _index[f"fid_{msg.message_id}"] = msg.document.file_id   # file_id cache
         _tests_cache[tid] = test
         meta  = {k: v for k, v in test.items() if k != "questions"}
         meta["question_count"] = qc
@@ -685,6 +721,7 @@ async def save_settings(settings_dict):
             caption=f"⚙️ SETTINGS | {ts}",
             protect_content=False)
         _index["settings_msg_id"] = msg.message_id
+        _index[f"fid_{msg.message_id}"] = msg.document.file_id   # file_id cache
         await _save_index()
         return True
     except Exception as e:
@@ -716,6 +753,7 @@ async def upload_backup(daily_data, date_str):
         if "backups" not in _index:
             _index["backups"] = {}
         _index["backups"][date_str] = msg.message_id
+        _index[f"fid_{msg.message_id}"] = msg.document.file_id   # file_id cache
         await _save_index()
         log.info(f"✅ Backup: {date_str}")
         return msg.message_id
@@ -790,46 +828,61 @@ def get_index_info():
 async def _download_doc(msg_id):
     """
     Kanaldan fayl yuklab olish.
-    1. Bot API getMessages (forward talab qilmaydi, protect_content muhim emas)
-    2. Fallback: forward_message
+
+    STRATEGIYA (protect_content muammosini bartaraf etish):
+    1. _index da file_id saqlangan bo'lsa — to'g'ridan yuklash (FORWARD siz)
+    2. copyMessage — forward dan ko'ra ishonchli, protect_content ta'sir qilmaydi
+    3. forward_message — oxirgi fallback
+
+    MUHIM: getMessages — Bot API da YO'Q (faqat MTProto), shuning uchun o'chirildi.
+    file_id Telegram serverlarida abadiy saqlanadi va bot uchun doim ishlatiladi.
     """
-    import asyncio, urllib.request, json as _json, functools
+    # ── 1. Index da file_id saqlangan bo'lsa — to'g'ridan ─────
+    fid_key = f"fid_{msg_id}"
+    cached_fid = _index.get(fid_key)
+    if cached_fid:
+        data = await _read_file(cached_fid)
+        if data:
+            return data
+        # file_id ishlamasa indexdan o'chirib davom etamiz
+        _index.pop(fid_key, None)
 
-    token = _bot.token
-
-    # ── 1. getMessages (Bot API 7.0+) ─────────────────────────
-    def _get_messages_sync():
-        try:
-            url  = f"https://api.telegram.org/bot{token}/getMessages"
-            body = _json.dumps({"chat_id": _cid, "message_ids": [int(msg_id)]}).encode()
-            req  = urllib.request.Request(url, body, {"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=15) as r:
-                return _json.loads(r.read())
-        except Exception:
-            return {}
-
+    # ── 2. copyMessage — protect_content ta'sir qilmaydi ─────
     try:
-        loop = asyncio.get_event_loop()
-        data = await loop.run_in_executor(None, _get_messages_sync)
-        if data.get("ok") and data.get("result"):
-            doc = data["result"][0].get("document")
-            if doc:
-                return await _read_file(doc["file_id"])
-    except Exception:
-        pass
+        copied = await _bot.copy_message(
+            chat_id=_cid,
+            from_chat_id=_cid,
+            message_id=int(msg_id),
+            protect_content=False
+        )
+        # copy qaytargan message_id dan faylni olish
+        copied_mid = copied.message_id
+        # Copied xabarni forward qilmasdan file_id olish uchun
+        # Bot API da getChatMessage yo'q, shuning uchun forward orqali file_id olamiz
+        fwd2 = await _bot.forward_message(_cid, _cid, copied_mid)
+        doc2 = getattr(fwd2, "document", None)
+        try: await _bot.delete_message(_cid, copied_mid)
+        except: pass
+        try: await _bot.delete_message(_cid, fwd2.message_id)
+        except: pass
+        if doc2:
+            # file_id ni cache qilish
+            _index[fid_key] = doc2.file_id
+            return await _read_file(doc2.file_id)
+    except Exception as e:
+        log.debug(f"copy+forward {msg_id}: {e}")
 
-    # ── 2. Fallback: forward_message ──────────────────────────
+    # ── 3. Fallback: to'g'ri forward ──────────────────────────
     try:
         fwd = await _bot.forward_message(_cid, _cid, int(msg_id))
         doc = getattr(fwd, "document", None)
         try: await _bot.delete_message(_cid, fwd.message_id)
         except: pass
         if doc:
+            _index[fid_key] = doc.file_id   # Keyingi safar tez ishlaydi
             return await _read_file(doc.file_id)
     except Exception as e:
         log.error(f"download_doc {msg_id}: {e}")
-
-    return {}
 
     return {}
 
