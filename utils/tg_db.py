@@ -684,21 +684,32 @@ def get_index_info():
 async def _download_doc(msg_id):
     """
     Kanaldan fayl yuklab olish.
-    protect_content=False bilan forward — storage kanal ichki ishlar uchun.
+    Bot API 7.0+ getMessages metodi — forward shart emas.
     """
     try:
-        fwd = await _bot.forward_message(
-            _cid, _cid, msg_id,
-            protect_content=False,
-        )
+        # aiogram TelegramMethod orqali getMessages chaqirish
+        from aiogram.methods import GetMessages
+        msgs = await _bot(GetMessages(chat_id=_cid, message_ids=[int(msg_id)]))
+        if msgs:
+            m   = msgs[0] if isinstance(msgs, list) else msgs
+            doc = getattr(m, "document", None)
+            if doc:
+                return await _read_file(doc.file_id)
+    except Exception:
+        pass
+
+    # Fallback: eski usul (protect_content=False bo'lgan yangi xabarlar uchun)
+    try:
+        fwd = await _bot.forward_message(_cid, _cid, int(msg_id))
         doc = getattr(fwd, "document", None)
         try: await _bot.delete_message(_cid, fwd.message_id)
         except: pass
-        if not doc: return {}
-        return await _read_file(doc.file_id)
+        if doc:
+            return await _read_file(doc.file_id)
     except Exception as e:
         log.error(f"download_doc {msg_id}: {e}")
-        return {}
+
+    return {}
 
 async def _read_file(file_id):
     try:
