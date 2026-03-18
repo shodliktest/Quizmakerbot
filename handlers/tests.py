@@ -319,17 +319,7 @@ async def start_inline_test(callback: CallbackQuery, state: FSMContext):
     if is_test_paused(tid):
         return await callback.answer("⚠️ Bu test vaqtincha to'xtatilgan!", show_alert=True)
     await callback.answer()
-    uid  = callback.from_user.id
-    meta = get_test_meta(tid) or {}
-    allowed = meta.get("allowed_users", [])
-    if allowed and uid not in allowed:
-        return await callback.answer("🔐 Bu test faqat maxsus foydalanuvchilar uchun!", show_alert=True)
-    # Kirish nazorati
-    from utils.ram_cache import get_test_meta as _gtm
-    _meta_a = _gtm(tid) or {}
-    _allowed = _meta_a.get("allowed_users", [])
-    if _allowed and uid not in _allowed:
-        return await callback.answer("🔐 Bu test faqat tanlangan foydalanuvchilar uchun!\nKirish ruxsatingiz yo'q.", show_alert=True)
+    uid = callback.from_user.id
     cid = callback.message.chat.id if callback.message else uid
 
     # Avvalgi testni to'xtatish
