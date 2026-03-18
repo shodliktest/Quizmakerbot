@@ -68,11 +68,24 @@ async def start_poll(callback: CallbackQuery, state: FSMContext):
     via_link = raw.endswith("_link")
     tid    = raw[:-5].upper() if via_link else raw.upper()
     uid    = callback.from_user.id
+    # Kirish nazorati
+    from utils.ram_cache import get_test_meta as _gtm
+    _meta_a = _gtm(tid) or {}
+    _allowed = _meta_a.get("allowed_users", [])
+    if _allowed and uid not in _allowed:
+        return await callback.answer("🔐 Bu test faqat tanlangan foydalanuvchilar uchun!\nKirish ruxsatingiz yo'q.", show_alert=True)
     msg    = callback.message
     chat_id= msg.chat.id if msg and msg.chat else uid
 
     if is_test_paused(tid):
         return await callback.answer("⚠️ Bu test vaqtincha to'xtatilgan!", show_alert=True)
+
+    # ── Kirish nazorati ───────────────────────────────────────
+    from utils.ram_cache import get_test_meta as _gtm
+    _meta    = _gtm(tid) or {}
+    _allowed = _meta.get("allowed_users", [])
+    if _allowed and uid not in _allowed:
+        return await callback.answer("🔐 Bu test faqat maxsus foydalanuvchilar uchun!", show_alert=True)
 
     # ── Aktiv test tekshiruvi ─────────────────────────────────
     from utils.states import TestSolving as _TS

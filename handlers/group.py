@@ -1124,6 +1124,12 @@ async def _start_group_test(bot, chat_id: int, uid: int, tid: str, mode: str):
     if not test:
         return await bot.send_message(chat_id, f"❌ <code>{tid}</code> kodli test topilmadi.", protect_content=True)
 
+    # ── Kirish nazorati ───────────────────────────────────────
+    from utils.ram_cache import get_test_meta as _gtm
+    _allowed = (_gtm(tid) or {}).get("allowed_users", [])
+    if _allowed and uid not in _allowed:
+        return await bot.send_message(chat_id, "🔐 Bu test faqat maxsus foydalanuvchilar uchun!", protect_content=True)
+
     if mode == "inline":
         qs            = test.get("questions", [])
         poll_time     = test.get("poll_time", 30) or 30
