@@ -834,9 +834,8 @@ async def _show_group_leaderboard(
     caption_txt = _build_text_leaderboard(
         tid, results_for_card, test, qs, bot_uname, stopped_early, passing, mode
     )
-    # Caption 1024 belgidan oshmasligi uchun kesib qo'yamiz
-    if len(caption_txt) > 1020:
-        caption_txt = caption_txt[:1020] + "…"
+    # Caption 1024 belgidan oshsa — sig'gan odamlarni to'liq ko'rsatamiz
+    caption_txt = _trim_caption(caption_txt, limit=1024)
 
     # ── Rasm + caption birga ──
     try:
@@ -859,6 +858,25 @@ async def _show_group_leaderboard(
             test, qs, bot_uname, stopped_early, passing,
             mode=mode, reply_to=None
         )
+
+
+def _trim_caption(text: str, limit: int = 1024) -> str:
+    """
+    Caption limitga sig'masa — to'liq qatorlarni qoldiradi.
+    Yarim qolgan qator chiqmaydi, oxirgi to'liq qator bilan tugaydi.
+    """
+    if len(text) <= limit:
+        return text
+    lines  = text.split("\n")
+    result = []
+    total  = 0
+    for line in lines:
+        needed = len(line) + (1 if result else 0)  # \n uchun +1
+        if total + needed > limit:
+            break
+        result.append(line)
+        total += needed
+    return "\n".join(result)
 
 
 def _clean_name(name: str, max_len: int) -> str:
@@ -1136,13 +1154,22 @@ async def _start_group_test(bot, chat_id: int, uid: int, tid: str, mode: str):
 
         b = InlineKeyboardBuilder()
         b.row(InlineKeyboardButton(text="⏹ To\'xtatish", callback_data=f"gi_stop_{uid}"))
+        diff_m  = {"easy":"🟢 Oson","medium":"🟡 O'rtacha","hard":"🔴 Qiyin","expert":"⚡ Ekspert"}
+        diff_t  = diff_m.get(test.get("difficulty",""), "")
+        ps      = test.get("passing_score", 60)
+        cat     = test.get("category", "")
+        sc      = test.get("solve_count", 0)
         await bot.send_message(
             chat_id,
             f"🚀 <b>INLINE TEST BOSHLANDI!</b>\n"
-            f"📝 {test.get('title')} | {len(qs)} savol | ⏱{poll_time}s\n"
-            f"📢 Tugmalar orqali javob bering!",
-            parse_mode="HTML", reply_markup=b.as_markup()
-        ,
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📝 <b>{test.get('title')}</b>\n"
+            f"📁 {cat}  {diff_t}\n"
+            f"📋 {len(qs)} ta savol | ⏱ {poll_time}s/savol\n"
+            f"🎯 O'tish: {ps}% | 👥 {sc} marta yechilgan\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📢 <b>Hamma qatnashing! Tugmalar orqali javob bering!</b>",
+            parse_mode="HTML", reply_markup=b.as_markup(),
             protect_content=True)
         task = asyncio.create_task(
             _run_inline_session(bot, chat_id, tid, qs, poll_time, passing_score)
@@ -1181,11 +1208,22 @@ async def _start_group_test(bot, chat_id: int, uid: int, tid: str, mode: str):
         b.row(InlineKeyboardButton(text="⏹ To\'xtatish", callback_data=f"gstop_{uid}"))
         skipped  = len(test.get("questions", [])) - len(qs)
         skip_txt = f"\n⚠️ {skipped} ta matn savol o\'tkazildi" if skipped else ""
+        diff_m  = {"easy":"🟢 Oson","medium":"🟡 O'rtacha","hard":"🔴 Qiyin","expert":"⚡ Ekspert"}
+        diff_t  = diff_m.get(test.get("difficulty",""), "")
+        ps      = test.get("passing_score", 60)
+        cat     = test.get("category", "")
+        sc      = test.get("solve_count", 0)
         await bot.send_message(
             chat_id,
-            f"🚀 <b>TEST BOSHLANDI!</b> | {len(qs)} savol | ⏱{poll_time}s{skip_txt}\n📢 Hamma qatnashing!",
-            parse_mode="HTML", reply_markup=b.as_markup()
-        ,
+            f"🚀 <b>QUIZ POLL BOSHLANDI!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📝 <b>{test.get('title')}</b>\n"
+            f"📁 {cat}  {diff_t}\n"
+            f"📋 {len(qs)} ta savol | ⏱ {poll_time}s/savol\n"
+            f"🎯 O'tish: {ps}% | 👥 {sc} marta yechilgan\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📢 <b>Hamma qatnashing!</b>{skip_txt}",
+            parse_mode="HTML", reply_markup=b.as_markup(),
             protect_content=True)
         task = asyncio.create_task(
             _run_group_polls(bot, chat_id, tid, qs, poll_time)
