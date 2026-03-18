@@ -829,34 +829,46 @@ async def _show_group_leaderboard(
             log.error(f"Natija saqlash: {e}\n{traceback.format_exc()}")
 
     results_for_card.sort(key=lambda x: x["score"], reverse=True)
+    top10 = results_for_card[:10]    # Rasm uchun TOP 10
+    top15 = results_for_card[:15]    # Matn uchun TOP 15
+    total = len(results_for_card)
 
-    # ── Matn natijalarni tayyorlaymiz ──
-    mode_sfx    = "inline" if mode == "inline" else "poll"
-    caption_txt = _build_text_leaderboard(
-        tid, results_for_card, test, qs, bot_uname, stopped_early, passing, mode
+    # ── Matn natijalar (TOP 15) ──
+    full_txt = _build_text_leaderboard(
+        tid, top15, test, qs, bot_uname, stopped_early, passing, mode,
+        total_count=total
     )
 
-    # ── Rasm + caption birga ──
+    # ── 1. Rasm (TOP 10) + caption (TOP 5) ──
+    card_sent = False
     try:
         from utils.leaderboard_card import send_leaderboard_card
         await send_leaderboard_card(
             bot=bot,
             chat_id=chat_id,
             quiz_title=test.get("title","Test"),
-            results=results_for_card,
+            results=top10,
             passing_score=passing,
             total_questions=len(qs),
-            caption=caption_txt,
+            total_count=total,
+            test=test,
             delete_after=0,
         )
+        card_sent = True
     except Exception as e:
         log.warning(f"Rasm leaderboard xato: {e}")
-        # Rasm ishlamasa — faqat matn
-        await _send_text_leaderboard(
-            bot, chat_id, tid, results_for_card,
-            test, qs, bot_uname, stopped_early, passing,
-            mode=mode, reply_to=None
-        )
+
+    # ── 2. Matn xabar — TOP 15 to'liq ro'yxat ──
+    try:
+        await bot.send_message(chat_id, full_txt, parse_mode="HTML")
+    except Exception as e:
+        log.warning(f"Natija matni xato: {e}")
+        if not card_sent:
+            await _send_text_leaderboard(
+                bot, chat_id, tid, top15,
+                test, qs, bot_uname, stopped_early, passing,
+                mode=mode, reply_to=None
+            )
 
 
 def _build_caption(results, title, passing, stopped_early):
@@ -875,44 +887,90 @@ def _build_caption(results, title, passing, stopped_early):
     )
 
 
-def _build_text_leaderboard(tid, results, test, qs, bot_uname, stopped_early, passing, mode):
-    """Rasm caption uchun matn natijalar."""
-    medals  = ["🥇","🥈","🥉"]
-    avg     = sum(r["score"] for r in results) / len(results) if results else 0
-    passed  = sum(1 for r in results if r["score"] >= passing)
+def _clean_name(name: str, max_len: int = 20) -> str:
+    """Emoji, maxsus Unicode, nazorat belgilarini olib tashlaydi va qisqartiradi."""
+    import unicodedata
+    result = []
+    for ch in name:
+        cat = unicodedata.category(ch)
+        if cat.startswith(('L', 'N', 'P', 'Z')) and ord(ch) < 0x10000:
+            result.append(ch)
+    cleaned = ''.join(result).strip()
+    if not cleaned:
+        cleaned = "NoName"
+    if len(cleaned) > max_len:
+        cleaned = cleaned[:max_len] + "…"
+    return cleaned
 
-    stop_h  = "⛔️ <b>Test to'xtatildi!</b>" if stopped_early else "🏁 <b>Test tugadi!</b>"
-    text    = (
+
+def _split_message(text: str, limit: int = 4000) -> list:
+    """Uzun matnni Telegram limitiga qarab bo'lib chiqaradi (HTML teglar saqlanadi)."""
+    if len(text) <= limit:
+        return [text]
+    parts = []
+    lines = text.split("\n")
+    cur   = ""
+    for line in lines:
+        if len(cur) + len(line) + 1 > limit:
+            if cur:
+                parts.append(cur.rstrip())
+            cur = line + "\n"
+        else:
+            cur += line + "\n"
+    if cur.strip():
+        parts.append(cur.rstrip())
+    return parts if parts else [text[:limit]]
+
+
+def _build_text_leaderboard(tid, results, test, qs, bot_uname, stopped_early, passing, mode, total_count=None):
+    """TOP 15 natijalar matni."""
+    medals = ["🥇","🥈","🥉"]
+    n      = total_count or len(results)
+    avg    = sum(r["score"] for r in results) / len(results) if results else 0
+    passed = sum(1 for r in results if r["score"] >= passing)
+    stop_h = "⛔️ <b>Test to'xtatildi!</b>" if stopped_early else "🏁 <b>Test tugadi!</b>"
+
+    text = (
         f"{stop_h}\n"
         f"📚 <b>{test.get('title','Test')}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🏆 <b>Natijalar jadvali:</b>\n\n"
+        f"🏆 <b>TOP {len(results)} natija:</b>\n\n"
     )
+    for i, r in enumerate(results):
+        medal    = medals[i] if i < 3 else f"{i+1}."
+        raw_name = r.get("first_name") or r.get("username") or "?"
+        name     = _clean_name(raw_name, max_len=20)
+        text += f"{medal} <b>{name}</b> — {r['score']:.0f}% ({r['correct']}/{r['total']} ✅)\n"
 
-    show = results[:15]
-    for i, r in enumerate(show):
-        medal   = medals[i] if i < 3 else f"{i+1}."
-        pct     = r["score"]
-        correct = r["correct"]
-        total   = r["total"]
-        filled  = round(pct / 10)
-        bar     = "🟩" * filled + "⬜️" * (10 - filled)
-        name    = r.get("first_name") or r.get("username") or "O'quvchi"
-        text   += (
-            f"{medal} <b>{name}</b>\n"
-            f"    {bar}  {pct:.0f}%  ({correct}/{total} ✅)\n\n"
-        )
-
-    if len(results) > 15:
-        text += f"<i>...va yana {len(results)-15} ta qatnashchi</i>\n\n"
+    if n > len(results):
+        text += f"<i>...va yana {n - len(results)} kishi</i>\n"
 
     text += (
-        f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"👥 Ishtirokchilar: <b>{len(results)} kishi</b>\n"
-        f"📊 O'rtacha natija: <b>{avg:.1f}%</b>\n\n"
+        f"\n━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👥 <b>{n}</b> kishi | ✅ <b>{passed}</b> o'tdi | 📊 <b>{avg:.0f}%</b>\n"
         f"🎉 Barcha ishtirokchilarga rahmat!"
     )
     return text
+
+
+def _build_short_caption(results, test, passing, stopped_early):
+    """Rasm caption uchun — max 1024 belgi, faqat TOP 5 + umumiy stat."""
+    medals = ["🥇","🥈","🥉","4.","5."]
+    avg    = sum(r["score"] for r in results) / len(results) if results else 0
+    passed = sum(1 for r in results if r["score"] >= passing)
+    stop_h = "⛔️ To'xtatildi" if stopped_early else "🏁 Tugadi"
+
+    lines = [
+        f"{stop_h} | 📚 {test.get('title','Test')[:30]}",
+        f"👥 {len(results)} kishi | ✅ {passed} o'tdi | 📊 {avg:.0f}%",
+        "",
+    ]
+    for i, r in enumerate(results[:5]):
+        name = (r.get("first_name") or r.get("username") or "?")[:20]
+        lines.append(f"{medals[i]} {name} — {r['score']:.0f}%")
+    if len(results) > 5:
+        lines.append(f"...va yana {len(results)-5} kishi")
+    return "\n".join(lines)
 
 
 async def _send_text_leaderboard(
