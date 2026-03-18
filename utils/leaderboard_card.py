@@ -1,11 +1,12 @@
 """
-Leaderboard Card — TOP 10, ismi qisqartirilgan, caption yo'q
+Leaderboard Card — sodda, ishonchli, DejaVu shrift
 """
 import io, asyncio, logging
 from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+# Shrift qidirish: Noto (packages.txt) → DejaVu (default) → fallback
 def _find_font(bold=False):
     import os
     candidates_bold = [
@@ -50,8 +51,11 @@ def _col(p, ps):
 def _tw(draw, t, f):
     b = draw.textbbox((0,0), t, font=f); return b[2]-b[0]
 
-def _clean_name(name: str, max_len: int = 20) -> str:
-    """Emoji, maxsus Unicode, nazorat belgilarini olib tashlaydi va qisqartiradi."""
+def _th(draw, t, f):
+    b = draw.textbbox((0,0), t, font=f); return b[3]-b[1]
+
+def _clean_name(name: str, max_len: int) -> str:
+    """Emoji, maxsus Unicode (𒐫 kabi), nazorat belgilarini olib tashlaydi, keyin qisqartiradi."""
     import unicodedata
     result = []
     for ch in name:
@@ -65,17 +69,6 @@ def _clean_name(name: str, max_len: int = 20) -> str:
         cleaned = cleaned[:max_len] + "…"
     return cleaned
 
-
-def _fit_name(draw, name: str, font, max_width: int) -> str:
-    """Ism berilgan piksel kenglikka sig'masa qisqartiradi."""
-    if _tw(draw, name, font) <= max_width:
-        return name
-    while len(name) > 1:
-        name = name[:-1]
-        if _tw(draw, name + "…", font) <= max_width:
-            return name + "…"
-    return "…"
-
 def generate_leaderboard_image(
     quiz_title, results, passing_score=60.0, total_questions=0
 ):
@@ -87,24 +80,21 @@ def generate_leaderboard_image(
         PAD = 30
         GAP = 8
 
-        # TOP 10 ga cheklash
-        top3  = results[:3]
-        rest  = results[3:10]    # 4–10 o'rin
-        shown = results[:10]
-
-        avg    = sum(r["score"] for r in results) / len(results)
+        top3 = results[:3]
+        rest = results[3:15]
+        avg  = sum(r["score"] for r in results)/len(results)
         passed = sum(1 for r in results if r["score"] >= passing_score)
-        n      = len(results)
+        n = len(results)
 
-        # Balandlik
-        H = (PAD + 110 + GAP +
-             36 + GAP +
-             2  + GAP +
-             len(top3) * (90 + GAP) +
-             (28 + GAP if rest else 0) +
-             len(rest) * (62 + GAP) +
-             2  + GAP +
-             44 + PAD)
+        # Balandlikni hisoblash
+        H = (PAD + 110 + GAP +   # header
+             36 + GAP +           # stats
+             2  + GAP +           # divider
+             len(top3)*(90+GAP) + # top3
+             (28+GAP if rest else 0) +
+             len(rest)*(62+GAP) + # rest
+             2  + GAP +           # footer divider
+             44 + PAD)            # footer
 
         img  = Image.new("RGB", (W, H), BG)
         draw = ImageDraw.Draw(img)
@@ -112,12 +102,12 @@ def generate_leaderboard_image(
 
         # ── HEADER ──
         R = 30
-        cx, cy = PAD + R, y + 55
-        draw.ellipse([cx-R, cy-R, cx+R, cy+R], fill=ACC, outline=WHT, width=2)
-        draw.text((cx, cy), "#", font=_f(22, True), fill=WHT, anchor="mm")
+        cx, cy = PAD+R, y+55
+        draw.ellipse([cx-R,cy-R,cx+R,cy+R], fill=ACC, outline=WHT, width=2)
+        draw.text((cx,cy), "#", font=_f(22,True), fill=WHT, anchor="mm")
 
-        title = (quiz_title[:30] + "…") if len(quiz_title) > 31 else quiz_title
-        draw.text((cx + R + 14, cy - 18), title, font=_f(32, True), fill=WHT)
+        title = (quiz_title[:30]+"…") if len(quiz_title)>31 else quiz_title
+        draw.text((cx+R+14, cy-18), title, font=_f(32,True), fill=WHT)
         y += 110 + GAP
 
         # ── STATS ──
@@ -128,7 +118,7 @@ def generate_leaderboard_image(
             (f"O'rtacha: {avg:.0f}%", GRY),
         ]:
             f0 = _f(18)
-            draw.text((sx, y + 4), txt, font=f0, fill=col)
+            draw.text((sx, y+4), txt, font=f0, fill=col)
             sx += _tw(draw, txt, f0) + 24
         y += 36 + GAP
 
@@ -141,60 +131,59 @@ def generate_leaderboard_image(
             pct  = r["score"]
             cor  = r["correct"]
             tot  = r["total"] or total_questions or 1
+            name = _clean_name(r.get("first_name") or r.get("username") or "?", 25)
             bc   = M[i]
             col  = _col(pct, passing_score)
             H3   = 90
 
             draw.rectangle([PAD, y, W-PAD, y+H3], fill=CARD, outline=bc, width=2)
 
-            rcx, rcy = PAD + 40, y + H3 // 2
-            draw.ellipse([rcx-22, rcy-22, rcx+22, rcy+22], fill=bc)
-            draw.text((rcx, rcy), str(i+1), font=_f(20, True), fill=BG, anchor="mm")
+            # Rank doira
+            rcx, rcy = PAD+40, y+H3//2
+            draw.ellipse([rcx-22,rcy-22,rcx+22,rcy+22], fill=bc)
+            draw.text((rcx,rcy), str(i+1), font=_f(20,True), fill=BG, anchor="mm")
 
             nx = rcx + 34
             ny = y + 14
 
-            # Foiz (o'ng taraf)
-            fp = _f(28, True)
-            pt = f"{pct:.0f}%"
-            pw = _tw(draw, pt, fp)
-            px = W - PAD - 14 - pw
+            # Foiz
+            fp     = _f(28,True)
+            pt     = f"{pct:.0f}%"
+            pw     = _tw(draw, pt, fp)
+            px     = W - PAD - 14 - pw
             draw.text((px, ny), pt, font=fp, fill=col)
 
             # correct/total
-            fi = _f(18)
-            it = f"{cor}/{tot}"
-            iw = _tw(draw, it, fi)
-            draw.text((px - iw - 14, ny + 5), it, font=fi, fill=GRY)
+            fi  = _f(18)
+            it  = f"{cor}/{tot}"
+            iw  = _tw(draw, it, fi)
+            draw.text((px - iw - 14, ny+5), it, font=fi, fill=GRY)
 
-            # Ism — foiz va correct/total orasiga sig'adigan joy
-            name_raw  = _clean_name(r.get("first_name") or r.get("username") or "?")
-            max_name_w = px - iw - 14 - nx - 16   # o'ng chegaradan 16px bo'sh
-            name_font  = _f(22, True)
-            name       = _fit_name(draw, name_raw, name_font, max_name_w)
-            draw.text((nx, ny), name, font=name_font, fill=WHT)
+            # Ism
+            draw.text((nx, ny), name, font=_f(22,True), fill=WHT)
 
-            # Progress bar
-            bx0, bx1 = nx, W - PAD - 14
+            # Bar
+            bx0, bx1 = nx, W-PAD-14
             by = ny + 38
             draw.rectangle([bx0, by, bx1, by+8], fill=BBG)
-            fw = int((bx1 - bx0) * pct / 100)
+            fw = int((bx1-bx0)*pct/100)
             if fw > 4:
                 draw.rectangle([bx0, by, bx0+fw, by+8], fill=col)
 
             y += H3 + GAP
 
-        # ── 4–10 O'RIN ──
+        # ── QOLGANLAR ──
         if rest:
-            draw.text((PAD, y + 4), f"Qolgan {len(rest)} ishtirokchi:",
+            draw.text((PAD, y+4), f"Qolgan {len(rest)} ishtirokchi:",
                       font=_f(17), fill=GRY)
             y += 28 + GAP
 
             for i, r in enumerate(rest):
-                rank = i + 4
+                rank = i+4
                 pct  = r["score"]
                 cor  = r["correct"]
                 tot  = r["total"] or total_questions or 1
+                name = _clean_name(r.get("first_name") or r.get("username") or "?", 27)
                 col  = _col(pct, passing_score)
                 HR   = 62
 
@@ -203,33 +192,25 @@ def generate_leaderboard_image(
                 nx = PAD + 46
                 ny = y + 10
 
-                draw.text((PAD + 12, ny + 2), f"{rank}.", font=_f(16), fill=GRY)
+                draw.text((PAD+12, ny+2), f"{rank}.", font=_f(16), fill=GRY)
 
-                # Foiz
-                fp = _f(22, True)
-                pt = f"{pct:.0f}%"
-                pw = _tw(draw, pt, fp)
-                px = W - PAD - 14 - pw
-                draw.text((px, ny + 2), pt, font=fp, fill=col)
+                fp  = _f(22,True)
+                pt  = f"{pct:.0f}%"
+                pw  = _tw(draw, pt, fp)
+                px  = W - PAD - 14 - pw
+                draw.text((px, ny+2), pt, font=fp, fill=col)
 
-                # correct/total
-                fi = _f(17)
-                it = f"{cor}/{tot}"
-                iw = _tw(draw, it, fi)
-                draw.text((px - iw - 12, ny + 4), it, font=fi, fill=GRY)
+                fi  = _f(17)
+                it  = f"{cor}/{tot}"
+                iw  = _tw(draw, it, fi)
+                draw.text((px-iw-12, ny+4), it, font=fi, fill=GRY)
 
-                # Ism — sig'adigan joy
-                name_raw  = _clean_name(r.get("first_name") or r.get("username") or "?")
-                max_name_w = px - iw - 12 - nx - 12
-                name_font  = _f(20, True)
-                name       = _fit_name(draw, name_raw, name_font, max_name_w)
-                draw.text((nx, ny), name, font=name_font, fill=WHT)
+                draw.text((nx, ny), name, font=_f(20,True), fill=WHT)
 
-                # Bar
-                bx0, bx1 = nx, W - PAD - 14
+                bx0, bx1 = nx, W-PAD-14
                 by = ny + 30
                 draw.rectangle([bx0, by, bx1, by+7], fill=BBG)
-                fw = int((bx1 - bx0) * pct / 100)
+                fw = int((bx1-bx0)*pct/100)
                 if fw > 4:
                     draw.rectangle([bx0, by, bx0+fw, by+7], fill=col)
 
@@ -238,13 +219,10 @@ def generate_leaderboard_image(
         # ── FOOTER ──
         draw.rectangle([PAD, y, W-PAD, y+1], fill=BRD)
         y += 1 + GAP
-        ff = _f(17)
-        draw.text((PAD, y + 10), f"O'tish bali: {passing_score:.0f}%", font=ff, fill=GRY)
-        if n > 10:
-            mid_txt = f"Top 10 / {n} kishi"
-            draw.text((W//2 - _tw(draw, mid_txt, ff)//2, y + 10), mid_txt, font=ff, fill=GRY)
-        tq = f"{total_questions} ta savol"
-        draw.text((W - PAD - _tw(draw, tq, ff), y + 10), tq, font=ff, fill=GRY)
+        ff  = _f(17)
+        draw.text((PAD, y+10), f"O'tish bali: {passing_score:.0f}%", font=ff, fill=GRY)
+        tq  = f"{total_questions} ta savol"
+        draw.text((W-PAD-_tw(draw,tq,ff), y+10), tq, font=ff, fill=GRY)
 
         buf = io.BytesIO()
         img.save(buf, format="PNG")
@@ -256,30 +234,10 @@ def generate_leaderboard_image(
         return None
 
 
-def build_caption(results, test, passing_score, total_count):
-    """Rasm caption — TOP 5 + umumiy stat, 1024 belgidan oshmaydi."""
-    medals  = ["🥇","🥈","🥉","4.","5."]
-    n       = total_count or len(results)
-    avg     = sum(r["score"] for r in results) / len(results) if results else 0
-    passed  = sum(1 for r in results if r["score"] >= passing_score)
-    title   = (test.get("title","Test"))[:30]
-
-    lines = [f"📚 <b>{title}</b>"]
-    lines.append(f"👥 {n} kishi | ✅ {passed} o'tdi | 📊 {avg:.0f}%")
-    lines.append("")
-    for i, r in enumerate(results[:5]):
-        name = _clean_name(r.get("first_name") or r.get("username") or "?", max_len=18)
-        lines.append(f"{medals[i]} <b>{name}</b> — {r['score']:.0f}%")
-    if n > 5:
-        lines.append(f"<i>...va yana {n-5} kishi</i>")
-    return "\n".join(lines)
-
-
 async def send_leaderboard_card(
     bot, chat_id, quiz_title, results,
     passing_score=60.0, total_questions=0,
-    total_count=None, test=None, delete_after=0,
-    caption=None,
+    caption=None, delete_after=0,
 ):
     from aiogram.types import BufferedInputFile
     loop = asyncio.get_event_loop()
@@ -288,11 +246,6 @@ async def send_leaderboard_card(
         quiz_title, results, passing_score, total_questions
     )
     if not img_bytes: return None
-
-    # Caption: agar tashqaridan berilmagan bo'lsa — o'zimiz quramiz
-    if caption is None and test is not None:
-        caption = build_caption(results, test, passing_score, total_count or len(results))
-
     try:
         msg = await bot.send_photo(
             chat_id=chat_id,
