@@ -3,6 +3,7 @@ import asyncio
 import logging
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, BufferedInputFile
+from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardButton
 from aiogram.exceptions import TelegramBadRequest
