@@ -551,15 +551,9 @@ async def edit_allowed_cb(callback: CallbackQuery, state: FSMContext):
     uid  = callback.from_user.id
     meta = get_test_meta(tid) or {}
     from config import ADMIN_IDS
-    from utils.roles import get_role, ROLE_LEVELS
 
-    # Ruxsat: admin yoki teacher (teacher faqat o'ziniki)
-    role = get_role(uid)
-    is_admin = uid in ADMIN_IDS
-    is_teacher = ROLE_LEVELS.get(role, 0) >= ROLE_LEVELS["teacher"]
-    if not is_admin and not is_teacher:
-        return await callback.answer("⚠️ Faqat admin va teacher!", show_alert=True)
-    if is_teacher and not is_admin and meta.get("creator_id") != uid:
+    # Ruxsat: o'z testi yoki admin
+    if uid not in ADMIN_IDS and meta.get("creator_id") != uid:
         return await callback.answer("⚠️ Faqat o'z testingizni sozlay olasiz!", show_alert=True)
 
     allowed = meta.get("allowed_users", [])
@@ -600,12 +594,7 @@ async def allowed_clear_cb(callback: CallbackQuery):
     meta = get_test_meta(tid) or {}
     from config import ADMIN_IDS
     from utils.roles import get_role, ROLE_LEVELS
-    role = get_role(uid)
-    is_admin = uid in ADMIN_IDS
-    is_teacher = ROLE_LEVELS.get(role, 0) >= ROLE_LEVELS["teacher"]
-    if not is_admin and not is_teacher:
-        return await callback.answer("⚠️ Ruxsat yo'q!", show_alert=True)
-    if is_teacher and not is_admin and meta.get("creator_id") != uid:
+    if uid not in ADMIN_IDS and meta.get("creator_id") != uid:
         return await callback.answer("⚠️ Ruxsat yo'q!", show_alert=True)
 
     from utils.ram_cache import update_test_meta
@@ -626,12 +615,7 @@ async def allowed_del_cb(callback: CallbackQuery, state: FSMContext):
     meta = get_test_meta(tid) or {}
     from config import ADMIN_IDS
     from utils.roles import get_role, ROLE_LEVELS
-    role = get_role(uid)
-    is_admin   = uid in ADMIN_IDS
-    is_teacher = ROLE_LEVELS.get(role, 0) >= ROLE_LEVELS["teacher"]
-    if not is_admin and not is_teacher:
-        return await callback.answer("⚠️ Ruxsat yo'q!", show_alert=True)
-    if is_teacher and not is_admin and meta.get("creator_id") != uid:
+    if uid not in ADMIN_IDS and meta.get("creator_id") != uid:
         return await callback.answer("⚠️ Ruxsat yo'q!", show_alert=True)
 
     await state.set_state(AllowedUsersState.waiting_ids)
@@ -661,12 +645,7 @@ async def allowed_replace_cb(callback: CallbackQuery, state: FSMContext):
     meta = get_test_meta(tid) or {}
     from config import ADMIN_IDS
     from utils.roles import get_role, ROLE_LEVELS
-    role = get_role(uid)
-    is_admin   = uid in ADMIN_IDS
-    is_teacher = ROLE_LEVELS.get(role, 0) >= ROLE_LEVELS["teacher"]
-    if not is_admin and not is_teacher:
-        return await callback.answer("⚠️ Ruxsat yo'q!", show_alert=True)
-    if is_teacher and not is_admin and meta.get("creator_id") != uid:
+    if uid not in ADMIN_IDS and meta.get("creator_id") != uid:
         return await callback.answer("⚠️ Ruxsat yo'q!", show_alert=True)
 
     await state.set_state(AllowedUsersState.waiting_ids)
