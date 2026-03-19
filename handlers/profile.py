@@ -57,12 +57,6 @@ async def _show_profile(msg, uid, edit=False):
         f"🏅 {('  '.join(badges)) if badges else 'Hali yo\'q'}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━"
     )
-    # Kirish nazorati
-    allowed = meta.get("allowed_users", [])
-    if allowed:
-        text += f"\n🔐 <b>Kirish nazorati:</b> {len(allowed)} ta foydalanuvchi"
-    else:
-        text += "\n🔓 Kirish nazorati: <i>hammaga ochiq</i>"
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="📋 Natijalarim",      callback_data="results_p0"))
     b.row(InlineKeyboardButton(text="🗂 Mening testlarim", callback_data="mytests_cats"))
