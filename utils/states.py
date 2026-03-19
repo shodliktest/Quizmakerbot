@@ -30,3 +30,6 @@ class AdminPanel(StatesGroup):
 
 class ContactAdmin(StatesGroup):
     waiting_message = State()
+
+class AllowedUsersState(StatesGroup):
+    waiting_ids = State()
