@@ -837,7 +837,26 @@ async def _show_group_leaderboard(
     # Caption 1024 belgidan oshsa — sig'gan odamlarni to'liq ko'rsatamiz
     caption_txt = _trim_caption(caption_txt, limit=1024)
 
-    # ── Rasm + caption birga ──
+    # ── Qayta boshlash + Ulashish tugmalari ──
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    from aiogram.types import InlineKeyboardButton
+    btn_kb = InlineKeyboardBuilder()
+    if mode == "poll":
+        btn_kb.row(InlineKeyboardButton(
+            text="🔄 Qayta boshlash (Poll)",
+            url=f"https://t.me/{bot_uname}?startgroup=gpoll_{tid}"
+        ))
+    else:
+        btn_kb.row(InlineKeyboardButton(
+            text="🔄 Qayta boshlash (Inline)",
+            url=f"https://t.me/{bot_uname}?startgroup=ginline_{tid}"
+        ))
+    btn_kb.row(InlineKeyboardButton(
+        text="📤 Ulashish",
+        switch_inline_query=f"test_{tid}"
+    ))
+
+    # ── Rasm + caption + tugmalar ──
     try:
         from utils.leaderboard_card import send_leaderboard_card
         await send_leaderboard_card(
@@ -849,15 +868,20 @@ async def _show_group_leaderboard(
             total_questions=len(qs),
             caption=caption_txt,
             delete_after=0,
+            reply_markup=btn_kb.as_markup(),
         )
     except Exception as e:
         log.warning(f"Rasm leaderboard xato: {e}")
-        # Rasm ishlamasa — faqat matn
+        # Rasm ishlamasa — faqat matn + tugmalar
         await _send_text_leaderboard(
             bot, chat_id, tid, results_for_card,
             test, qs, bot_uname, stopped_early, passing,
             mode=mode, reply_to=None
         )
+        try:
+            await bot.send_message(chat_id, "👇", reply_markup=btn_kb.as_markup())
+        except Exception:
+            pass
 
 
 def _trim_caption(text: str, limit: int = 1024) -> str:
