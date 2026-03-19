@@ -238,6 +238,7 @@ async def send_leaderboard_card(
     bot, chat_id, quiz_title, results,
     passing_score=60.0, total_questions=0,
     caption=None, delete_after=0,
+    reply_markup=None,
 ):
     from aiogram.types import BufferedInputFile
     loop = asyncio.get_event_loop()
@@ -252,6 +253,7 @@ async def send_leaderboard_card(
             photo=BufferedInputFile(img_bytes, filename="leaderboard.png"),
             caption=caption or None,
             parse_mode="HTML" if caption else None,
+            reply_markup=reply_markup or None,
         )
         if delete_after > 0:
             async def _d():
