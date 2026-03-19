@@ -10,6 +10,7 @@ from aiogram.exceptions import TelegramBadRequest
 from utils.db import (get_user, get_my_tests, get_user_results,
                       get_analysis, get_test_full, get_test_stats_for_user,
                       pause_test, get_test_solvers)
+from utils.states import AllowedUsersState
 from utils.ram_cache import get_test_by_id, get_test_meta
 from keyboards.keyboards import main_kb, analysis_kb, mytest_settings_kb, CAT_ICONS, get_cat_icon
 
@@ -55,6 +56,12 @@ async def _show_profile(msg, uid, edit=False):
         f"🏅 {('  '.join(badges)) if badges else 'Hali yo\'q'}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━"
     )
+    # Kirish nazorati
+    allowed = meta.get("allowed_users", [])
+    if allowed:
+        text += f"\n🔐 <b>Kirish nazorati:</b> {len(allowed)} ta foydalanuvchi"
+    else:
+        text += "\n🔓 Kirish nazorati: <i>hammaga ochiq</i>"
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="📋 Natijalarim",      callback_data="results_p0"))
     b.row(InlineKeyboardButton(text="🗂 Mening testlarim", callback_data="mytests_cats"))
@@ -435,6 +442,12 @@ async def _show_test_settings(msg, meta, tid, edit=False):
         f"⭐ O'rtacha: <b>{round(meta.get('avg_score',0),1)}%</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━"
     )
+    # Kirish nazorati
+    allowed = meta.get("allowed_users", [])
+    if allowed:
+        text += f"\n🔐 <b>Kirish nazorati:</b> {len(allowed)} ta foydalanuvchi"
+    else:
+        text += "\n🔓 Kirish nazorati: <i>hammaga ochiq</i>"
     kb = mytest_settings_kb(tid, is_paused=paused)
     try:
         if edit: await msg.edit_text(text, reply_markup=kb)
@@ -532,6 +545,248 @@ async def set_poll_time_cb(callback: CallbackQuery):
             reply_markup=b.as_markup()
         )
     except Exception: pass
+
+
+# ══ KIRISH NAZORATI ═══════════════════════════════════════════
+
+@router.callback_query(F.data.startswith("edit_allowed_"))
+async def edit_allowed_cb(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    tid  = callback.data[13:]
+    uid  = callback.from_user.id
+    meta = get_test_meta(tid) or {}
+    from config import ADMIN_IDS
+    from utils.roles import get_role, ROLE_LEVELS
+
+    # Ruxsat: admin yoki teacher (teacher faqat o'ziniki)
+    role = get_role(uid)
+    is_admin = uid in ADMIN_IDS
+    is_teacher = ROLE_LEVELS.get(role, 0) >= ROLE_LEVELS["teacher"]
+    if not is_admin and not is_teacher:
+        return await callback.answer("⚠️ Faqat admin va teacher!", show_alert=True)
+    if is_teacher and not is_admin and meta.get("creator_id") != uid:
+        return await callback.answer("⚠️ Faqat o'z testingizni sozlay olasiz!", show_alert=True)
+
+    allowed = meta.get("allowed_users", [])
+    allowed_txt = ", ".join(str(i) for i in allowed) if allowed else "Yo'q"
+
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="➕ ID qo'shish",   callback_data=f"allowed_add_{tid}"))
+    if allowed:
+        b.row(InlineKeyboardButton(text="➖ ID o'chirish", callback_data=f"allowed_del_{tid}"))
+        b.row(InlineKeyboardButton(text="🔄 Ro'yxatni almashtirish", callback_data=f"allowed_replace_{tid}"))
+        b.row(InlineKeyboardButton(text="🔓 Hammaga ochish", callback_data=f"allowed_clear_{tid}"))
+    b.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"mytest_settings_{tid}"))
+
+    status = f"🔐 <b>Qulflangan</b> — {len(allowed)} ta foydalanuvchi" if allowed else "🔓 <b>Hammaga ochiq</b>"
+    ids_txt = "\n".join(f"• <code>{i}</code>" for i in allowed) if allowed else "<i>Ro'yxat bo'sh</i>"
+    try:
+        await callback.message.edit_text(
+            f"🔐 <b>KIRISH NAZORATI</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📝 <b>{meta.get('title', tid)}</b>\n"
+            f"Holat: {status}\n\n"
+            f"<b>Ruxsat etilgan IDlar:</b>\n"
+            f"{ids_txt}",
+            reply_markup=b.as_markup()
+        )
+    except TelegramBadRequest:
+        await callback.message.answer(
+            f"🔐 Kirish nazorati: {status}",
+            reply_markup=b.as_markup()
+        )
+
+
+@router.callback_query(F.data.startswith("allowed_clear_"))
+async def allowed_clear_cb(callback: CallbackQuery):
+    await callback.answer()
+    tid  = callback.data[14:]
+    uid  = callback.from_user.id
+    meta = get_test_meta(tid) or {}
+    from config import ADMIN_IDS
+    from utils.roles import get_role, ROLE_LEVELS
+    role = get_role(uid)
+    is_admin = uid in ADMIN_IDS
+    is_teacher = ROLE_LEVELS.get(role, 0) >= ROLE_LEVELS["teacher"]
+    if not is_admin and not is_teacher:
+        return await callback.answer("⚠️ Ruxsat yo'q!", show_alert=True)
+    if is_teacher and not is_admin and meta.get("creator_id") != uid:
+        return await callback.answer("⚠️ Ruxsat yo'q!", show_alert=True)
+
+    from utils.ram_cache import update_test_meta
+    from utils import tg_db
+    update_test_meta(tid, {"allowed_users": []})
+    tg_db.mark_stats_dirty()
+    import asyncio
+    asyncio.create_task(tg_db.update_test_meta_tg(tid, {"allowed_users": []}))
+    await callback.answer("🔓 Hammaga ochildi!", show_alert=True)
+    await edit_allowed_cb(callback)
+
+
+@router.callback_query(F.data.startswith("allowed_del_"))
+async def allowed_del_cb(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    tid  = callback.data[12:]
+    uid  = callback.from_user.id
+    meta = get_test_meta(tid) or {}
+    from config import ADMIN_IDS
+    from utils.roles import get_role, ROLE_LEVELS
+    role = get_role(uid)
+    is_admin   = uid in ADMIN_IDS
+    is_teacher = ROLE_LEVELS.get(role, 0) >= ROLE_LEVELS["teacher"]
+    if not is_admin and not is_teacher:
+        return await callback.answer("⚠️ Ruxsat yo'q!", show_alert=True)
+    if is_teacher and not is_admin and meta.get("creator_id") != uid:
+        return await callback.answer("⚠️ Ruxsat yo'q!", show_alert=True)
+
+    await state.set_state(AllowedUsersState.waiting_ids)
+    await state.update_data(allowed_tid=tid, allowed_mode="delete")
+    allowed = meta.get("allowed_users", [])
+    cur_txt = ", ".join(str(i) for i in allowed) if allowed else "yo'q"
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="❌ Bekor", callback_data=f"edit_allowed_{tid}"))
+    try:
+        await callback.message.edit_text(
+            f"➖ <b>ID O'CHIRISH</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Hozirgi ro'yxat:\n<code>{cur_txt}</code>\n\n"
+            f"O'chirmoqchi bo'lgan IDlarni yuboring:\n"
+            f"<code>1919293828, 1728393992</code>",
+            reply_markup=b.as_markup()
+        )
+    except TelegramBadRequest:
+        await callback.message.answer("O'chirmoqchi IDlarni yuboring:", reply_markup=b.as_markup())
+
+
+@router.callback_query(F.data.startswith("allowed_replace_"))
+async def allowed_replace_cb(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    tid  = callback.data[16:]
+    uid  = callback.from_user.id
+    meta = get_test_meta(tid) or {}
+    from config import ADMIN_IDS
+    from utils.roles import get_role, ROLE_LEVELS
+    role = get_role(uid)
+    is_admin   = uid in ADMIN_IDS
+    is_teacher = ROLE_LEVELS.get(role, 0) >= ROLE_LEVELS["teacher"]
+    if not is_admin and not is_teacher:
+        return await callback.answer("⚠️ Ruxsat yo'q!", show_alert=True)
+    if is_teacher and not is_admin and meta.get("creator_id") != uid:
+        return await callback.answer("⚠️ Ruxsat yo'q!", show_alert=True)
+
+    await state.set_state(AllowedUsersState.waiting_ids)
+    await state.update_data(allowed_tid=tid, allowed_mode="replace")
+    allowed = meta.get("allowed_users", [])
+    cur_txt = ", ".join(str(i) for i in allowed) if allowed else "yo'q"
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="❌ Bekor", callback_data=f"edit_allowed_{tid}"))
+    try:
+        await callback.message.edit_text(
+            f"🔄 <b>RO'YXATNI ALMASHTIRISH</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Hozirgi: <code>{cur_txt}</code>\n\n"
+            f"Yangi IDlarni yuboring (eskisi o'chadi):\n"
+            f"<code>1919293828, 1728393992, 18283837</code>",
+            reply_markup=b.as_markup()
+        )
+    except TelegramBadRequest:
+        await callback.message.answer("Yangi IDlarni yuboring:", reply_markup=b.as_markup())
+
+
+@router.callback_query(F.data.startswith("allowed_add_"))
+async def allowed_add_cb(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    tid = callback.data[12:]
+    uid = callback.from_user.id
+    meta = get_test_meta(tid) or {}
+    from config import ADMIN_IDS
+    from utils.roles import get_role, ROLE_LEVELS
+    role = get_role(uid)
+    is_admin = uid in ADMIN_IDS
+    is_teacher = ROLE_LEVELS.get(role, 0) >= ROLE_LEVELS["teacher"]
+    if not is_admin and not is_teacher:
+        return await callback.answer("⚠️ Ruxsat yo'q!", show_alert=True)
+    if is_teacher and not is_admin and meta.get("creator_id") != uid:
+        return await callback.answer("⚠️ Ruxsat yo'q!", show_alert=True)
+
+    await state.set_state(AllowedUsersState.waiting_ids)
+    await state.update_data(allowed_tid=tid, allowed_mode="add")
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="❌ Bekor", callback_data=f"edit_allowed_{tid}"))
+    allowed = meta.get("allowed_users", [])
+    cur_txt = ", ".join(str(i) for i in allowed) if allowed else "hali yo'q"
+    try:
+        await callback.message.edit_text(
+            f"➕ <b>ID QO'SHISH</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Hozirgi ro'yxat: <code>{cur_txt}</code>\n\n"
+            f"Qo'shmoqchi bo'lgan IDlarni yuboring:\n"
+            f"<code>1919293828, 1728393992</code>\n\n"
+            f"<i>Yangi IDlar mavjud ro'yxatga qo'shiladi</i>",
+            reply_markup=b.as_markup()
+        )
+    except TelegramBadRequest:
+        await callback.message.answer("IDlarni yuboring:", reply_markup=b.as_markup())
+
+
+@router.message(AllowedUsersState.waiting_ids)
+async def allowed_ids_received(message: Message, state: FSMContext):
+    import re
+    d    = await state.get_data()
+    tid  = d.get("allowed_tid", "")
+    mode = d.get("allowed_mode", "add")   # add | replace | delete
+    await state.clear()
+
+    raw_ids = re.findall(r"\d{5,12}", message.text or "")
+    new_ids = [int(i) for i in raw_ids]
+
+    if not new_ids:
+        b = InlineKeyboardBuilder()
+        b.row(InlineKeyboardButton(text="🔄 Qayta", callback_data=f"edit_allowed_{tid}"))
+        return await message.answer(
+            "❌ Hech qanday to'g'ri ID topilmadi.\n"
+            "ID 5-12 xonali raqam bo'lishi kerak.",
+            reply_markup=b.as_markup()
+        )
+
+    from utils.ram_cache import update_test_meta, get_test_meta as _gtm
+    from utils import tg_db
+    import asyncio
+
+    meta    = _gtm(tid) or {}
+    current = meta.get("allowed_users", [])
+
+    if mode == "add":
+        result = list(dict.fromkeys(current + new_ids))   # Dublikat yo'q
+        action = f"➕ {len(new_ids)} ta ID qo'shildi"
+    elif mode == "replace":
+        result = new_ids
+        action = f"🔄 Ro'yxat almashtirildi"
+    elif mode == "delete":
+        result = [i for i in current if i not in new_ids]
+        removed = len(current) - len(result)
+        action = f"➖ {removed} ta ID o'chirildi"
+    else:
+        result = new_ids
+        action = "✅ Saqlandi"
+
+    update_test_meta(tid, {"allowed_users": result})
+    tg_db.mark_stats_dirty()
+    asyncio.create_task(tg_db.update_test_meta_tg(tid, {"allowed_users": result}))
+
+    status  = f"🔐 {len(result)} ta foydalanuvchi" if result else "🔓 Hammaga ochiq"
+    ids_txt = ", ".join(str(i) for i in result) if result else "yo'q"
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="🔐 Kirish nazorati", callback_data=f"edit_allowed_{tid}"))
+    b.row(InlineKeyboardButton(text="⚙️ Sozlamalar",      callback_data=f"mytest_settings_{tid}"))
+    await message.answer(
+        f"✅ <b>{action}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📝 {meta.get('title', tid)}\n"
+        f"Holat: {status}\n"
+        f"<code>{ids_txt[:200]}</code>",
+        reply_markup=b.as_markup()
+    )
 
 
 @router.callback_query(F.data.startswith("mytest_view_"))
