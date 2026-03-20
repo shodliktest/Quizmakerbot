@@ -854,15 +854,27 @@ async def _show_group_leaderboard(
         switch_inline_query=f"test_{tid}"
     ))
 
-    # ── Guruh natijalarini RAMdan o'chirish (faqat meta qoladi) ──
+    # ── Guruh natijalarini RAMdan o'chirish + guruh lb yangilash ──
     from utils import ram_cache as ram
-    for uid_str in list(answers.keys()):
-        try:
-            from utils.ram_cache import _ana_key
-            with ram._lck:
-                ram._RAM.pop(_ana_key(uid_str, tid), None)
-        except Exception:
-            pass
+    for uid_str, user_answers in answers.items():
+        # Tahlilni RAMdan o'chirish
+        with ram._lck:
+            ram._RAM.pop(f"analysis_{uid_str}", None)
+            ram._RAM.pop(f"ana_access_{uid_str}", None)
+        # Guruh leaderboard yangilash
+        scored_entry = results_for_card[0] if results_for_card else {}
+        for r in results_for_card:
+            if r.get("uid") == int(uid_str):
+                scored_entry = r
+                break
+        user = ram.get_user(uid_str) or {}
+        ram.update_group_leaderboard(
+            uid_str,
+            user.get("name", f"User {uid_str}"),
+            scored_entry.get("score", 0),
+            scored_entry.get("correct", 0),
+            scored_entry.get("total", len(qs)),
+        )
 
     # ── Rasm + caption + tugmalar ──
     try:
