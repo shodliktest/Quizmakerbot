@@ -202,7 +202,8 @@ async def _cache_cleanup_loop():
     """
     Har 15 daqiqada:
     - 48 soat yechilmagan test savollarini RAMdan o'chiradi
-    - 1 soatdan eski tahlillarni RAMdan o'chiradi
+    - 2 soatdan eski tahlillarni RAMdan o'chiradi
+    - 2 soatdan eski user stats RAMdan o'chiradi
     """
     await asyncio.sleep(900)
     while True:
@@ -217,6 +218,9 @@ async def _cache_cleanup_loop():
             ana = ram.clear_expired_analysis()
             if ana:
                 log.info(f"🧹 Analysis: {ana} ta tahlil RAMdan o'chirildi")
+            sts = ram.clear_expired_stats()
+            if sts:
+                log.info(f"🧹 Stats: {sts} ta user stats RAMdan o'chirildi")
         except asyncio.CancelledError:
             break
         except Exception as e:
