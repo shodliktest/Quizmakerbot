@@ -1,15 +1,19 @@
 """
-RAM CACHE — Arxitektura:
-  tests_meta    : [{id,title,...}]  — doim RAM, savolsiz (yengil)
-  qcache_{tid}  : 12 soat cache     — savollar bilan, faqat test ochilganda
-  users_cache   : {uid_str: {...}}  — doim RAM
-  settings      : {uid_str: "uz_1_1"}
-  daily_results : {uid_str: {by_test:{...}, history:[...]}} — 1 kun, midnight flush
+RAM CACHE — Yangi arxitektura:
 
-MUHIM QOIDALAR:
-  - Testlar hech qachon o'chirilmaydi (faqat admin delete)
-  - Har user uchun har test: ALL percentages + ONLY LAST analysis
-  - TG upload: yangi test/user yaratilganda, admin buyruq, midnight
+  tests_meta      : [{id,title,...}]   — doim RAM, savolsiz
+  qcache_{tid}    : 48 soat TTL        — savollar, faqat kerakda yuklanadi
+  users_cache     : {uid_str: {...}}   — doim RAM
+  settings        : {uid_str: "uz_1_1"}
+  results_{uid}   : {tid: {meta}}      — doim RAM (foiz, attempts, best)
+  analysis_{uid}_{tid} : [...]         — 1 SOAT TTL, keyin o'chadi
+  group_results   : vaqtinchalik, e'lon qilingach o'chadi
+
+QOIDALAR:
+  - Tahlil (analysis) — 1 soat, keyin RAMdan o'chadi
+  - Guruh natijalari — e'lon qilingach darhol o'chadi
+  - Test savollari   — 48 soat yechilmasa RAMdan o'chadi
+  - User meta        — doim RAM (kichik)
 """
 import threading, logging, sys
 from datetime import datetime, timezone, timedelta
@@ -19,19 +23,24 @@ UTC  = timezone.utc
 _lck = threading.Lock()
 _RAM: dict = {}
 
-RAM_LIMIT             = 450 * 1024 * 1024
-DEFAULT_SETTINGS      = "uz_1_1"
-LANGS  = ["uz", "ru", "en"]
-THEMES = ["light", "dark"]
-NOTIFS = ["off", "on"]
+RAM_LIMIT        = 450 * 1024 * 1024
+ANALYSIS_TTL_H   = 1
+CACHE_TTL_HOURS  = 48
+
+DEFAULT_SETTINGS = "uz_1_1"
+LANGS   = ["uz", "ru", "en"]
+THEMES  = ["light", "dark"]
+NOTIFS  = ["off", "on"]
 
 
-# ── Internal get/set ─────────────────────────────────────────
 def _get(k, d=None):
     with _lck: return _RAM.get(k, d)
 
 def _set(k, v):
     with _lck: _RAM[k] = v
+
+def _pop(k):
+    with _lck: return _RAM.pop(k, None)
 
 
 # ══ SETTINGS ══════════════════════════════════════════════════
@@ -66,13 +75,12 @@ def get_all_settings():  return _get("settings", {})
 def set_all_settings(d): _set("settings", d)
 
 
-# ══ TEST META (yengil, doim RAM) ══════════════════════════════
+# ══ TEST META ══════════════════════════════════════════════════
 
 def get_tests_meta():
     return [t for t in _get("tests_meta", []) if t.get("is_active", True)]
 
 def get_all_tests_meta():
-    """Admin uchun — o'chirilganlarni ham ko'rsatish"""
     return _get("tests_meta", [])
 
 def set_tests_meta(m):
@@ -98,8 +106,7 @@ def update_test_meta(tid, updates):
 def delete_test_from_ram(tid):
     m = [t for t in _get("tests_meta", []) if t.get("test_id") != tid]
     _set("tests_meta", m)
-    with _lck:
-        _RAM.pop(f"qcache_{tid}", None)
+    _pop(f"qcache_{tid}")
     log.info(f"RAM: test_{tid} o'chirildi")
 
 def pause_test(tid, paused: bool):
@@ -108,10 +115,8 @@ def pause_test(tid, paused: bool):
 def is_test_paused(tid):
     return get_test_meta(tid).get("is_paused", False)
 
-# Eski moslik
 def get_tests():       return get_tests_meta()
 def get_test_by_id(tid):
-    # O'chirilgan test bo'lsa None qaytarsin
     meta = get_test_meta(tid)
     if meta and not meta.get("is_active", True):
         return {}
@@ -123,7 +128,6 @@ def get_test_by_id(tid):
 def set_tests(tests):
     metas = []
     for t in tests:
-        # is_active=False bo'lsa meta listga qo'shiladi lekin cache qilinmaydi
         meta = {k: v for k, v in t.items() if k != "questions"}
         meta["question_count"] = len(t.get("questions", []))
         metas.append(meta)
@@ -139,56 +143,39 @@ def add_test(test):
         cache_questions(test["test_id"], test)
 
 def update_test_meta_full(test):
-    tid = test.get("test_id")
+    tid  = test.get("test_id")
     meta = {k: v for k, v in test.items() if k != "questions"}
     update_test_meta(tid, meta)
 
 def refresh_tests():
-    """Faqat meta tozalash, qcache qoldiramiz"""
     _set("tests_meta", [])
 
 
-# ══ SAVOLLAR CACHE (12 soat) ══════════════════════════════════
-
-# ══ SAVOLLAR CACHE ════════════════════════════════════════════
-#
-# Qoidalar:
-#   - Bot start: faqat oxirgi backup dagi testlar yuklanadi
-#   - Birinchi so'rov: TGdan yuklab, RAMda ABADIY saqlaydi (o'chmaydi)
-#   - 2 kun (48 soat) hech kim yechmasa: RAMdan o'chadi (TGda qoladi)
-#   - Yangi yechish: last_access yangilanadi (yana 48 soat)
-#
-CACHE_TTL_HOURS = 48   # 2 kun
+# ══ SAVOLLAR CACHE (48 soat) ═══════════════════════════════════
 
 def cache_questions(tid, test_full):
-    """Test RAMga yuklanadi — last_access bilan"""
     now = datetime.now(UTC)
     _set(f"qcache_{tid}", {
         "test":        test_full,
         "loaded_at":   now,
         "last_access": now,
     })
-    log.debug(f"RAM cache: {tid} yuklandi")
 
 def get_cached_questions(tid):
-    """RAMdan o'qish + last_access yangilash"""
     e = _get(f"qcache_{tid}")
     if not e:
         return None
-    # last_access yangilash (har o'qishda)
     e["last_access"] = datetime.now(UTC)
     _set(f"qcache_{tid}", e)
     return e["test"]
 
 def touch_test_access(tid):
-    """Test yechilganda last_access yangilanadi"""
     e = _get(f"qcache_{tid}")
     if e:
         e["last_access"] = datetime.now(UTC)
         _set(f"qcache_{tid}", e)
 
 def clear_expired_cache():
-    """2 kun yechilmagan testlarni RAMdan o'chirish (TGda qoladi)"""
     now      = datetime.now(UTC)
     deadline = now - timedelta(hours=CACHE_TTL_HOURS)
     removed  = []
@@ -202,19 +189,18 @@ def clear_expired_cache():
             del _RAM[k]
             removed.append(k.replace("qcache_", ""))
     if removed:
-        log.info(f"RAM expired: {len(removed)} test o'chirildi — {removed}")
+        log.info(f"RAM expired qcache: {len(removed)} test o'chirildi")
     return removed
 
 def get_cache_stats():
-    """Admin uchun — RAM holatini ko'rish"""
     now   = datetime.now(UTC)
     items = []
     with _lck:
         for k, v in _RAM.items():
             if not k.startswith("qcache_"): continue
-            tid  = k.replace("qcache_", "")
-            la   = v.get("last_access", now)
-            ago  = int((now - la).total_seconds() / 3600)
+            tid = k.replace("qcache_", "")
+            la  = v.get("last_access", now)
+            ago = int((now - la).total_seconds() / 3600)
             items.append({"tid": tid, "last_access_hours_ago": ago})
     return items
 
@@ -238,282 +224,260 @@ def clear_users_dirty(): _set("users_dirty", False)
 
 # ══ NATIJALAR ══════════════════════════════════════════════════
 #
-# STRUKTURA:
-# daily_results[uid_str] = {
-#   "by_test": {
-#     tid: {
-#       "attempts":     N,
-#       "all_pcts":     [85.0, 92.0, ...],   # BARCHA urinishlar foizi
-#       "best_score":   92.0,
-#       "avg_score":    88.5,
-#       "first_result": {...},               # Birinchi urinish to'liq (creator/admin uchun)
-#       "last_result":  {...},               # Oxirgi urinish to'liq
-#       "last_analysis":[...],              # FAQAT OXIRGI tahlil
-#       "accessed_link": False,             # Link orqali kirganmi
-#       "last_at":      "2025-01-01 12:00",
-#     }
-#   },
-#   "history": [  # Yengil ro'yxat (profile uchun)
-#     {tid, title, last_pct, best_pct, attempts, all_pcts, completed_at, accessed_link}
-#   ]
+# results_{uid} = {
+#   tid: {attempts, all_pcts, best_score, avg_score, last_at, passed}
 # }
+# analysis_{uid}_{tid} = {data, last_result, saved_at}  ← 1 soat TTL
 
-def get_daily():           return _get("daily_results", {})
-def clear_daily():
-    _set("daily_results", {})
-    log.info("Kunlik RAM tozalandi")
+def _res_key(uid):      return f"results_{uid}"
+def _ana_key(uid, tid): return f"analysis_{uid}_{tid}"
+
+def get_user_stat(uid, tid):
+    return _get(_res_key(uid), {}).get(tid, {})
+
+def get_all_user_stats(uid):
+    return _get(_res_key(uid), {})
 
 def save_result_to_ram(user_id, test_id, result, via_link=False):
-    """
-    Natijani RAMga saqlash.
-    - all_pcts: barcha urinishlar foizi (to'planib boradi)
-    - last_analysis: faqat oxirgi tahlil (eskisi o'chib ketadi)
-    - first_result: birinchi urinish (bir marta yoziladi)
-    - last_result: har safar yangilanadi
-    Returns: result_id
-    """
-    daily   = _get("daily_results", {})
     uid_str = str(user_id)
     rid     = f"{uid_str}_{test_id}"
     now_str = str(datetime.now(UTC))[:16]
 
-    if uid_str not in daily:
-        daily[uid_str] = {"by_test": {}, "history": []}
+    # Meta (kichik, doim RAM)
+    res = _get(_res_key(uid_str), {})
+    e   = res.get(test_id, {
+        "attempts":   0,
+        "all_pcts":   [],
+        "best_score": 0.0,
+        "avg_score":  0.0,
+        "last_at":    now_str,
+        "passed":     False,
+    })
+    pct   = float(result.get("percentage", 0))
+    att   = e["attempts"] + 1
+    all_p = e["all_pcts"] + [pct]
+    best  = max(e["best_score"], pct)
+    avg   = round(sum(all_p) / len(all_p), 1)
+    ps    = float(result.get("passing_score", 60))
 
-    bt = daily[uid_str]["by_test"]
-    if test_id not in bt:
-        bt[test_id] = {
-            "attempts":      0,
-            "all_pcts":      [],
-            "best_score":    0.0,
-            "avg_score":     0.0,
-            "first_result":  None,
-            "last_result":   None,
-            "last_analysis": [],
-            "accessed_link": via_link,
-            "last_at":       now_str,
-        }
-
-    e       = bt[test_id]
-    pct     = float(result.get("percentage", 0))
-    att     = e["attempts"] + 1
-    all_p   = e["all_pcts"] + [pct]
-    best    = max(e["best_score"], pct)
-    avg     = round(sum(all_p) / len(all_p), 1)
-
-    # To'liq natija (result_id va meta qo'shib)
-    full_res = {
-        **result,
-        "result_id":   rid,
-        "test_id":     test_id,
-        "user_id":     user_id,
-        "attempt_num": att,
-        "completed_at": now_str,
+    res[test_id] = {
+        "attempts":   att,
+        "all_pcts":   all_p,
+        "best_score": best,
+        "avg_score":  avg,
+        "last_at":    now_str,
+        "passed":     pct >= ps,
     }
+    _set(_res_key(uid_str), res)
 
-    e.update({
-        "attempts":      att,
-        "all_pcts":      all_p,
-        "best_score":    best,
-        "avg_score":     avg,
-        "last_result":   full_res,
-        "last_analysis": result.get("detailed_results", []),
-        "last_at":       now_str,
+    # Tahlil (1 soat TTL)
+    _set(_ana_key(uid_str, test_id), {
+        "data": result.get("detailed_results", []),
+        "last_result": {
+            **result,
+            "result_id":    rid,
+            "test_id":      test_id,
+            "user_id":      user_id,
+            "attempt_num":  att,
+            "completed_at": now_str,
+        },
+        "saved_at": datetime.now(UTC),
     })
-    if e["first_result"] is None:
-        e["first_result"] = full_res
-    if via_link:
-        e["accessed_link"] = True
 
-    # History (yengil) — har test uchun bitta yozuv
-    h = [x for x in daily[uid_str].get("history", []) if x.get("test_id") != test_id]
-    h.insert(0, {
-        "test_id":      test_id,
-        "result_id":    rid,
-        "last_pct":     pct,
-        "best_pct":     best,
-        "attempts":     att,
-        "all_pcts":     all_p,
-        "passed":       pct >= result.get("passing_score", 60),
-        "accessed_link":via_link or e["accessed_link"],
-        "completed_at": now_str,
-    })
-    daily[uid_str]["history"] = h[:200]
-    _set("daily_results", daily)
+    _set("users_dirty", True)
     return rid
 
 def get_user_results(uid):
-    """History ro'yxati (yengil)"""
-    return _get("daily_results", {}).get(str(uid), {}).get("history", [])
+    res     = _get(_res_key(str(uid)), {})
+    history = []
+    for tid, e in res.items():
+        history.append({
+            "test_id":      tid,
+            "result_id":    f"{uid}_{tid}",
+            "last_pct":     e["all_pcts"][-1] if e["all_pcts"] else 0,
+            "best_pct":     e["best_score"],
+            "attempts":     e["attempts"],
+            "all_pcts":     e["all_pcts"],
+            "passed":       e["passed"],
+            "completed_at": e["last_at"],
+        })
+    history.sort(key=lambda x: x.get("completed_at", ""), reverse=True)
+    return history
 
 def get_test_entry(uid, tid):
-    """Bitta test uchun to'liq entry"""
-    return (_get("daily_results", {})
-            .get(str(uid), {})
-            .get("by_test", {})
-            .get(tid, {}))
+    return get_user_stat(uid, tid)
 
 def get_analysis(uid, rid):
-    """Oxirgi tahlil — rid = uid_testid"""
     parts = str(rid).split("_", 1)
     if len(parts) < 2:
         return []
     tid = parts[1]
-    return (_get("daily_results", {})
-            .get(str(uid), {})
-            .get("by_test", {})
-            .get(tid, {})
-            .get("last_analysis", []))
+    ana = _get(_ana_key(str(uid), tid))
+    return ana.get("data", []) if ana else []
+
+def get_last_result(uid, tid):
+    ana = _get(_ana_key(str(uid), tid))
+    return ana.get("last_result", {}) if ana else {}
 
 def get_test_stats_for_user(uid, tid):
-    """Moslik uchun — test entry qaytaradi"""
-    return get_test_entry(uid, tid)
+    return get_user_stat(uid, tid)
 
 def get_all_solvers_for_test(tid):
-    """
-    Bu test yechgan barcha userlar:
-    [{uid_str, name, attempts, all_pcts, best_score, avg_score, first_result, last_result}]
-    Creator/admin uchun.
-    """
-    daily   = _get("daily_results", {})
-    users   = get_users()
-    result  = []
-    for uid_str, data in daily.items():
-        entry = data.get("by_test", {}).get(tid)
+    users  = get_users()
+    result = []
+    with _lck:
+        keys = [k for k in _RAM if k.startswith("results_")]
+    for key in keys:
+        uid_str = key[8:]
+        res     = _get(key, {})
+        entry   = res.get(tid)
         if not entry or entry.get("attempts", 0) == 0:
             continue
         user = users.get(uid_str, {})
         result.append({
-            "uid":          uid_str,
-            "name":         user.get("name", f"User {uid_str}"),
-            "username":     user.get("username", ""),
-            "attempts":     entry["attempts"],
-            "all_pcts":     entry["all_pcts"],
-            "best_score":   entry["best_score"],
-            "avg_score":    entry["avg_score"],
-            "first_result": entry.get("first_result"),
-            "last_result":  entry.get("last_result"),
-            "last_at":      entry.get("last_at", ""),
+            "uid":        uid_str,
+            "name":       user.get("name", f"User {uid_str}"),
+            "username":   user.get("username", ""),
+            "attempts":   entry["attempts"],
+            "all_pcts":   entry["all_pcts"],
+            "best_score": entry["best_score"],
+            "avg_score":  entry["avg_score"],
+            "last_at":    entry.get("last_at", ""),
         })
     result.sort(key=lambda x: x["best_score"], reverse=True)
     return result
 
-def load_solvers_to_ram(tid, solvers_dict):
-    """TG dan yuklangan solvers ma'lumotlarini daily_results ga joylash"""
-    daily = _get("daily_results", {})
-    for uid_str, s in solvers_dict.items():
-        if uid_str not in daily:
-            daily[uid_str] = {"by_test": {}, "history": []}
-        bt = daily[uid_str]["by_test"]
-        if tid not in bt:
-            bt[tid] = {
-                "attempts":      s.get("attempts", 0),
-                "all_pcts":      s.get("all_pcts", []),
-                "best_score":    s.get("best_score", 0.0),
-                "avg_score":     s.get("avg_score", 0.0),
-                "first_result":  None,
-                "last_result":   None,
-                "last_analysis": [],
-                "accessed_link": False,
-                "last_at":       s.get("last_at", ""),
-            }
-    _set("daily_results", daily)
+def clear_expired_analysis():
+    """1 soatdan eski tahlillarni RAMdan o'chirish"""
+    now      = datetime.now(UTC)
+    deadline = now - timedelta(hours=ANALYSIS_TTL_H)
+    removed  = 0
+    with _lck:
+        keys = [
+            k for k in list(_RAM)
+            if k.startswith("analysis_")
+            and isinstance(_RAM[k], dict)
+            and _RAM[k].get("saved_at", now) < deadline
+        ]
+        for k in keys:
+            del _RAM[k]
+            removed += 1
+    if removed:
+        log.info(f"RAM: {removed} ta tahlil o'chirildi (1 soat TTL)")
+    return removed
 
+
+# ══ MOSLIK — eski daily_results formati ═══════════════════════
+
+def get_daily():
+    daily = {}
+    with _lck:
+        res_keys = [k for k in _RAM if k.startswith("results_")]
+    for key in res_keys:
+        uid_str = key[8:]
+        res     = _get(key, {})
+        by_test = {}
+        for tid, e in res.items():
+            by_test[tid] = {
+                "attempts":      e["attempts"],
+                "all_pcts":      e["all_pcts"],
+                "best_score":    e["best_score"],
+                "avg_score":     e["avg_score"],
+                "last_at":       e.get("last_at", ""),
+                "last_analysis": [],
+                "last_result":   {},
+                "first_result":  None,
+                "accessed_link": False,
+            }
+        if by_test:
+            daily[uid_str] = {"by_test": by_test, "history": []}
+    return daily
+
+def clear_daily():
+    with _lck:
+        keys = [k for k in list(_RAM)
+                if k.startswith("results_") or k.startswith("analysis_")]
+        for k in keys:
+            del _RAM[k]
+    log.info("RAM natijalar tozalandi")
+
+def load_solvers_to_ram(tid, solvers_dict):
+    for uid_str, s in solvers_dict.items():
+        res = _get(_res_key(uid_str), {})
+        if tid not in res:
+            res[tid] = {
+                "attempts":   s.get("attempts", 0),
+                "all_pcts":   s.get("all_pcts", []),
+                "best_score": s.get("best_score", 0.0),
+                "avg_score":  s.get("avg_score", 0.0),
+                "last_at":    s.get("last_at", ""),
+                "passed":     s.get("best_score", 0) >= 60,
+            }
+            _set(_res_key(uid_str), res)
 
 def load_history_to_ram(history_dict):
-    """TG users_full.json dan history ni RAMga yuklash"""
-    daily = _get("daily_results", {})
     for uid_str, by_test in history_dict.items():
-        if uid_str not in daily:
-            daily[uid_str] = {"by_test": {}, "history": []}
-        bt = daily[uid_str]["by_test"]
+        res = _get(_res_key(uid_str), {})
         for tid, entry in by_test.items():
-            if tid not in bt:
-                bt[tid] = {
-                    "attempts":      entry.get("attempts", 0),
-                    "all_pcts":      entry.get("all_pcts", []),
-                    "best_score":    entry.get("best_score", 0.0),
-                    "avg_score":     entry.get("avg_score", 0.0),
-                    "first_result":  entry.get("first_result", {}),
-                    "last_result":   entry.get("last_result", {}),
-                    "last_analysis": entry.get("last_analysis", []),
-                    "accessed_link": False,
-                    "last_at":       entry.get("last_at", ""),
+            if tid not in res:
+                res[tid] = {
+                    "attempts":   entry.get("attempts", 0),
+                    "all_pcts":   entry.get("all_pcts", []),
+                    "best_score": entry.get("best_score", 0.0),
+                    "avg_score":  entry.get("avg_score", 0.0),
+                    "last_at":    entry.get("last_at", ""),
+                    "passed":     entry.get("best_score", 0) >= 60,
                 }
-        # History ro'yxatini ham tiklash
-        h = []
-        for tid, entry in bt.items():
-            if entry.get("attempts", 0) > 0:
-                pcts = entry.get("all_pcts", [])
-                h.append({
-                    "test_id":       tid,
-                    "result_id":     f"{uid_str}_{tid}",
-                    "last_pct":      pcts[-1] if pcts else 0,
-                    "best_pct":      entry.get("best_score", 0),
-                    "attempts":      entry["attempts"],
-                    "all_pcts":      pcts,
-                    "passed":        entry.get("best_score", 0) >= 60,
-                    "accessed_link": entry.get("accessed_link", False),
-                    "completed_at":  entry.get("last_at", ""),
-                })
-        h.sort(key=lambda x: x.get("completed_at", ""), reverse=True)
-        daily[uid_str]["history"] = h[:200]
-    _set("daily_results", daily)
+        if res:
+            _set(_res_key(uid_str), res)
 
 
-def get_last_result(uid, tid):
-    return get_test_entry(uid, tid).get("last_result", {})
+# ══ MENYU ══════════════════════════════════════════════════════
+
+def set_menu_msg(uid, cid, msg_id):
+    _set(f"menu_msg_{uid}", {"cid": cid, "mid": msg_id})
+
+def pop_menu_msg(uid):
+    with _lck:
+        return _RAM.pop(f"menu_msg_{uid}", None)
 
 
 # ══ STATS ══════════════════════════════════════════════════════
 
-
-def set_menu_msg(uid, cid, msg_id):
-    """Asosiy menyu xabarini saqlash — keyingi harakatda o'chiriladi"""
-    _set(f"menu_msg_{uid}", {"cid": cid, "mid": msg_id})
-
-def pop_menu_msg(uid):
-    """Asosiy menyu xabarini olish va o'chirish"""
-    with _lck:
-        key  = f"menu_msg_{uid}"
-        data = _RAM.pop(key, None)
-    return data  # {"cid":..., "mid":...} yoki None
-
 def stats():
     metas = _get("tests_meta", [])
-    daily = get_daily()
     users = get_users()
     with _lck:
-        cq = sum(1 for k in _RAM if k.startswith("qcache_"))
-    total = (sys.getsizeof(str(metas))
-             + sys.getsizeof(str(daily))
-             + sys.getsizeof(str(users)))
+        cq  = sum(1 for k in _RAM if k.startswith("qcache_"))
+        ana = sum(1 for k in _RAM if k.startswith("analysis_"))
+        res = sum(1 for k in _RAM if k.startswith("results_"))
+    total = sys.getsizeof(str(metas)) + sys.getsizeof(str(users))
     return {
         "tests":    len(metas),
         "users":    len(users),
-        "daily_r":  sum(len(v.get("history", [])) for v in daily.values()),
+        "daily_r":  res,
         "cached_q": cq,
+        "analysis": ana,
         "mb":       round(total / 1024 / 1024, 2),
         "pct":      round(total / RAM_LIMIT * 100, 1),
+        "limit_mb": 450,
     }
 
 
-# ══ FOYDALANUVCHI MAXSUS FANLARI ═══════════════════════════════
+# ══ FAN NOMLARI ════════════════════════════════════════════════
 
 def get_user_custom_subjects(uid):
-    """Foydalanuvchi qo'lda yozgan fan nomlari"""
     return _get("user_custom_subjects", {}).get(str(uid), [])
 
 def add_user_custom_subject(uid, subject):
-    """Yangi maxsus fan nomini saqlash"""
     from config import SUBJECTS
     if subject in SUBJECTS:
-        return  # Standart fanda qo'shish shart emas
-    d = _get("user_custom_subjects", {})
+        return
+    d   = _get("user_custom_subjects", {})
     lst = d.get(str(uid), [])
     if subject not in lst:
         lst.insert(0, subject)
-        lst = lst[:10]  # Max 10 ta
+        lst = lst[:10]
     d[str(uid)] = lst
     _set("user_custom_subjects", d)
 
