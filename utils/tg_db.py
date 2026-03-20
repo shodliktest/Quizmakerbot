@@ -1,26 +1,26 @@
 """
-TG_DB — Yangi arxitektura (chunked storage)
-============================================
+TG_DB — Mukammal arxitektura
+==============================
 INDEX (pinned):
-  tests_meta: [{test_id, title, ...}]   ← barcha test meta (yengil)
-  user_chunks: [{chunk_n, msg_id, uids:[uid1,uid2,...]}]  ← 100 ta uid per chunk
+  tests_meta: [...]
+  users_list_chunks: [{n, msg_id, uids:[...], size_kb}]  ← 10MB gacha
+  user_stats_chunks: [{n, msg_id, uids:[...50]}]          ← 50 userdan
+  leaderboard_msg_id
+  group_lb_msg_id
+  tests_stats_msg_id
   backups: {date: msg_id}
-  settings_msg_id, tests_stats_msg_id
 
 FAYLLAR:
-  user_{uid}.json     ← har user uchun alohida: profil + by_test stats
-  test_{tid}.json     ← test savollari (o'zgarmagan)
-  tests_stats.json    ← test statistikasi (solve_count, avg, solvers)
-  backup_DATE.json    ← kunlik backup
-
-QOIDALAR:
-  - Har user uchun alohida fayl → 20MB muammo yo'q
-  - user_chunks index orqali qaysi chunkda ekanini bilamiz
-  - Eski user fayli yangilanishdan oldin o'chiriladi
-  - Guruh natijalari saqlanmaydi
+  users_list_N.json    ← uid+profil, 10MB gacha
+  user_stats_N.json    ← 50 user stats
+  leaderboard.json     ← global top 20
+  group_lb_DATE.json   ← guruh top 20 (kunlik)
+  tests_stats.json     ← test meta stats
+  test_XXX.json        ← test savollari (o'zgarmaydi)
+  backup_DATE.json     ← kunlik backup
 """
 import json, logging, io, asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 
 log      = logging.getLogger(__name__)
 UTC      = timezone.utc
@@ -33,7 +33,8 @@ _tests_cache: dict = {}
 _stats_dirty = False
 _users_dirty = False
 
-USER_CHUNK_SIZE = 100   # har chunkda max 100 user
+USERS_LIST_CHUNK_KB = 9000   # 9MB gacha (10MB limit bor)
+USER_STATS_CHUNK    = 50     # 50 user per stats chunk
 
 
 async def init(bot, channel_id):
@@ -55,24 +56,23 @@ async def init(bot, channel_id):
     _index = await _load_index()
     if not _index:
         log.info("ℹ️ Yangi baza yaratilmoqda...")
-        _index = {"tests_meta": [], "backups": {}, "user_chunks": []}
+        _index = {
+            "tests_meta": [], "backups": {},
+            "users_list_chunks": [], "user_stats_chunks": [],
+        }
         await _save_index()
-        log.info("✅ Yangi baza yaratildi")
         return
 
-    log.info(f"✅ Index: {len(_index.get('tests_meta', []))} meta, "
-             f"{len(_index.get('user_chunks', []))} user chunk")
+    log.info(f"✅ Index: {len(_index.get('tests_meta',[]))} test, "
+             f"{len(_index.get('users_list_chunks',[]))} user chunk, "
+             f"{len(_index.get('user_stats_chunks',[]))} stats chunk")
 
-    # 1. tests_stats yukla
     await _load_tests_stats()
-    # 2. Barcha userlarni chunkdan yukla
-    await _load_all_users()
-    # 3. Qayta yozish kerak bo'lsa
-    if _stats_dirty:
-        await save_tests_stats()
-    if _users_dirty:
-        await _flush_dirty_users()
+    await _load_users_list()
+    await _load_leaderboard()
 
+    if _stats_dirty: await save_tests_stats()
+    if _users_dirty: await _flush_users_list()
     await _preload_from_last_backup()
 
 
@@ -91,121 +91,251 @@ def is_dirty():
     return _stats_dirty or _users_dirty
 
 
-# ══ USER CHUNKS ═══════════════════════════════════════════════
+# ══ USERS LIST (profil, kichik) ════════════════════════════════
 
-def _find_user_chunk(uid_str):
-    """Userning chunk indexini topish"""
-    for i, chunk in enumerate(_index.get("user_chunks", [])):
-        if uid_str in chunk.get("uids", []):
-            return i, chunk
-    return -1, None
-
-def _get_or_create_chunk_for_user(uid_str):
-    """Mavjud bo'sh chunkni topish yoki yangi yaratish"""
-    chunks = _index.get("user_chunks", [])
-    # Mavjud chunkda joy bormi?
-    for i, chunk in enumerate(chunks):
-        if uid_str in chunk.get("uids", []):
-            return i   # allaqachon bor
-        if len(chunk.get("uids", [])) < USER_CHUNK_SIZE:
-            chunk["uids"].append(uid_str)
-            return i
-    # Yangi chunk
-    new_chunk = {"chunk_n": len(chunks) + 1, "msg_id": None, "uids": [uid_str]}
-    chunks.append(new_chunk)
-    _index["user_chunks"] = chunks
-    return len(chunks) - 1
-
-
-# ══ USERS YUKLASH ══════════════════════════════════════════════
-
-async def _load_all_users():
-    """Barcha user chunklanrini yuklab RAM ga joylash"""
+async def _load_users_list():
+    """Barcha users_list chunklanrini yuklab RAM ga"""
     global _users_dirty
     from utils import ram_cache as ram
-    chunks  = _index.get("user_chunks", [])
-    total   = 0
+    chunks = _index.get("users_list_chunks", [])
+    total  = 0
     for chunk in chunks:
         mid = chunk.get("msg_id")
-        if not mid:
-            continue
+        if not mid: continue
         data = await _download_doc(mid)
         if not data:
-            log.warning(f"⚠️ User chunk {chunk.get('chunk_n')} o'qilmadi")
             _users_dirty = True
             continue
-        users_in_chunk = data.get("users", {})
-        # Profil
-        cur = ram.get_users()
-        cur.update(users_in_chunk)
+        users = data.get("users", {})
+        cur   = ram.get_users()
+        cur.update(users)
         ram.set_users(cur)
-        # Natijalar meta (by_test)
-        by_test = data.get("by_test", {})
-        if by_test:
-            ram.load_history_to_ram(by_test)
-        total += len(users_in_chunk)
-    log.info(f"✅ Users yuklandi: {total} ta ({len(chunks)} chunk)")
+        total += len(users)
+    log.info(f"✅ Users ro'yxati: {total} ta ({len(chunks)} chunk)")
 
 
-async def save_user(uid_str, user_data, results_meta=None):
+async def _flush_users_list():
+    """O'zgargan users ni chunklab TG ga yozish"""
+    global _users_dirty
+    from utils import ram_cache as ram
+    users = ram.get_users()
+    if not users: return
+
+    # Barcha userlarni chunklarga bo'lish (9MB gacha)
+    chunks    = _index.get("users_list_chunks", [])
+    all_uids  = list(users.keys())
+
+    # Har chunk uchun uids ni bilamiz — faqat o'zgarganlari qayta yoziladi
+    # Soddaligi uchun: barcha chunklar bir marta qayta yoziladi
+    chunk_size = 500   # 500 user per chunk
+    uid_groups = [all_uids[i:i+chunk_size] for i in range(0, len(all_uids), chunk_size)]
+
+    new_chunks = []
+    for i, group in enumerate(uid_groups):
+        chunk_users = {uid: users[uid] for uid in group if uid in users}
+        ts  = datetime.now(UTC).strftime("%Y-%m-%d %H:%M")
+        old_mid = chunks[i]["msg_id"] if i < len(chunks) else None
+        if old_mid:
+            try: await _bot.delete_message(_cid, old_mid)
+            except: pass
+        try:
+            msg = await _bot.send_document(_cid,
+                document=_buf({"users": chunk_users, "count": len(chunk_users), "saved_at": ts},
+                              f"users_list_{i+1}.json"),
+                caption=f"👥 USERS_LIST_{i+1} | {len(chunk_users)} user | {ts}",
+                protect_content=False)
+            new_chunks.append({"n": i+1, "msg_id": msg.message_id,
+                                "uids": group, "count": len(chunk_users)})
+            _index[f"fid_{msg.message_id}"] = msg.document.file_id
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            log.error(f"users_list chunk {i+1}: {e}")
+            if i < len(chunks):
+                new_chunks.append(chunks[i])
+
+    _index["users_list_chunks"] = new_chunks
+    await _save_index()
+    _users_dirty = False
+    log.info(f"✅ Users list saqlandi: {len(users)} ta, {len(new_chunks)} chunk")
+
+
+# ══ USER STATS (50 tadan chunk, 1 soatda) ══════════════════════
+
+async def flush_dirty_user_stats():
     """
-    Bitta userni TG ga saqlash.
-    - Eski fayli o'chiriladi
-    - Yangi fayl yuboriladi
-    - Chunk index yangilanadi
+    Har 1 soatda: faqat o'zgargan stats chunklar yoziladi.
+    Guruh natijalari saqlanmaydi.
     """
-    if not ready():
-        return False
+    from utils import ram_cache as ram
+    dirty_stats = ram.get_dirty_user_stats()   # {uid: {tid: {...}}}
+    if not dirty_stats:
+        return
+
+    chunks = _index.get("user_stats_chunks", [])
+    # Qaysi chunklar o'zgardi
+    dirty_chunk_ids = set()
+    for uid_str in dirty_stats:
+        for i, chunk in enumerate(chunks):
+            if uid_str in chunk.get("uids", []):
+                dirty_chunk_ids.add(i)
+                break
+        else:
+            # Yangi user — oxirgi chunkga qo'shish yoki yangi chunk
+            if chunks and len(chunks[-1].get("uids", [])) < USER_STATS_CHUNK:
+                chunks[-1]["uids"].append(uid_str)
+                dirty_chunk_ids.add(len(chunks) - 1)
+            else:
+                chunks.append({"n": len(chunks)+1, "msg_id": None, "uids": [uid_str]})
+                dirty_chunk_ids.add(len(chunks) - 1)
+
+    users = ram.get_users()
+    ts    = datetime.now(UTC).strftime("%Y-%m-%d %H:%M")
+    saved = 0
+
+    for i in dirty_chunk_ids:
+        if i >= len(chunks): continue
+        chunk = chunks[i]
+        chunk_stats = {}
+        for uid_str in chunk.get("uids", []):
+            s = ram.get_user_stats_cache(uid_str)
+            if s:
+                chunk_stats[uid_str] = s
+        if not chunk_stats: continue
+
+        old_mid = chunk.get("msg_id")
+        if old_mid:
+            try: await _bot.delete_message(_cid, old_mid)
+            except: pass
+        try:
+            msg = await _bot.send_document(_cid,
+                document=_buf({"stats": chunk_stats, "saved_at": ts},
+                              f"user_stats_{i+1}.json"),
+                caption=f"📊 USER_STATS_{i+1} | {len(chunk_stats)} user | {ts}",
+                protect_content=False)
+            chunk["msg_id"] = msg.message_id
+            _index[f"fid_{msg.message_id}"] = msg.document.file_id
+            saved += 1
+            # Dirty flaglarni tozalash
+            for uid_str in chunk.get("uids", []):
+                ram.clear_stats_dirty(uid_str)
+            await asyncio.sleep(1)   # 1 daqiqa oralig'i (flood oldini olish)
+        except Exception as e:
+            log.error(f"user_stats chunk {i}: {e}")
+
+    _index["user_stats_chunks"] = chunks
+    if saved:
+        await _save_index()
+        log.info(f"✅ User stats: {saved} chunk yozildi")
+
+
+async def _load_user_stats(uid_str):
+    """Bitta user stats ni lazy load qilish"""
+    from utils import ram_cache as ram
+    # Allaqachon RAMda bormi?
+    if ram.get_user_stats_cache(uid_str) is not None:
+        return
+    # Qaysi chunkda?
+    for chunk in _index.get("user_stats_chunks", []):
+        if uid_str not in chunk.get("uids", []):
+            continue
+        mid = chunk.get("msg_id")
+        if not mid: return
+        data = await _download_doc(mid)
+        if not data: return
+        all_stats = data.get("stats", {})
+        # Butun chunkni RAMga yuklash
+        for uid, s in all_stats.items():
+            if ram.get_user_stats_cache(uid) is None:
+                ram.set_user_stats_cache(uid, s, dirty=False)
+        return
+
+
+# ══ LEADERBOARD ════════════════════════════════════════════════
+
+async def _load_leaderboard():
+    """Startup da global leaderboard yuklanadi"""
+    from utils import ram_cache as ram
+    mid = _index.get("leaderboard_msg_id")
+    if not mid: return
+    data = await _download_doc(mid)
+    if data:
+        ram.set_global_leaderboard(data.get("top20", []))
+        log.info(f"✅ Global leaderboard: {len(data.get('top20',[]))} ta")
+
+
+async def save_leaderboard():
+    """Global top 20 ni TG ga saqlash"""
+    from utils import ram_cache as ram
+    top20 = ram.update_global_leaderboard()
+    if not top20: return
     ts = datetime.now(UTC).strftime("%Y-%m-%d %H:%M")
-    chunk_idx = _get_or_create_chunk_for_user(uid_str)
-    chunk     = _index["user_chunks"][chunk_idx]
-
-    # Eski faylni o'chirish
-    old_mid = chunk.get(f"user_msg_{uid_str}")
+    old_mid = _index.get("leaderboard_msg_id")
     if old_mid:
         try: await _bot.delete_message(_cid, old_mid)
         except: pass
-
-    payload = {
-        "uid":      uid_str,
-        "user":     user_data,
-        "by_test":  results_meta or {},
-        "saved_at": ts,
-    }
     try:
-        msg = await _bot.send_document(
-            _cid,
-            document=_buf(payload, f"user_{uid_str}.json"),
-            caption=f"👤 USER | {uid_str} | {user_data.get('name','?')} | {ts}",
-            protect_content=False
-        )
-        chunk[f"user_msg_{uid_str}"] = msg.message_id
+        msg = await _bot.send_document(_cid,
+            document=_buf({"top20": top20, "saved_at": ts}, "leaderboard.json"),
+            caption=f"🏆 LEADERBOARD | top {len(top20)} | {ts}",
+            protect_content=False)
+        _index["leaderboard_msg_id"] = msg.message_id
         _index[f"fid_{msg.message_id}"] = msg.document.file_id
-        return True
+        await _save_index()
+        log.info(f"✅ Leaderboard saqlandi: {len(top20)} ta")
     except Exception as e:
-        log.error(f"save_user {uid_str}: {e}")
-        return False
+        log.error(f"save_leaderboard: {e}")
 
 
-async def _flush_dirty_users():
-    """
-    Barcha o'zgargan userlarni TG ga saqlash.
-    Har user uchun alohida fayl.
-    """
-    global _users_dirty
+async def save_group_leaderboard():
+    """Guruh top 20 ni TG ga saqlash (kunlik)"""
     from utils import ram_cache as ram
-    users   = ram.get_users()
-    saved   = 0
-    for uid_str, user_data in users.items():
-        # Natijalar meta
-        results = ram.get_all_user_stats(uid_str)
-        ok = await save_user(uid_str, user_data, results)
-        if ok:
-            saved += 1
-        await asyncio.sleep(0.05)   # Flood oldini olish
-    await _save_index()
-    _users_dirty = False
-    log.info(f"✅ Users flushed: {saved} ta")
+    if not ram.is_group_lb_dirty(): return
+    lb   = ram.get_group_leaderboard()
+    if not lb: return
+    today = str(date.today())
+    ts    = datetime.now(UTC).strftime("%Y-%m-%d %H:%M")
+
+    # Eski kunning faylini o'chirish
+    old_mid = _index.get("group_lb_msg_id")
+    old_date = _index.get("group_lb_date", "")
+    if old_mid and old_date != today:
+        try: await _bot.delete_message(_cid, old_mid)
+        except: pass
+        old_mid = None
+
+    if old_mid:
+        try: await _bot.delete_message(_cid, old_mid)
+        except: pass
+    try:
+        msg = await _bot.send_document(_cid,
+            document=_buf({"top20": lb, "date": today, "saved_at": ts},
+                          f"group_lb_{today}.json"),
+            caption=f"🏆 GROUP_LB | {today} | top {len(lb)} | {ts}",
+            protect_content=False)
+        _index["group_lb_msg_id"]  = msg.message_id
+        _index["group_lb_date"]    = today
+        _index[f"fid_{msg.message_id}"] = msg.document.file_id
+        await _save_index()
+        ram.clear_group_lb_dirty()
+        log.info(f"✅ Guruh leaderboard: {len(lb)} ta")
+    except Exception as e:
+        log.error(f"save_group_leaderboard: {e}")
+
+
+async def load_group_leaderboard():
+    """Bugungi guruh leaderboard ni yuklab RAM ga"""
+    from utils import ram_cache as ram
+    today   = str(date.today())
+    lb_date = _index.get("group_lb_date", "")
+    if lb_date != today:
+        ram.clear_group_leaderboard()
+        return
+    mid = _index.get("group_lb_msg_id")
+    if not mid: return
+    data = await _download_doc(mid)
+    if data:
+        from utils.ram_cache import _set
+        _set("group_leaderboard", data.get("top20", []))
 
 
 # ══ TESTS STATS ════════════════════════════════════════════════
@@ -213,15 +343,13 @@ async def _flush_dirty_users():
 async def _load_tests_stats():
     global _stats_dirty
     mid = _index.get("tests_stats_msg_id")
-    if not mid:
-        return
+    if not mid: return
     fid  = _index.get(f"fid_{mid}")
     data = await _read_file(fid) if fid else {}
     if not data:
         _index.pop(f"fid_{mid}", None)
         data = await _download_doc(mid)
     if not data:
-        log.warning(f"⚠️ tests_stats o'qilmadi — qayta yoziladi")
         _stats_dirty = True
         return
     from utils import ram_cache as ram
@@ -234,7 +362,7 @@ async def _load_tests_stats():
         })
         if s.get("solvers"):
             ram.load_solvers_to_ram(tid, s["solvers"])
-    log.info(f"✅ tests_stats: {len(data.get('stats', {}))} test")
+    log.info(f"✅ tests_stats: {len(data.get('stats',{}))} test")
 
 
 async def save_tests_stats():
@@ -279,27 +407,44 @@ async def save_tests_stats():
         _index[f"fid_{msg.message_id}"] = msg.document.file_id
         await _save_index()
         _stats_dirty = False
-        log.info(f"✅ tests_stats saqlandi: {len(stats)} test")
+        log.info(f"✅ tests_stats: {len(stats)} test")
         return True
     except Exception as e:
         log.error(f"save_tests_stats: {e}")
         return False
 
 
-# ══ AUTO-FLUSH ════════════════════════════════════════════════
+# ══ AUTO FLUSH LOOP ════════════════════════════════════════════
 
 async def auto_flush_loop():
-    """Har 2 daqiqada dirty bo'lsa TG ga yuboradi"""
+    """
+    Har 2 daqiqada: tests_stats
+    Har 1 soatda:   user_stats (faqat o'zgarganlar), leaderboard, guruh lb
+    """
     await asyncio.sleep(30)
+    last_hourly = datetime.now(UTC)
     while True:
         try:
-            await asyncio.sleep(120)
+            await asyncio.sleep(120)   # 2 daqiqa
+            now = datetime.now(UTC)
+
             if _stats_dirty:
                 log.info("⚡ auto_flush: tests_stats...")
                 await save_tests_stats()
+
             if _users_dirty:
-                log.info("⚡ auto_flush: users...")
-                await _flush_dirty_users()
+                log.info("⚡ auto_flush: users_list...")
+                await _flush_users_list()
+
+            # Har 1 soatda
+            if (now - last_hourly).total_seconds() >= 3600:
+                last_hourly = now
+                log.info("⏰ Soatlik flush boshlandi...")
+                await flush_dirty_user_stats()
+                await save_leaderboard()
+                await save_group_leaderboard()
+                log.info("✅ Soatlik flush tugadi")
+
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -313,14 +458,11 @@ _otp_store: dict = {}
 def generate_otp(test_id: str, uid: int = 0) -> str:
     import random, string, time
     code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
-    _otp_store[code] = {
-        "test_id": test_id, "uid": uid,
-        "expires_at": time.time() + 600, "used": False,
-    }
+    _otp_store[code] = {"test_id": test_id, "uid": uid,
+                        "expires_at": time.time() + 600, "used": False}
     now = time.time()
     for k in list(_otp_store):
-        if _otp_store[k]["expires_at"] < now:
-            del _otp_store[k]
+        if _otp_store[k]["expires_at"] < now: del _otp_store[k]
     return code
 
 def verify_otp(code: str) -> dict:
@@ -344,7 +486,6 @@ def get_otp_info(code: str) -> dict:
 # ══ WEB SYNC ══════════════════════════════════════════════════
 
 async def web_sync_loop():
-    """Har 12 soatda saytdan yangi testlarni tekshiradi"""
     await asyncio.sleep(30)
     consecutive_errors = 0
     while True:
@@ -357,8 +498,7 @@ async def web_sync_loop():
             except asyncio.TimeoutError:
                 consecutive_errors += 1
                 continue
-            if not (new_index and "tests_meta" in new_index):
-                continue
+            if not (new_index and "tests_meta" in new_index): continue
             consecutive_errors = 0
             ram_ids = {t.get("test_id") for t in ram.get_all_tests_meta()}
             added   = 0
@@ -379,7 +519,7 @@ async def web_sync_loop():
             break
         except Exception as e:
             consecutive_errors += 1
-            log.error(f"web_sync_loop xato ({consecutive_errors}): {e}")
+            log.error(f"web_sync_loop: {e}")
             if consecutive_errors >= 5:
                 await asyncio.sleep(900)
                 consecutive_errors = 0
@@ -506,7 +646,7 @@ async def get_test_full(tid):
         if data and data.get("questions"):
             _tests_cache[tid] = data
             ram.cache_questions(tid, data)
-            log.info(f"✅ {tid} fid dan yuklandi ({len(data['questions'])} savol)")
+            log.info(f"✅ {tid} yuklandi ({len(data['questions'])} savol)")
             return data
         else:
             _index.pop(f"fid_{msg_id}", None)
@@ -523,17 +663,15 @@ async def get_test_full(tid):
                         ram.add_test_meta(clean)
                         break
         if not msg_id:
-            log.info(f"ℹ️ {tid} msg_id yo'q (web test sync kutilmoqda)")
+            log.info(f"ℹ️ {tid} msg_id yo'q")
             return {}
-    log.info(f"⬇️ Lazy load: {tid} (msg={msg_id})")
+    log.info(f"⬇️ Lazy load: {tid}")
     data = await _download_doc(msg_id)
     if data and data.get("questions"):
         _tests_cache[tid] = data
         ram.cache_questions(tid, data)
-        log.info(f"✅ {tid} yuklandi ({len(data['questions'])} savol)")
         return data
     if not data:
-        log.warning(f"⚠️ {tid} TGdan yuklanmadi")
         for m in _index.get("tests_meta", []):
             if m.get("test_id") == tid:
                 m["is_active"] = False
@@ -607,7 +745,7 @@ async def save_users(users):
     return True
 
 async def save_users_full():
-    await _flush_dirty_users()
+    await _flush_users_list()
     return True
 
 
@@ -677,11 +815,8 @@ def get_backup_dates():
 # ══ PRELOAD ════════════════════════════════════════════════════
 
 async def _preload_from_last_backup():
-    metas   = _index.get("tests_meta", [])
-    missing = [m.get("test_id") for m in metas if not _index.get(f"test_{m.get('test_id')}")]
-    if missing:
-        log.info(f"ℹ️ {len(missing)} test lazy load bo'ladi")
-    log.info(f"✅ Preload: {len(metas)} test meta")
+    metas = _index.get("tests_meta", [])
+    log.info(f"✅ Preload: {len(metas)} test meta (savollar lazy)")
 
 
 # ══ MANUAL FLUSH ══════════════════════════════════════════════
@@ -692,27 +827,32 @@ async def manual_flush(daily_data, users, settings=None):
         return ["❌ TG kanal ulanmagan"]
     ok = await save_tests_stats()
     results.append(f"{'✅' if ok else '❌'} Tests stats")
-    await _flush_dirty_users()
+    await _flush_users_list()
     results.append(f"✅ Users: {len(users)} ta")
+    await flush_dirty_user_stats()
+    results.append("✅ User stats")
+    await save_leaderboard()
+    results.append("✅ Leaderboard")
     if settings:
         ok = await save_settings(settings)
         results.append(f"{'✅' if ok else '❌'} Settings")
     if daily_data:
-        from datetime import date
-        today = str(date.today())
+        from datetime import date as _date
+        today = str(_date.today())
         mid   = await upload_backup(daily_data, f"{today}_manual")
         results.append(f"{'✅' if mid else '❌'} Backup: {len(daily_data)} user")
     return results
 
 def get_index_info():
     return {
-        "tests_count":  len(_index.get("tests_meta", [])),
-        "cached_tests": len(_tests_cache),
-        "user_chunks":  len(_index.get("user_chunks", [])),
-        "backups":      len(_index.get("backups", {})),
-        "can_pin":      _can_pin,
-        "stats_dirty":  _stats_dirty,
-        "users_dirty":  _users_dirty,
+        "tests_count":       len(_index.get("tests_meta", [])),
+        "cached_tests":      len(_tests_cache),
+        "user_list_chunks":  len(_index.get("users_list_chunks", [])),
+        "user_stats_chunks": len(_index.get("user_stats_chunks", [])),
+        "backups":           len(_index.get("backups", {})),
+        "can_pin":           _can_pin,
+        "stats_dirty":       _stats_dirty,
+        "users_dirty":       _users_dirty,
     }
 
 
@@ -726,10 +866,10 @@ async def _download_doc(msg_id):
         if data: return data
         _index.pop(fid_key, None)
     try:
-        copied    = await _bot.copy_message(_cid, _cid, int(msg_id), protect_content=False)
+        copied     = await _bot.copy_message(_cid, _cid, int(msg_id), protect_content=False)
         copied_mid = copied.message_id
-        fwd2      = await _bot.forward_message(_cid, _cid, copied_mid)
-        doc2      = getattr(fwd2, "document", None)
+        fwd2       = await _bot.forward_message(_cid, _cid, copied_mid)
+        doc2       = getattr(fwd2, "document", None)
         try: await _bot.delete_message(_cid, copied_mid)
         except: pass
         try: await _bot.delete_message(_cid, fwd2.message_id)
