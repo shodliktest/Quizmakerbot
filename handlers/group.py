@@ -838,8 +838,6 @@ async def _show_group_leaderboard(
     caption_txt = _trim_caption(caption_txt, limit=1024)
 
     # ── Qayta boshlash + Ulashish tugmalari ──
-    from aiogram.utils.keyboard import InlineKeyboardBuilder
-    from aiogram.types import InlineKeyboardButton
     btn_kb = InlineKeyboardBuilder()
     if mode == "poll":
         btn_kb.row(InlineKeyboardButton(
@@ -855,6 +853,16 @@ async def _show_group_leaderboard(
         text="📤 Ulashish",
         switch_inline_query=f"test_{tid}"
     ))
+
+    # ── Guruh natijalarini RAMdan o'chirish (faqat meta qoladi) ──
+    from utils import ram_cache as ram
+    for uid_str in list(answers.keys()):
+        try:
+            from utils.ram_cache import _ana_key
+            with ram._lck:
+                ram._RAM.pop(_ana_key(uid_str, tid), None)
+        except Exception:
+            pass
 
     # ── Rasm + caption + tugmalar ──
     try:
