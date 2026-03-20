@@ -12,7 +12,6 @@ class ClearMenuMiddleware(BaseMiddleware):
             uid = event.from_user.id if event.from_user else None
             bot = event.bot
         elif isinstance(event, CallbackQuery):
-            # main_menu o'zi — o'chirmasin (u o'zi delete qiladi)
             if event.data == "main_menu":
                 return await handler(event, data)
             uid = event.from_user.id if event.from_user else None
@@ -26,6 +25,28 @@ class ClearMenuMiddleware(BaseMiddleware):
                 except Exception:
                     pass
 
+        return await handler(event, data)
+
+
+class AdminProtectMiddleware(BaseMiddleware):
+    """Admin bo'lsa protect_content=False qo'llaniladi"""
+    async def __call__(self, handler, event, data):
+        if isinstance(event, (Message, CallbackQuery)):
+            uid = event.from_user.id if event.from_user else None
+            if uid and uid in ADMIN_IDS:
+                # Admin uchun bot instansi protect_content=False bo'lsin
+                from aiogram import Bot as _Bot
+                from aiogram.client.default import DefaultBotProperties
+                from aiogram.enums import ParseMode
+                admin_bot = _Bot(
+                    token=event.bot.token,
+                    default=DefaultBotProperties(
+                        parse_mode=ParseMode.HTML,
+                        protect_content=False
+                    )
+                )
+                data["bot"] = admin_bot
+                event.__dict__["_bot"] = admin_bot
         return await handler(event, data)
 
 """🤖 BOT — Asosiy ishga tushirish"""
@@ -64,6 +85,8 @@ async def main():
     dp  = Dispatcher(storage=MemoryStorage())
     dp.message.middleware(ClearMenuMiddleware())
     dp.callback_query.middleware(ClearMenuMiddleware())
+    dp.message.middleware(AdminProtectMiddleware())
+    dp.callback_query.middleware(AdminProtectMiddleware())
 
     dp.include_router(r_inline)
     dp.include_router(r_poll_router)
@@ -288,6 +311,8 @@ async def _main_no_signals():
     dp  = Dispatcher(storage=MemoryStorage())
     dp.message.middleware(ClearMenuMiddleware())
     dp.callback_query.middleware(ClearMenuMiddleware())
+    dp.message.middleware(AdminProtectMiddleware())
+    dp.callback_query.middleware(AdminProtectMiddleware())
 
     dp.include_router(r_inline)
     dp.include_router(r_poll_router)
