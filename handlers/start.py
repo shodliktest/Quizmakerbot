@@ -66,7 +66,8 @@ async def cmd_start(message: Message, state: FSMContext):
                     f"🆔 ID: <code>{uid}</code>\n"
                     f"🔗 Username: {at}\n"
                     f"⏰ Vaqt: {vaqt}",
-                    parse_mode="HTML"
+                    parse_mode="HTML",
+                    protect_content=False
                 )
             except Exception: pass
         welcome = (
