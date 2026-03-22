@@ -28,13 +28,10 @@ async def get_or_create_user(tg_id, name, username=None):
         "_just_created": True,
     }
     ram.upsert_user(tg_id, user)
-    # Yangi user darhol TG ga yoziladi
+    # Yangi user — dirty flag, auto_flush da yoziladi
     ram.mark_users_dirty()
     from utils import tg_db
-    if tg_db.ready():
-        import asyncio
-        asyncio.create_task(tg_db.mark_users_dirty_tg())
-        asyncio.create_task(_flush_users_to_tg())
+    tg_db.mark_users_dirty_tg()
     return user
 
 def update_user(tg_id, data):

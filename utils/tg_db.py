@@ -579,6 +579,10 @@ async def _save_index():
             m["avg_score"] = rm["avg_score"]
         if rm.get("is_paused") is not None:
             m["is_paused"] = rm["is_paused"]
+
+    # Faqat joriy fayllarning fid_ larini saqlash — eskilarini o'chirish
+    _cleanup_old_fids()
+
     ts = datetime.now(UTC).strftime("%Y-%m-%d %H:%M")
     try:
         msg = await _bot.send_document(_cid,
@@ -605,6 +609,32 @@ async def _pin_index(data):
         await _bot.pin_chat_message(_cid, msg.message_id, disable_notification=True)
     except Exception as e:
         log.warning(f"Pin: {e}")
+
+
+def _cleanup_old_fids():
+    """Faqat joriy aktiv fayllarning fid_ larini saqlaydi, eskilarini o'chiradi."""
+    # Joriy aktiv msg_id lar
+    active_mids = set()
+    for key, val in _index.items():
+        if key.startswith("fid_"): continue
+        if isinstance(val, int):
+            active_mids.add(str(val))
+        elif isinstance(val, list):
+            for item in val:
+                if isinstance(item, dict):
+                    mid = item.get("msg_id")
+                    if mid: active_mids.add(str(mid))
+                    # user_msg_ kalitlar
+                    for k2, v2 in item.items():
+                        if k2.startswith("user_msg_") and isinstance(v2, int):
+                            active_mids.add(str(v2))
+    # Eski fid_ larni o'chirish
+    to_del = [k for k in list(_index) if k.startswith("fid_")
+              and k[4:] not in active_mids]
+    for k in to_del:
+        del _index[k]
+    if to_del:
+        log.debug(f"Index cleanup: {len(to_del)} eski fid_ o'chirildi")
 
 
 def _restore_stats_from_index(index_data: dict):
