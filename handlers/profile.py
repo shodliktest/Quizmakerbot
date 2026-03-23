@@ -527,9 +527,16 @@ async def set_poll_time_cb(callback: CallbackQuery):
     from utils import tg_db
     update_test_meta(tid, {"poll_time": new_sec})
     tg_db.mark_stats_dirty()
-    # Index ga ham yozish (TG da doim saqlash)
+    # Index + test_XXX.json ham yangilanadi
     import asyncio
-    asyncio.create_task(tg_db.update_test_meta_tg(tid, {"poll_time": new_sec}))
+    async def _save_poll_time():
+        await tg_db.update_test_meta_tg(tid, {"poll_time": new_sec})
+        # test_XXX.json ni ham qayta yozish
+        test = await tg_db.get_test_full(tid)
+        if test:
+            test["poll_time"] = new_sec
+            await tg_db.save_test_full(test)
+    asyncio.create_task(_save_poll_time())
     meta = get_test_meta(tid) or {}
     b    = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="⚙️ Sozlamalar", callback_data=f"mytest_settings_{tid}"))
