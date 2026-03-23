@@ -59,7 +59,8 @@ async def main():
     from handlers.leaderboard  import router as r_lb
     from handlers.admin        import router as r_admin
     from handlers.roles_admin  import router as r_roles
-    from handlers.referral     import router as r_referral
+    from handlers.referral        import router as r_referral
+    from handlers.group_scheduler import router as r_scheduler
 
     bot = Bot(token=BOT_TOKEN,
               default=DefaultBotProperties(parse_mode=ParseMode.HTML, protect_content=True))
@@ -80,6 +81,7 @@ async def main():
     dp.include_router(r_admin)
     dp.include_router(r_roles)
     dp.include_router(r_referral)
+    dp.include_router(r_scheduler)
     dp.include_router(webauth.router)
     # TG DB boshlash
     if STORAGE_CHANNEL_ID:
@@ -306,6 +308,7 @@ async def _main_no_signals():
     dp.include_router(r_admin)
     dp.include_router(r_roles)
     dp.include_router(r_referral)
+    dp.include_router(r_scheduler)
     dp.include_router(webauth.router)
 
     if STORAGE_CHANNEL_ID:
