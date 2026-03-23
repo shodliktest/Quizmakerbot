@@ -287,7 +287,8 @@ async def _main_no_signals():
     from handlers.leaderboard import router as r_lb
     from handlers.admin       import router as r_admin
     from handlers.roles_admin import router as r_roles
-    from handlers.referral    import router as r_referral
+    from handlers.referral        import router as r_referral
+    from handlers.group_scheduler import router as r_scheduler
 
     bot = Bot(token=BOT_TOKEN,
               default=DefaultBotProperties(parse_mode=ParseMode.HTML, protect_content=True))
