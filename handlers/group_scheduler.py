@@ -98,16 +98,20 @@ async def cmd_set_tests(message: Message):
         await _show_tests_list(message, chat_id)
 
 
-@router.message(F.text & F.chat.type.in_({"group", "supergroup"}))
+def _is_waiting_input(message: Message) -> bool:
+    """Faqat waiting_input holati uchun filter."""
+    sched = _schedules.get(message.chat.id, {})
+    return sched.get("waiting_input") == message.from_user.id
+
+
+@router.message(
+    F.text
+    & F.chat.type.in_({"group", "supergroup"})
+    & _is_waiting_input
+)
 async def handle_test_ids_input(message: Message):
     """Faqat '➕ Test qo'shish' bosilgandan keyin kod qabul qilish."""
     chat_id = message.chat.id
-    uid     = message.from_user.id
-    sched   = _schedules.get(chat_id, {})
-
-    # Faqat waiting_input holatida va faqat shu admin uchun
-    if sched.get("waiting_input") != uid:
-        return
 
     tids = _extract_test_ids(message.text or "")
     if not tids:

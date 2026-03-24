@@ -996,30 +996,54 @@ async def go_tests_cb(callback: CallbackQuery):
 
 def _test_to_txt(test):
     import re
-    lines = [
-        f"# {test.get('title','Test')}",
-        f"# Fan: {test.get('category','')}",
-        f"# Kod: {test.get('test_id','')}",""
-    ]
-    for i, q in enumerate(test.get("questions",[]),1):
-        t    = q.get("type","multiple_choice")
-        lines.append(f"TYPE: {t}")
-        lines.append(f"{i}. {q.get('question',q.get('text',''))}")
-        corr = q.get("correct","")
-        if t in ("multiple_choice","multi_select"):
-            for opt in q.get("options",[]):
-                opt_s = str(opt)
-                m1 = re.match(r"^([A-Za-z])",opt_s.strip())
-                m2 = re.match(r"^([A-Za-z])",str(corr).strip())
-                is_c = (m1 and m2 and m1.group(1).lower()==m2.group(1).lower()
-                        ) if m1 and m2 else opt_s.strip()==str(corr).strip()
-                lines.append(f"{'===' if is_c else ''}{opt_s}")
-        elif t == "true_false":
-            lines.append(f"Javob: {'Ha' if 'Ha' in str(corr) else 'Yoq'}")
+    labels = ["A", "B", "C", "D", "E", "F"]
+    lines  = []
+    for i, q in enumerate(test.get("questions", []), 1):
+        qtype = q.get("type", "multiple_choice")
+        qtext = q.get("question", q.get("text", "")).strip()
+        corr  = q.get("correct", "")
+        opts  = q.get("options", [])
+
+        lines.append(f"{i}. {qtext}")
+
+        if qtype == "true_false":
+            ans = "Ha" if str(corr).lower() in ("ha", "true", "1", "yes") else "Yo'q"
+            lines.append(f"*Javob: {ans}")
+
+        elif qtype in ("multiple_choice", "multi_select"):
+            # To'g'ri javob indeksini aniqlash
+            correct_idx = None
+            if isinstance(corr, int):
+                correct_idx = corr
+            elif isinstance(corr, str):
+                # "A", "B" harfi bo'lsa
+                m = re.match(r'^([A-Za-z])', corr.strip())
+                if m:
+                    correct_idx = ord(m.group(1).upper()) - ord('A')
+                else:
+                    # Matn bo'lsa — mos variantni qidirish
+                    for j, opt in enumerate(opts):
+                        opt_clean = re.sub(r'^[A-Za-z]\)', '', str(opt)).strip()
+                        if opt_clean == corr.strip() or str(opt).strip() == corr.strip():
+                            correct_idx = j
+                            break
+
+            for j, opt in enumerate(opts[:6]):
+                # Variant matni — "A) " prefiksini olib tashlash
+                opt_s = re.sub(r'^[A-Za-z]\)\s*', '', str(opt)).strip()
+                label = labels[j] if j < len(labels) else str(j+1)
+                is_correct = (j == correct_idx)
+                prefix = "*" if is_correct else ""
+                lines.append(f"{prefix}{label}) {opt_s}")
+
         else:
-            lines.append(f"Javob: {corr}")
-        expl = q.get("explanation","")
-        if expl and expl not in ("Izoh kiritilmagan.","Izoh yo'q",""):
+            # To'ldirish / matnli javob
+            lines.append(f"*Javob: {corr}")
+
+        expl = q.get("explanation", "")
+        if expl and expl not in ("Izoh kiritilmagan.", "Izoh yo'q", ""):
             lines.append(f"Izoh: {expl}")
-        lines.append("")
-    return "\n".join(lines)
+
+        lines.append("")  # Bo'sh qator savollar orasida
+
+    return "\n".join(lines).strip()
