@@ -75,6 +75,7 @@ def _ref_kb(link: str) -> object:
     share_url  = f"https://t.me/share/url?url={link}&text={share_text}"
     b.row(InlineKeyboardButton(text="📤 Do'stlarga ulashish", url=share_url))
     b.row(InlineKeyboardButton(text="🔄 Yangilash", callback_data="ref_refresh"))
+    b.row(InlineKeyboardButton(text="🏠 Asosiy sahifa", callback_data="main_menu"))
     return b.as_markup()
 
 

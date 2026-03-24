@@ -11,7 +11,7 @@ from aiogram.exceptions import TelegramBadRequest
 from utils.db import (get_user, get_my_tests, get_user_results,
                       get_analysis, get_test_full, get_test_stats_for_user,
                       pause_test, get_test_solvers)
-from utils.states import AllowedUsersState
+from utils.states import AllowedUsersState, EditTestTitle
 from utils.ram_cache import get_test_by_id, get_test_meta
 from keyboards.keyboards import main_kb, analysis_kb, mytest_settings_kb, CAT_ICONS, get_cat_icon
 
@@ -449,6 +449,55 @@ async def _show_test_settings(msg, meta, tid, edit=False):
         else:    await msg.answer(text, reply_markup=kb)
     except TelegramBadRequest:
         await msg.answer(text, reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("edit_title_"))
+async def edit_title_cb(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    tid = callback.data[11:]
+    uid = callback.from_user.id
+    from config import ADMIN_IDS
+    meta = get_test_meta(tid)
+    if not meta:
+        return await callback.answer("❌ Test topilmadi.", show_alert=True)
+    if uid != meta.get("creator_id") and uid not in ADMIN_IDS:
+        return await callback.answer("⚠️ Ruxsat yo'q!", show_alert=True)
+    await state.set_state(EditTestTitle.waiting_title)
+    await state.update_data(edit_title_tid=tid)
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="❌ Bekor", callback_data=f"mytest_settings_{tid}"))
+    await callback.message.edit_text(
+        f"✏️ <b>Yangi nom kiriting</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"Hozirgi nom: <b>{meta.get('title','?')}</b>\n\n"
+        f"Yangi nomni yozing:",
+        reply_markup=b.as_markup()
+    )
+
+
+@router.message(EditTestTitle.waiting_title)
+async def edit_title_input(message: Message, state: FSMContext):
+    new_title = message.text.strip() if message.text else ""
+    if not new_title or len(new_title) > 100:
+        return await message.answer("❌ Nom 1-100 belgi bo'lishi kerak.")
+    d   = await state.get_data()
+    tid = d.get("edit_title_tid", "")
+    await state.clear()
+    if not tid:
+        return await message.answer("❌ Test topilmadi.")
+    from utils.ram_cache import update_test_meta, get_test_meta
+    from utils import tg_db
+    update_test_meta(tid, {"title": new_title})
+    await tg_db.update_test_meta_tg(tid, {"title": new_title})
+    meta = get_test_meta(tid) or {}
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="⚙️ Sozlamalar", callback_data=f"mytest_settings_{tid}"))
+    await message.answer(
+        f"✅ <b>Test nomi o'zgartirildi!</b>\n\n"
+        f"📝 Yangi nom: <b>{new_title}</b>\n"
+        f"🆔 <code>{tid}</code>",
+        reply_markup=b.as_markup()
+    )
 
 
 @router.callback_query(F.data.startswith("edit_att_"))
