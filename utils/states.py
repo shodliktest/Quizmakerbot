@@ -33,3 +33,6 @@ class ContactAdmin(StatesGroup):
 
 class AllowedUsersState(StatesGroup):
     waiting_ids = State()
+
+class EditTestTitle(StatesGroup):
+    waiting_title = State()
