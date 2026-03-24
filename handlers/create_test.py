@@ -729,7 +729,11 @@ async def save_test(callback: CallbackQuery, state: FSMContext):
         "max_attempts":  d.get("max_attempts", 0),
         "questions":     d.get("questions", []),
     }
-    tid  = await create_test(callback.from_user.id, td)
+    tid  = await create_test(
+        callback.from_user.id, td,
+        creator_name=callback.from_user.full_name or "",
+        creator_username=callback.from_user.username or "",
+    )
     bu   = (await callback.bot.me()).username
     link = f"https://t.me/{bu}?start={tid}"
     pt_t = f"{td['poll_time']}s/savol" if td.get("poll_time") else "Vaqtsiz"

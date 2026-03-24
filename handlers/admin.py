@@ -200,6 +200,47 @@ async def adm_back_cats(callback: CallbackQuery):
     await callback.answer()
     await _show_admin_test_cats(callback.message, edit=True)
 
+
+@router.callback_query(F.data.startswith("adm_deleted_"))
+async def adm_deleted_tests(callback: CallbackQuery):
+    """O'chirilgan testlar ro'yxati."""
+    await callback.answer()
+    if not is_admin(callback.from_user.id): return
+    page  = int(callback.data.split("_")[-1])
+    tests = [t for t in ram.get_all_tests_meta() if not t.get("is_active", True)]
+    PG    = 8
+    total = max(1, (len(tests)+PG-1)//PG)
+    page  = max(0, min(page, total-1))
+    chunk = tests[page*PG:(page+1)*PG]
+
+    text  = (
+        f"🗑 <b>O'CHIRILGAN TESTLAR</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"<i>{len(tests)} ta | Sahifa {page+1}/{total}</i>\n\n"
+    )
+    b = InlineKeyboardBuilder()
+    for t in chunk:
+        tid     = t.get("test_id","")
+        title_t = t.get("title","?")[:18]
+        sc      = t.get("solve_count", 0)
+        c_name  = t.get("creator_name", "")[:12]
+        created = str(t.get("created_at",""))[:10]
+        text += f"🗑 <b>{title_t}</b> <code>[{tid}]</code>\n"
+        text += f"   👤{c_name} | 📅{created} | 👥{sc}\n\n"
+        b.row(InlineKeyboardButton(
+            text=f"🗑 {title_t[:20]} [{tid}]",
+            callback_data=f"adm_test_{tid}"
+        ))
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"adm_deleted_{page-1}"))
+    if page < total-1:
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"adm_deleted_{page+1}"))
+    if nav: b.row(*nav)
+    b.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data="adm_back_to_cats"))
+    try: await callback.message.edit_text(text, reply_markup=b.as_markup())
+    except TelegramBadRequest: await callback.message.answer(text, reply_markup=b.as_markup())
+
 async def _show_admin_test_cats(msg, edit=False):
     tests = ram.get_all_tests_meta()
     cats  = {}
@@ -253,10 +294,14 @@ async def adm_cat_tests(callback: CallbackQuery):
     page  = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
     await _show_adm_cat_tests(callback.message, cat, page, edit=True)
 
-async def _show_adm_cat_tests(msg, cat_name, page=0, edit=False):
+async def _show_adm_cat_tests(msg, cat_name, page=0, edit=False, show_deleted=False):
     tests = ram.get_all_tests_meta()
     if cat_name != "ALL":
         tests = [t for t in tests if t.get("category") == cat_name]
+    # O'chirilganlarni yashirish (maxsus ko'rsatilmasa)
+    if not show_deleted:
+        tests = [t for t in tests if t.get("is_active", True)]
+    deleted_count = sum(1 for t in ram.get_all_tests_meta() if not t.get("is_active", True))
     PG    = 8
     total = (len(tests)+PG-1)//PG
     page  = max(0, min(page, total-1))
@@ -268,19 +313,23 @@ async def _show_adm_cat_tests(msg, cat_name, page=0, edit=False):
     text = (
         f"<b>{title}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"<i>{len(tests)} ta | Sahifa {page+1}/{total}</i>\n\n"
+        f"<i>{len(tests)} ta aktiv | 🗑 {deleted_count} ta o'chirilgan | Sahifa {page+1}/{max(1,total)}</i>\n\n"
     )
     b = InlineKeyboardBuilder()
     for t in chunk:
-        tid   = t.get("test_id","")
+        tid     = t.get("test_id","")
         title_t = t.get("title","?")[:18]
         active  = t.get("is_active", True)
         paused  = t.get("is_paused", False)
-        sc    = t.get("solve_count", 0)
-        vis   = vis_m.get(t.get("visibility",""), "")
-        diff  = diff_m.get(t.get("difficulty",""), "")
-        icon  = "🗑" if not active else ("⏸" if paused else "✅")
-        text += f"{icon}{vis}{diff} <b>{title_t}</b> <code>[{tid}]</code> | 👥{sc}\n"
+        sc      = t.get("solve_count", 0)
+        vis     = vis_m.get(t.get("visibility",""), "")
+        diff    = diff_m.get(t.get("difficulty",""), "")
+        c_name  = t.get("creator_name", "")[:12]
+        icon    = "🗑" if not active else ("⏸" if paused else "✅")
+        text += f"{icon}{vis}{diff} <b>{title_t}</b> <code>[{tid}]</code> | 👥{sc}"
+        if c_name:
+            text += f" | 👤{c_name}"
+        text += "\n"
         b.row(InlineKeyboardButton(
             text=f"{icon} {title_t[:20]} [{tid}]",
             callback_data=f"adm_test_{tid}"
@@ -292,6 +341,11 @@ async def _show_adm_cat_tests(msg, cat_name, page=0, edit=False):
     if page < total-1:
         nav.append(InlineKeyboardButton(text="▶️", callback_data=f"adm_cat_{cat_name}_{page+1}"))
     if nav: b.row(*nav)
+    if deleted_count > 0:
+        b.row(InlineKeyboardButton(
+            text=f"🗑 O'chirilganlar ({deleted_count})",
+            callback_data=f"adm_deleted_0"
+        ))
     b.row(InlineKeyboardButton(text="⬅️ Fanlar", callback_data="adm_back_to_cats"))
     try:
         if edit: await msg.edit_text(text, reply_markup=b.as_markup())
@@ -317,6 +371,14 @@ async def adm_test_detail(callback: CallbackQuery):
     vis_m  = {"public":"🌍 Ommaviy","link":"🔗 Ssilka","private":"🔒 Shaxsiy"}
     diff_m = {"easy":"🟢","medium":"🟡","hard":"🔴","expert":"⚡"}
 
+    c_id   = meta.get("creator_id", "?")
+    c_name = meta.get("creator_name", "")
+    c_user = meta.get("creator_username", "")
+    c_str  = c_name if c_name else f"ID: {c_id}"
+    if c_user:
+        c_str += f" (@{c_user})"
+    created = str(meta.get("created_at", ""))[:10] or "—"
+
     text = (
         f"🔍 <b>TEST BATAFSIL</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -330,7 +392,9 @@ async def adm_test_detail(callback: CallbackQuery):
         f"📋 {meta.get('question_count',0)} savol\n"
         f"👥 {meta.get('solve_count',0)} yechgan\n"
         f"⭐ {round(meta.get('avg_score',0),1)}%\n"
-        f"👤 Creator: <code>{meta.get('creator_id','?')}</code>"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👤 Yaratuvchi: <b>{c_str}</b>\n"
+        f"📅 Yaratilgan: <b>{created}</b>"
     )
     b = InlineKeyboardBuilder()
     if active:
