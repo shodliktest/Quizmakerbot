@@ -222,7 +222,7 @@ async def cmd_start_set(message: Message):
 
 # ══ /stop_set ════════════════════════════════════════════════
 
-@router.message(Command("stop_set"))
+@router.message(Command("stop_set", ignore_mention=True))
 async def cmd_stop_set(message: Message):
     chat_id = message.chat.id
     uid     = message.from_user.id
@@ -236,22 +236,45 @@ async def cmd_stop_set(message: Message):
     if not sched:
         return await message.answer("ℹ️ Faol jarayon yo'q.")
 
-    was_active = sched.get("active", False)
-    done       = list(sched.get("done", []))
-    tests      = list(sched.get("tests", []))
+    was_active  = sched.get("active", False)
+    done        = list(sched.get("done", []))
+    tests       = list(sched.get("tests", []))
+    current_tid = sched.get("current_tid")
 
     await _kill_schedule(chat_id)
     _schedules.pop(chat_id, None)
 
-    if was_active:
-        await message.answer(
-            f"⏹ <b>TO'XTATILDI</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"✅ O'tkazildi: <b>{len(done)} / {len(tests)} ta</b>\n\n"
-            f"Qayta boshlash: <code>/start_set</code>"
-        )
-    else:
-        await message.answer("✅ Ro'yxat o'chirildi.")
+    if not was_active:
+        return await message.answer("✅ Ro'yxat o'chirildi.")
+
+    # Natija matni
+    lines = [
+        "⏹ <b>TO'XTATILDI</b>",
+        "━━━━━━━━━━━━━━━━━━━━━━━━",
+        f"✅ O'tkazildi: <b>{len(done)} / {len(tests)} ta</b>",
+    ]
+
+    if current_tid:
+        cur_meta = get_test_meta(current_tid) or {}
+        lines.append(f"⚠️ To'xtatilgan test: <b>{cur_meta.get('title', current_tid)}</b>")
+
+    # Fan bo'yicha statistika
+    if done:
+        cat_counts = {}
+        for tid in done:
+            meta = get_test_meta(tid) or {}
+            cat  = meta.get("category") or meta.get("subject") or "Boshqa"
+            cat_counts[cat] = cat_counts.get(cat, 0) + 1
+
+        lines.append("")
+        lines.append("📊 <b>Fan bo'yicha natija:</b>")
+        for cat, cnt in sorted(cat_counts.items(), key=lambda x: -x[1]):
+            lines.append(f"  • {cat}: <b>{cnt} ta</b>")
+
+    lines.append("")
+    lines.append("Qayta boshlash: <code>/start_set</code>")
+
+    await message.answer("\n".join(lines), parse_mode="HTML")
 
 
 async def _kill_schedule(chat_id):
@@ -483,6 +506,19 @@ async def _scheduler_loop(bot, chat_id):
         import traceback; traceback.print_exc()
 
 
+def _timer_text(remaining: int) -> str:
+    """Timer xabari matni — progress bar bilan."""
+    total  = VOTE_SECONDS
+    filled = round((total - remaining) / total * 10)
+    bar    = "▓" * filled + "░" * (10 - filled)
+    if remaining <= 5:
+        return f"⏱ <b>{remaining}s</b> qoldi [{bar}] 🔴"
+    elif remaining <= 15:
+        return f"⏱ <b>{remaining}s</b> qoldi [{bar}] 🟡"
+    else:
+        return f"⏱ <b>{remaining}s</b> qoldi [{bar}] 🟢"
+
+
 def _vote_option(tid: str) -> str:
     """Ovoz uchun variant matni — fan emojisi + test nomi."""
     from keyboards.keyboards import get_cat_icon
@@ -527,6 +563,7 @@ async def _run_vote(bot, chat_id, tests, done):
             options=options,
             is_anonymous=False,
             allows_multiple_answers=False,
+            open_period=VOTE_SECONDS,
             protect_content=True,
         )
         sched["vote_msg_id"]  = vote_msg.message_id
@@ -534,33 +571,22 @@ async def _run_vote(bot, chat_id, tests, done):
         sched["vote_tids"]    = vote_tids
     except Exception as e:
         log.error(f"Ovoz ochishda xato: {e}")
-        # Fallback — random
         not_done = [t for t in tests if t not in done]
         return random.choice(not_done) if not_done else random.choice(tests)
 
-    # Kutish
-    for _ in range(VOTE_SECONDS):
-        await asyncio.sleep(1)
-        sched = _schedules.get(chat_id)
-        if not sched or not sched.get("active"):
-            # Ovozni yopish
-            try: await bot.stop_poll(chat_id, vote_msg.message_id)
-            except: pass
-            try: await bot.delete_message(chat_id, vote_msg.message_id)
-            except: pass
-            return None
+    # Vaqt tugashini kutish — poll o'zi yopiladi (open_period)
+    await asyncio.sleep(VOTE_SECONDS + 1)
 
-    # Natija
+    sched = _schedules.get(chat_id)
+    if not sched or not sched.get("active"):
+        return None
+
+    # Natija — poll O'CHIRILMAYDI, qoladi
     try:
         result    = await bot.stop_poll(chat_id, vote_msg.message_id)
         max_votes = max((o.voter_count for o in result.options), default=0)
 
-        # Ovoz xabarini o'chirish
-        try: await bot.delete_message(chat_id, vote_msg.message_id)
-        except: pass
-
         if max_votes == 0:
-            # Hech kim ovoz bermadi → random (avval o'tkazilmaganlardan)
             not_done = [t for t in tests if t not in done]
             pool     = not_done if not_done else tests
             chosen   = random.choice(pool)
