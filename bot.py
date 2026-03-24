@@ -1,8 +1,10 @@
 
 from aiogram import BaseMiddleware
 from aiogram.types import Message, CallbackQuery
+from aiogram.exceptions import TelegramBadRequest
 from utils import ram_cache as ram
 from handlers import webauth
+
 class ClearMenuMiddleware(BaseMiddleware):
     """Har yangi xabar yoki callback kelganda asosiy menyu xabarini o'chiradi"""
     async def __call__(self, handler, event, data):
@@ -25,7 +27,13 @@ class ClearMenuMiddleware(BaseMiddleware):
                 except Exception:
                     pass
 
-        return await handler(event, data)
+        try:
+            return await handler(event, data)
+        except TelegramBadRequest as e:
+            # Eski callback query (bot restart dan keyin) — yutib yuboramiz
+            if "query is too old" in str(e) or "query ID is invalid" in str(e):
+                return
+            raise
 
 
 
