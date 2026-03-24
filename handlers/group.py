@@ -252,14 +252,33 @@ async def _run_group_polls(bot, chat_id: int, tid: str, qs: list, poll_time: int
 
         qtxt = q.get("question", q.get("text","Savol"))
         qtxt = re.sub(r'^\[\d+/\d+\]\s*', '', qtxt).strip()
-        hdr  = f"{i+1}/{len(qs)}. "
-        if len(hdr+qtxt) > 295:
-            qtxt = qtxt[:295-len(hdr)] + "..."
+
+        # Progress bar
+        total    = len(qs)
+        current  = i + 1
+        filled   = round(current / total * 10)
+        bar      = "█" * filled + "░" * (10 - filled)
+        pct      = round(current / total * 100)
+        hdr_poll = f"【{current}/{total}】"
+        if len(hdr_poll + qtxt) > 295:
+            qtxt = qtxt[:295 - len(hdr_poll)] + "..."
+
+        # Progress xabar — poll oldidan
+        prog_msg = None
+        try:
+            prog_msg = await bot.send_message(
+                chat_id,
+                f"<b>{current}/{total}</b> — savol  [{bar}]  <b>{pct}%</b>\n"
+                f"⏱ <b>{poll_time}s</b>",
+                parse_mode="HTML",
+                protect_content=True,
+            )
+        except: pass
 
         try:
             pm = await bot.send_poll(
                 chat_id=chat_id,
-                question=hdr+qtxt,
+                question=hdr_poll + qtxt,
                 options=clean_opts,
                 type="quiz",
                 correct_option_id=ci,
@@ -273,6 +292,10 @@ async def _run_group_polls(bot, chat_id: int, tid: str, qs: list, poll_time: int
                 _group_sessions[chat_id]["poll_map"][pm.poll.id] = i
             wait = (poll_time + 2) if poll_time > 0 else 10
             await asyncio.sleep(wait)
+            # Progress xabarni o'chir
+            if prog_msg:
+                try: await bot.delete_message(chat_id, prog_msg.message_id)
+                except: pass
         except TelegramBadRequest as e:
             log.error(f"Guruh poll xato (savol {i+1}): {e}")
             if "not enough rights" in str(e).lower():
