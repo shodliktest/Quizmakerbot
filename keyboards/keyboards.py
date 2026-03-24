@@ -262,6 +262,9 @@ def mytest_settings_kb(tid, is_paused=False):
         InlineKeyboardButton(text="📄 TXT yuklab olish",   callback_data=f"mytest_txt_{tid}"),
     )
     b.row(
+        InlineKeyboardButton(text="✏️ Nomini o'zgartirish", callback_data=f"edit_title_{tid}"),
+    )
+    b.row(
         InlineKeyboardButton(text="🔄 Urinishlar soni", callback_data=f"edit_att_{tid}"),
         InlineKeyboardButton(text="⏱ Poll vaqti",         callback_data=f"edit_poll_time_{tid}"),
     )
