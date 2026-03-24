@@ -30,20 +30,21 @@ _index:  dict = {}
 _can_pin = True
 _tests_cache: dict = {}
 
-_stats_dirty = False
-_users_dirty = False
+_stats_dirty    = False
+_users_dirty    = False
 
-USERS_LIST_CHUNK_KB = 9000   # 9MB gacha (10MB limit bor)
-USER_STATS_CHUNK    = 50     # 50 user per stats chunk
+
+USERS_LIST_CHUNK_KB = 9000
+USER_STATS_CHUNK    = 50
 
 
 async def init(bot, channel_id):
-    global _bot, _cid, _index, _tests_cache, _stats_dirty, _users_dirty
+    global _bot, _cid, _index, _tests_cache, _stats_dirty, _users_dirty, _creators_dirty, _creators
     _cid = int(channel_id)
     _index = {}
     _tests_cache = {}
-    _stats_dirty = False
-    _users_dirty = False
+    _stats_dirty    = False
+    _users_dirty    = False
 
     from aiogram import Bot as _BotClass
     from aiogram.client.default import DefaultBotProperties
@@ -729,6 +730,7 @@ async def save_test_full(test):
         metas = [m for m in _index.get("tests_meta", []) if m.get("test_id") != tid]
         metas.insert(0, meta)
         _index["tests_meta"] = metas
+
         await _save_index()
         return True
     except Exception as e:
@@ -748,6 +750,7 @@ async def save_deleted_test_backup(test):
         log.error(f"delete backup: {e}")
 
 async def delete_test_tg(tid):
+    global _creators_dirty
     for m in _index.get("tests_meta", []):
         if m.get("test_id") == tid:
             m["is_active"] = False
@@ -756,15 +759,9 @@ async def delete_test_tg(tid):
     await _save_index()
     mark_stats_dirty()
 
-async def update_test_meta_tg(tid, updates):
-    for m in _index.get("tests_meta", []):
-        if m.get("test_id") == tid:
-            m.update(updates)
-            break
-    await _save_index()
 
 
-# ══ USERS (moslik) ════════════════════════════════════════════
+
 
 async def get_users():
     from utils import ram_cache as ram

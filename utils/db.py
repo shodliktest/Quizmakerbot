@@ -94,26 +94,28 @@ def get_link_tests():
 def get_my_tests(creator_id):
     return [t for t in get_all_tests() if t.get("creator_id") == creator_id]
 
-async def create_test(creator_id, data):
+async def create_test(creator_id, data, creator_name="", creator_username=""):
     tid  = str(uuid.uuid4())[:8].upper()
     test = {
-        "test_id":       tid,
-        "creator_id":    creator_id,
-        "title":         data.get("title", "Nomsiz"),
-        "category":      data.get("category", "Boshqa"),
-        "difficulty":    data.get("difficulty", "medium"),
-        "visibility":    data.get("visibility", "public"),
-        "time_limit":    data.get("time_limit", 0),
-        "poll_time":     data.get("poll_time", 30),
-        "passing_score": data.get("passing_score", 60),
-        "max_attempts":  data.get("max_attempts", 0),
-        "questions":     data.get("questions", []),
-        "question_count": len(data.get("questions", [])),
-        "solve_count":   0,
-        "avg_score":     0.0,
-        "is_active":     True,
-        "is_paused":     False,
-        "created_at":    str(datetime.now(UTC)),
+        "test_id":          tid,
+        "creator_id":       creator_id,
+        "creator_name":     creator_name or f"User{creator_id}",
+        "creator_username": creator_username or "",
+        "title":            data.get("title", "Nomsiz"),
+        "category":         data.get("category", "Boshqa"),
+        "difficulty":       data.get("difficulty", "medium"),
+        "visibility":       data.get("visibility", "public"),
+        "time_limit":       data.get("time_limit", 0),
+        "poll_time":        data.get("poll_time", 30),
+        "passing_score":    data.get("passing_score", 60),
+        "max_attempts":     data.get("max_attempts", 0),
+        "questions":        data.get("questions", []),
+        "question_count":   len(data.get("questions", [])),
+        "solve_count":      0,
+        "avg_score":        0.0,
+        "is_active":        True,
+        "is_paused":        False,
+        "created_at":       str(datetime.now(UTC)),
     }
     # RAMga qo'shamiz
     ram.add_test(test)
