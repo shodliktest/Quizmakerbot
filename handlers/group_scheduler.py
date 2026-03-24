@@ -102,7 +102,7 @@ def _list_kb(chat_id) -> object:
 
 # ══ /start_create ════════════════════════════════════════════
 
-@router.message(Command("start_create"))
+@router.message(Command("start_create", ignore_mention=True))
 async def cmd_start_create(message: Message):
     chat_id = message.chat.id
     uid     = message.from_user.id
@@ -152,7 +152,7 @@ async def cmd_start_create(message: Message):
 
 # ══ /set_tests ═══════════════════════════════════════════════
 
-@router.message(Command("set_tests"))
+@router.message(Command("set_tests", ignore_mention=True))
 async def cmd_set_tests(message: Message):
     chat_id = message.chat.id
     uid     = message.from_user.id
@@ -183,7 +183,7 @@ async def cmd_set_tests(message: Message):
 
 # ══ /start_set ═══════════════════════════════════════════════
 
-@router.message(Command("start_set"))
+@router.message(Command("start_set", "start_sets", ignore_mention=True))
 async def cmd_start_set(message: Message):
     chat_id = message.chat.id
     uid     = message.from_user.id
@@ -222,7 +222,7 @@ async def cmd_start_set(message: Message):
 
 # ══ /stop_set ════════════════════════════════════════════════
 
-@router.message(Command("stop_set", ignore_mention=True))
+@router.message(Command("stop_set", "stop_sets", ignore_mention=True))
 async def cmd_stop_set(message: Message):
     chat_id = message.chat.id
     uid     = message.from_user.id
