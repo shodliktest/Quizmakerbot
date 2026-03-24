@@ -1,20 +1,18 @@
 """
 🗓 GROUP SCHEDULER — Guruh uchun avtomatik test rejalashtirish
-==============================================================
 
 BUYRUQLAR:
-  /start_create <id1, id2, ...>  — ro'yxat yaratish va ko'rsatish
-  /set_tests                     — mavjud ro'yxatni ko'rish/tahrirlash
-  /start_set                     — ovoz ochib testlarni boshlash
-  /stop_set                      — hammani to'xtatish
-  /quiz_stop                     — joriy testni to'xtatib natija + keyingi ovoz
+  /start_create <id1, id2, ...>  — ro'yxat yaratish
+  /set_tests                     — ro'yxatni ko'rish/tahrirlash
+  /start_set                     — testlarni boshlash
+  /stop_set                      — to'xtatish
+  /quiz_stop                     — joriy testni to'xtatib keyingi ovozga o'tish
 
-ISHLASH:
-  1. /start_create A1B2C3D4, E5F6G7H8  → ro'yxat yaratiladi
-  2. /start_set  → 30s ovoz → ko'p ovoz → test boshlanadi
-  3. Test tugaydi → natija → keyingi ovoz
-  4. /quiz_stop  → joriy test to'xtatiladi → natija → keyingi ovoz
-  5. /stop_set   → hammasi to'xtatiladi
+OVOZ TARTIBI:
+  - Har safar BARCHA testlar ovozda ko'rsatiladi (kamaymayin)
+  - Ko'p ovoz → o'sha test boshlanadi
+  - Hech kim ovoz bermasa → random (avval o'tkazilganlardan tashqari)
+  - Agar random oldin o'tkazilganini tanlasa → yana random qayta
 """
 
 import asyncio, logging, random, re
@@ -30,7 +28,6 @@ from utils.ram_cache import get_test_meta
 log    = logging.getLogger(__name__)
 router = Router()
 
-# {chat_id: {tests, remaining, done, mode, active, host_id, task, current_tid, ...}}
 _schedules: dict = {}
 VOTE_SECONDS = 30
 
@@ -47,35 +44,49 @@ async def _is_admin(bot, chat_id, uid):
     except Exception:
         return False
 
+def _get_qc(tid: str) -> int:
+    """Savollar soni — meta dan yoki to'liq testdan."""
+    meta = get_test_meta(tid) or {}
+    qc   = meta.get("question_count", 0)
+    if not qc:
+        # RAM cache dan tekshiramiz
+        from utils import ram_cache as ram
+        cached = ram.get_cached_questions(tid)
+        if cached:
+            qc = len(cached.get("questions", []))
+    return qc
+
 def _tests_list_text(chat_id, title="📋 TESTLAR RO'YXATI") -> str:
     sched = _schedules.get(chat_id, {})
     tests = sched.get("tests", [])
     if not tests:
         return f"<b>{title}</b>\n━━━━━━━━━━━━━━━━━━━━━━━━\n\nRo'yxat bo'sh."
-    done      = sched.get("done", [])
-    remaining = sched.get("remaining", [])
-    text = f"<b>{title}</b>\n━━━━━━━━━━━━━━━━━━━━━━━━\nJami: <b>{len(tests)} ta</b>\n\n"
+    done    = set(sched.get("done", []))
+    cur     = sched.get("current_tid")
+    text    = f"<b>{title}</b>\n━━━━━━━━━━━━━━━━━━━━━━━━\nJami: <b>{len(tests)} ta</b>\n\n"
     for i, tid in enumerate(tests, 1):
         meta  = get_test_meta(tid) or {}
         name  = meta.get("title", tid)[:25]
-        qc    = meta.get("question_count", 0)
-        if tid in done:
-            icon = "✅"
-        elif tid == sched.get("current_tid"):
-            icon = "▶️"
-        else:
-            icon = "⏳"
-        text += f"{icon} {i}. <b>{name}</b> ({qc} savol)\n   <code>{tid}</code>\n\n"
+        qc    = _get_qc(tid)
+        sc    = meta.get("solve_count", 0)
+        icon  = "▶️" if tid == cur else ("✅" if tid in done else "📝")
+        text += f"{icon} {i}. <b>{name}</b>"
+        if qc:
+            text += f" ({qc} savol)"
+        if sc:
+            text += f" | 👥{sc}"
+        text += f"\n   <code>{tid}</code>\n\n"
     return text.strip()
 
 def _list_kb(chat_id) -> object:
     b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(
+        text="▶️ Testlarni boshlash",
+        callback_data=f"sch_start_{chat_id}"
+    ))
     b.row(
-        InlineKeyboardButton(text="▶️ Poll testlarni boshlash", callback_data=f"sch_start_poll_{chat_id}"),
-    )
-    b.row(
-        InlineKeyboardButton(text="➕ Test qo'shish",  callback_data=f"sch_add_{chat_id}"),
-        InlineKeyboardButton(text="🗑 Tozalash",        callback_data=f"sch_clear_{chat_id}"),
+        InlineKeyboardButton(text="➕ Test qo'shish", callback_data=f"sch_add_{chat_id}"),
+        InlineKeyboardButton(text="🗑 Tozalash",       callback_data=f"sch_clear_{chat_id}"),
     )
     sched = _schedules.get(chat_id, {})
     for tid in sched.get("tests", []):
@@ -93,13 +104,11 @@ def _list_kb(chat_id) -> object:
 
 @router.message(Command("start_create"))
 async def cmd_start_create(message: Message):
-    """/start_create A1B2, C3D4  — ro'yxat yaratish"""
     chat_id = message.chat.id
     uid     = message.from_user.id
 
     if message.chat.type not in ("group", "supergroup"):
-        return await message.answer("⚠️ Faqat guruhlarda ishlaydi!")
-
+        return await message.answer("⚠️ Faqat guruhlarda!")
     if not await _is_admin(message.bot, chat_id, uid):
         return await message.answer("⚠️ Faqat guruh adminlari!")
 
@@ -109,8 +118,7 @@ async def cmd_start_create(message: Message):
 
     if not tids:
         return await message.answer(
-            "❌ Test ID kiritilmadi.\n\n"
-            "Namuna:\n"
+            "❌ Test ID kiritilmadi.\n\nNamuna:\n"
             "<code>/start_create A36D37BE, 11D13889, 7D71EE2E</code>"
         )
 
@@ -126,11 +134,14 @@ async def cmd_start_create(message: Message):
     if not valid:
         return await message.answer("❌ Hech qanday to'g'ri test topilmadi!")
 
-    if chat_id not in _schedules:
-        _schedules[chat_id] = {}
-    _schedules[chat_id]["tests"]     = valid
-    _schedules[chat_id]["remaining"] = valid[:]
-    _schedules[chat_id]["done"]      = []
+    _schedules[chat_id] = {
+        "tests":       valid,
+        "done":        [],
+        "current_tid": None,
+        "active":      False,
+        "host_id":     uid,
+        "task":        None,
+    }
 
     text = _tests_list_text(chat_id, "✅ RO'YXAT YARATILDI")
     if invalid:
@@ -139,27 +150,24 @@ async def cmd_start_create(message: Message):
     await message.answer(text, reply_markup=_list_kb(chat_id))
 
 
-# ══ /set_tests — ro'yxatni ko'rish/tahrirlash ════════════════
+# ══ /set_tests ═══════════════════════════════════════════════
 
 @router.message(Command("set_tests"))
 async def cmd_set_tests(message: Message):
-    """/set_tests — mavjud ro'yxatni ko'rish va tahrirlash"""
     chat_id = message.chat.id
     uid     = message.from_user.id
 
     if message.chat.type not in ("group", "supergroup"):
-        return await message.answer("⚠️ Faqat guruhlarda ishlaydi!")
-
+        return await message.answer("⚠️ Faqat guruhlarda!")
     if not await _is_admin(message.bot, chat_id, uid):
         return await message.answer("⚠️ Faqat guruh adminlari!")
 
-    # Arg bilan kelsa — qo'shish
     args = message.text.split(None, 1)
     if len(args) > 1:
         tids = _extract_ids(args[1])
         if tids:
             if chat_id not in _schedules:
-                _schedules[chat_id] = {}
+                _schedules[chat_id] = {"tests": [], "done": [], "active": False}
             current = _schedules[chat_id].get("tests", [])
             for tid in tids:
                 meta = get_test_meta(tid)
@@ -167,21 +175,21 @@ async def cmd_set_tests(message: Message):
                     current.append(tid)
             _schedules[chat_id]["tests"] = current
 
-    text = _tests_list_text(chat_id)
-    await message.answer(text, reply_markup=_list_kb(chat_id))
+    await message.answer(
+        _tests_list_text(chat_id),
+        reply_markup=_list_kb(chat_id)
+    )
 
 
-# ══ /start_set — ovoz ochib boshlash ═════════════════════════
+# ══ /start_set ═══════════════════════════════════════════════
 
 @router.message(Command("start_set"))
 async def cmd_start_set(message: Message):
-    """/start_set — ovoz ochib testlarni boshlash"""
     chat_id = message.chat.id
     uid     = message.from_user.id
 
     if message.chat.type not in ("group", "supergroup"):
-        return await message.answer("⚠️ Faqat guruhlarda ishlaydi!")
-
+        return await message.answer("⚠️ Faqat guruhlarda!")
     if not await _is_admin(message.bot, chat_id, uid):
         return await message.answer("⚠️ Faqat guruh adminlari!")
 
@@ -189,66 +197,68 @@ async def cmd_start_set(message: Message):
     if not sched.get("tests"):
         return await message.answer(
             "❌ Ro'yxat yo'q!\n\n"
-            "Avval ro'yxat yarating:\n"
             "<code>/start_create ID1, ID2, ID3</code>"
         )
-
     if sched.get("active"):
         return await message.answer(
-            "⚠️ Allaqachon boshlangan!\n"
-            "To'xtatish: <code>/stop_set</code>"
+            "⚠️ Allaqachon boshlangan!\n<code>/stop_set</code>"
         )
 
-    n = len(sched.get("tests", []))
+    n = len(sched["tests"])
+    b = InlineKeyboardBuilder()
+    b.row(
+        InlineKeyboardButton(text="▶️ Boshlash", callback_data=f"sch_start_{chat_id}"),
+        InlineKeyboardButton(text="❌ Bekor",    callback_data=f"sch_close_{chat_id}"),
+    )
     await message.answer(
-        f"🎯 <b>BOSHLASH TASDIQLANG</b>\n"
+        f"🎯 <b>BOSHLASHGA TAYYORMISIZ?</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"📋 Testlar: <b>{n} ta</b>\n"
-        f"📊 Rejim: <b>Quiz Poll</b>\n\n"
-        f"Har test oldidan {VOTE_SECONDS}s ovoz beriladi.",
-        reply_markup=InlineKeyboardBuilder().row(
-            InlineKeyboardButton(text="▶️ Boshlash", callback_data=f"sch_start_poll_{chat_id}"),
-            InlineKeyboardButton(text="❌ Bekor",    callback_data=f"sch_close_{chat_id}"),
-        ).as_markup()
+        f"📊 Rejim: <b>Quiz Poll</b>\n"
+        f"🗳 Har test oldidan {VOTE_SECONDS}s ovoz",
+        reply_markup=b.as_markup()
     )
 
 
-# ══ /stop_set — hammani to'xtatish ═══════════════════════════
+# ══ /stop_set ════════════════════════════════════════════════
 
 @router.message(Command("stop_set"))
 async def cmd_stop_set(message: Message):
-    """/stop_set — scheduler va joriy testni to'xtatish"""
     chat_id = message.chat.id
     uid     = message.from_user.id
 
     if message.chat.type not in ("group", "supergroup"):
-        return await message.answer("⚠️ Faqat guruhlarda ishlaydi!")
-
+        return await message.answer("⚠️ Faqat guruhlarda!")
     if not await _is_admin(message.bot, chat_id, uid):
         return await message.answer("⚠️ Faqat guruh adminlari!")
 
     sched = _schedules.get(chat_id)
-    if not sched or not sched.get("active"):
-        return await message.answer("ℹ️ Hozir faol jarayon yo'q.")
+    if not sched:
+        return await message.answer("ℹ️ Faol jarayon yo'q.")
 
-    await _stop_schedule(message.bot, chat_id, sched)
+    was_active = sched.get("active", False)
+    done       = list(sched.get("done", []))
+    tests      = list(sched.get("tests", []))
 
-    done  = sched.get("done", [])
-    left  = sched.get("remaining", [])
+    await _kill_schedule(chat_id)
     _schedules.pop(chat_id, None)
 
-    await message.answer(
-        f"⏹ <b>TO'XTATILDI</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"✅ O'tkazildi: <b>{len(done)} ta</b>\n"
-        f"📋 Qoldi: <b>{len(left)} ta</b>\n\n"
-        f"Qayta boshlash: <code>/start_set</code>"
-    )
+    if was_active:
+        await message.answer(
+            f"⏹ <b>TO'XTATILDI</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"✅ O'tkazildi: <b>{len(done)} / {len(tests)} ta</b>\n\n"
+            f"Qayta boshlash: <code>/start_set</code>"
+        )
+    else:
+        await message.answer("✅ Ro'yxat o'chirildi.")
 
 
-async def _stop_schedule(bot, chat_id, sched):
-    """Schedulerni va joriy testni to'xtatish."""
+async def _kill_schedule(chat_id):
+    """Scheduler va joriy testni to'xtatish."""
+    sched = _schedules.get(chat_id, {})
     sched["active"] = False
+
     task = sched.get("task")
     if task and not task.done():
         task.cancel()
@@ -267,9 +277,7 @@ async def _stop_schedule(bot, chat_id, sched):
 @router.callback_query(F.data.startswith("sch_start_"))
 async def sch_start_cb(callback: CallbackQuery):
     await callback.answer()
-    parts   = callback.data.split("_")
-    mode    = "poll"             # faqat poll rejimi
-    chat_id = int(parts[3])
+    chat_id = int(callback.data[10:])
     uid     = callback.from_user.id
 
     if not await _is_admin(callback.bot, chat_id, uid):
@@ -284,28 +292,27 @@ async def sch_start_cb(callback: CallbackQuery):
     try: await callback.message.delete()
     except: pass
 
-    await _start_schedule(callback.bot, chat_id, uid, mode)
+    await _start_schedule(callback.bot, chat_id, uid)
 
 
 @router.callback_query(F.data.startswith("sch_add_"))
 async def sch_add_cb(callback: CallbackQuery):
     await callback.answer()
-    chat_id = int(callback.data.split("_")[2])
+    chat_id = int(callback.data[8:])
     uid     = callback.from_user.id
 
     if not await _is_admin(callback.bot, chat_id, uid):
         return await callback.answer("⚠️ Faqat admin!", show_alert=True)
 
     if chat_id not in _schedules:
-        _schedules[chat_id] = {}
+        _schedules[chat_id] = {"tests": [], "done": [], "active": False}
     _schedules[chat_id]["waiting_input"] = uid
 
     await callback.message.answer(
         "➕ <b>TEST KODI YUBORING</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "<code>AB12CD34</code>\n"
-        "yoki bir nechtasi:\n"
-        "<code>AB12CD34, XY56ZW78</code>"
+        "yoki: <code>AB12, CD34, EF56</code>"
     )
 
 
@@ -337,16 +344,14 @@ async def sch_del_cb(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("sch_clear_"))
 async def sch_clear_cb(callback: CallbackQuery):
     await callback.answer()
-    chat_id = int(callback.data.split("_")[2])
+    chat_id = int(callback.data[10:])
     uid     = callback.from_user.id
 
     if not await _is_admin(callback.bot, chat_id, uid):
         return await callback.answer("⚠️ Faqat admin!", show_alert=True)
 
     if chat_id in _schedules:
-        _schedules[chat_id]["tests"]     = []
-        _schedules[chat_id]["remaining"] = []
-        _schedules[chat_id]["done"]      = []
+        _schedules[chat_id].update({"tests": [], "done": [], "current_tid": None})
 
     try:
         await callback.message.edit_text(
@@ -371,62 +376,58 @@ async def handle_test_ids_input(message: Message):
     uid     = message.from_user.id
     sched   = _schedules.get(chat_id, {})
 
+    # Command xabarlarini o'tkazib yuborish
+    if message.text and message.text.startswith("/"):
+        return
+
     if sched.get("waiting_input") != uid:
         return
 
     tids = _extract_ids(message.text or "")
     if not tids:
-        await message.answer(
-            "❌ Test ID topilmadi.\n"
-            "Masalan: <code>AB12CD34</code>"
-        )
+        await message.answer("❌ Test ID topilmadi. Masalan: <code>AB12CD34</code>")
         return
 
     _schedules[chat_id].pop("waiting_input", None)
     current = _schedules[chat_id].get("tests", [])
-    added = []
+    added   = []
     for tid in tids:
         meta = get_test_meta(tid)
         if meta and meta.get("is_active", True) and tid not in current:
             current.append(tid)
             added.append(tid)
-
     _schedules[chat_id]["tests"] = current
 
     text = _tests_list_text(chat_id)
     if added:
-        text = f"✅ {len(added)} ta test qo'shildi!\n\n" + text
+        text = f"✅ {len(added)} ta qo'shildi!\n\n" + text
     await message.answer(text, reply_markup=_list_kb(chat_id))
 
 
-# ══ Scheduler loop ════════════════════════════════════════════
+# ══ Scheduler ════════════════════════════════════════════════
 
-async def _start_schedule(bot, chat_id, uid, mode):
-    sched = _schedules.get(chat_id, {})
-    tests = sched.get("tests", [])
-
-    _schedules[chat_id].update({
-        "remaining":   sched.get("remaining") or tests[:],
-        "done":        sched.get("done") or [],
-        "mode":        mode,
+async def _start_schedule(bot, chat_id, uid):
+    sched = _schedules.setdefault(chat_id, {})
+    sched.update({
         "active":      True,
         "host_id":     uid,
-        "task":        None,
+        "done":        sched.get("done") or [],
         "current_tid": None,
     })
 
+    tests = sched.get("tests", [])
     await bot.send_message(
         chat_id,
-        f"🚀 <b>AVTO-TEST REJIMI BOSHLANDI!</b>\n"
+        f"🚀 <b>TEST SERIYASI BOSHLANDI!</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🎮 Rejim: <b>📊 Quiz Poll</b>\n"
-        f"📋 Testlar: <b>{len(tests)} ta</b>\n\n"
+        f"📋 {len(tests)} ta test | 📊 Quiz Poll rejimi\n"
+        f"🗳 Har test oldidan {VOTE_SECONDS}s ovoz\n\n"
         f"⏸ Joriy testni to'xtatish: <code>/quiz_stop</code>\n"
         f"⏹ Hammani to'xtatish: <code>/stop_set</code>",
     )
 
     task = asyncio.create_task(_scheduler_loop(bot, chat_id))
-    _schedules[chat_id]["task"] = task
+    sched["task"] = task
 
 
 async def _scheduler_loop(bot, chat_id):
@@ -436,134 +437,151 @@ async def _scheduler_loop(bot, chat_id):
             if not sched or not sched.get("active"):
                 break
 
-            remaining = sched.get("remaining", [])
+            tests = sched.get("tests", [])
+            if not tests:
+                break
 
-            if not remaining:
-                done  = sched.get("done", [])
-                tests = sched.get("tests", [])
-                await bot.send_message(
-                    chat_id,
-                    f"🔄 <b>BARCHA TESTLAR YAKUNLANDI!</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                    f"✅ {len(done)} ta test o'tkazildi.\n"
-                    f"♾️ Ro'yxat qaytadan boshlanmoqda...\n\n"
-                    f"⏹ To'xtatish: <code>/stop_set</code>"
-                )
-                sched["remaining"] = tests[:]
-                sched["done"]      = []
-                await asyncio.sleep(3)
-                continue
-
-            # Ovoz
-            tid = await _run_vote(bot, chat_id, remaining)
+            # Ovoz — BARCHA testlar ko'rsatiladi
+            tid = await _run_vote(bot, chat_id, tests, sched.get("done", []))
             if tid is None:
                 break
 
             sched["current_tid"] = tid
-            sched["remaining"]   = [t for t in remaining if t != tid]
-            sched["done"].append(tid)
+            if tid not in sched.get("done", []):
+                sched["done"].append(tid)
 
-            meta = get_test_meta(tid) or {}
-            mode = sched.get("mode", "poll")
-            await bot.send_message(
+            # Test boshlash xabari (o'zi o'chadi)
+            info_msg = await bot.send_message(
                 chat_id,
-                f"🎯 <b>{meta.get('title', tid)}</b> boshlanmoqda...\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"📋 {meta.get('question_count', 0)} savol | "
-                f"⏱ {meta.get('poll_time', 30)}s/savol"
+                f"▶️ <b>{(get_test_meta(tid) or {}).get('title', tid)}</b> boshlanmoqda..."
             )
+
             await asyncio.sleep(2)
 
+            # Testni boshlash
             from handlers.group import _start_group_test
-            await _start_group_test(bot, chat_id, sched["host_id"], tid, mode)
+            await _start_group_test(bot, chat_id, sched["host_id"], tid, "poll")
 
+            # Info xabarni o'chirish
+            try: await bot.delete_message(chat_id, info_msg.message_id)
+            except: pass
+
+            # Test tugashini kutish
             await _wait_for_test(bot, chat_id)
-            sched["current_tid"] = None
 
-            if sched.get("active") and sched.get("remaining"):
-                left = len(sched["remaining"])
-                await bot.send_message(
-                    chat_id,
-                    f"✅ Test yakunlandi! "
-                    f"📋 Qolgan: <b>{left} ta</b>"
-                )
-                await asyncio.sleep(3)
+            sched = _schedules.get(chat_id)
+            if not sched or not sched.get("active"):
+                break
+
+            sched["current_tid"] = None
+            await asyncio.sleep(2)
 
     except asyncio.CancelledError:
         pass
     except Exception as e:
-        log.error(f"Scheduler loop xato ({chat_id}): {e}")
+        log.error(f"Scheduler xato ({chat_id}): {e}")
         import traceback; traceback.print_exc()
 
 
-async def _run_vote(bot, chat_id, remaining: list):
+def _vote_option(tid: str) -> str:
+    """Ovoz uchun variant matni — fan emojisi + test nomi."""
+    from keyboards.keyboards import get_cat_icon
+    meta  = get_test_meta(tid) or {}
+    name  = meta.get("title", tid)[:25]
+    cat   = meta.get("category", "")
+    qc    = _get_qc(tid)
+    icon  = get_cat_icon(cat) if cat else "📝"
+    opt   = f"{icon} {name}"
+    if qc:
+        opt += f" ({qc}❓)"
+    return opt
+    """
+    Ovoz — BARCHA testlar ko'rsatiladi.
+    Ko'p ovoz → o'sha test.
+    Hech kim ovoz bermasa → random (avval o'tkazilmagan birinchi, aks holda istalgan).
+    """
     sched = _schedules.get(chat_id)
     if not sched or not sched.get("active"):
         return None
 
-    vote_tids = remaining[:5]
+    # Max 8 ta variant (Telegram chegarasi)
+    vote_tids = tests[:8]
     options   = []
     for tid in vote_tids:
         meta = get_test_meta(tid) or {}
-        name = meta.get("title", tid)[:20]
-        qc   = meta.get("question_count", 0)
-        options.append(f"📝 {name} ({qc} savol)")
+        name = meta.get("title", tid)[:25]
+        qc   = _get_qc(tid)
+        opt  = f"📝 {name}"
+        if qc:
+            opt += f" ({qc}❓)"
+        options.append(opt)
 
+    vote_msg = None
     try:
-        poll_msg = await bot.send_poll(
+        vote_msg = await bot.send_poll(
             chat_id,
-            question=f"🗳 Keyingi test ({VOTE_SECONDS}s)",
+            question=f"🗳 Keyingi test? ({VOTE_SECONDS}s)",
             options=options,
             is_anonymous=False,
             allows_multiple_answers=False,
             protect_content=True,
         )
-        sched["vote_msg_id"]  = poll_msg.message_id
-        sched["vote_poll_id"] = poll_msg.poll.id
+        sched["vote_msg_id"]  = vote_msg.message_id
+        sched["vote_poll_id"] = vote_msg.poll.id
         sched["vote_tids"]    = vote_tids
     except Exception as e:
         log.error(f"Ovoz ochishda xato: {e}")
-        return random.choice(remaining)
+        # Fallback — random
+        not_done = [t for t in tests if t not in done]
+        return random.choice(not_done) if not_done else random.choice(tests)
 
     # Kutish
     for _ in range(VOTE_SECONDS):
         await asyncio.sleep(1)
         sched = _schedules.get(chat_id)
         if not sched or not sched.get("active"):
+            # Ovozni yopish
+            try: await bot.stop_poll(chat_id, vote_msg.message_id)
+            except: pass
+            try: await bot.delete_message(chat_id, vote_msg.message_id)
+            except: pass
             return None
 
-    # Ovozni yopish
+    # Natija
     try:
-        result    = await bot.stop_poll(chat_id, poll_msg.message_id)
+        result    = await bot.stop_poll(chat_id, vote_msg.message_id)
         max_votes = max((o.voter_count for o in result.options), default=0)
 
+        # Ovoz xabarini o'chirish
+        try: await bot.delete_message(chat_id, vote_msg.message_id)
+        except: pass
+
         if max_votes == 0:
-            chosen_tid = random.choice(vote_tids)
-            meta = get_test_meta(chosen_tid) or {}
-            await bot.send_message(
-                chat_id,
-                f"🎲 Hech kim ovoz bermadi — random:\n"
-                f"🎯 <b>{meta.get('title', chosen_tid)}</b>"
-            )
+            # Hech kim ovoz bermadi → random (avval o'tkazilmaganlardan)
+            not_done = [t for t in tests if t not in done]
+            pool     = not_done if not_done else tests
+            chosen   = random.choice(pool)
         else:
-            best_idx   = max(range(len(result.options)), key=lambda i: result.options[i].voter_count)
-            chosen_tid = vote_tids[best_idx]
-            meta       = get_test_meta(chosen_tid) or {}
-            await bot.send_message(
-                chat_id,
-                f"🏆 <b>Ovoz natijasi:</b>\n"
-                f"✅ <b>{meta.get('title', chosen_tid)}</b>\n"
-                f"🗳 {result.options[best_idx].voter_count} ovoz"
+            best_idx = max(
+                range(len(result.options)),
+                key=lambda i: result.options[i].voter_count
             )
-        return chosen_tid
+            chosen = vote_tids[best_idx]
+
+        return chosen
+
     except Exception as e:
         log.error(f"Ovozni yopishda xato: {e}")
-        return random.choice(vote_tids)
+        not_done = [t for t in tests if t not in done]
+        return random.choice(not_done) if not_done else random.choice(tests)
 
 
 async def _wait_for_test(bot, chat_id):
+    """Test tugashini kutish."""
     from handlers.group import _group_sessions, _inline_sessions
-    for _ in range(3600):
+    # Birinchi test sessiyasi boshlanguncha kichik kutish
+    await asyncio.sleep(3)
+    for _ in range(7200):  # max 2 soat
         await asyncio.sleep(1)
         sched = _schedules.get(chat_id)
         if not sched or not sched.get("active"):
@@ -572,21 +590,11 @@ async def _wait_for_test(bot, chat_id):
             return
 
 
-# ══ /quiz_stop hook — joriy testni to'xtatib keyingi ovozga ══
-
-async def notify_test_finished(bot, chat_id):
-    """
-    group.py dan chaqiriladi — /quiz_stop bosilganda.
-    Joriy test to'xtatiladi, scheduler keyingi ovozga o'tadi.
-    _wait_for_test sessiya yo'qligini sezib davom etadi.
-    """
-    pass  # _wait_for_test o'zi sezadi
-
-
 # ══ Poll answer ═══════════════════════════════════════════════
 
 @router.poll_answer()
 async def scheduler_poll_answer(poll_answer):
+    """Ovoz javoblarini qayd etish."""
     poll_id = poll_answer.poll_id
     for sched in _schedules.values():
         if sched.get("vote_poll_id") == poll_id:
