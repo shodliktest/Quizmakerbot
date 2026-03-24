@@ -63,7 +63,7 @@ def _shuffle_options(qs):
 router = Router()
 
 LETTERS      = ["A","B","C","D","E","F","G","H","I","J"]
-COUNT_EMOJIS = ["3️⃣","2️⃣","1️⃣","🚀"]
+COUNT_EMOJIS = ["3️⃣", "2️⃣", "1️⃣", "🎯"]
 
 # ─── Sessiyalar ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━────
 # Poll sessiyasi: {chat_id: {...}}

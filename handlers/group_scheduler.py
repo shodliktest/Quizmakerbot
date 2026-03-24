@@ -495,6 +495,9 @@ def _vote_option(tid: str) -> str:
     if qc:
         opt += f" ({qc}❓)"
     return opt
+
+
+async def _run_vote(bot, chat_id, tests, done):
     """
     Ovoz — BARCHA testlar ko'rsatiladi.
     Ko'p ovoz → o'sha test.
