@@ -581,28 +581,43 @@ async def _run_vote(bot, chat_id, tests, done):
     if not sched or not sched.get("active"):
         return None
 
-    # Natija — poll O'CHIRILMAYDI, qoladi
+    # Natijalar hisoblanmoqda xabari
+    calc_msg = None
     try:
-        result    = await bot.stop_poll(chat_id, vote_msg.message_id)
-        max_votes = max((o.voter_count for o in result.options), default=0)
+        calc_msg = await bot.send_message(
+            chat_id,
+            "🗳 Ovoz berish vaqti tugadi\n⏳ Natijalar hisoblanmoqda...",
+            parse_mode="HTML",
+        )
+    except: pass
 
-        if max_votes == 0:
-            not_done = [t for t in tests if t not in done]
-            pool     = not_done if not_done else tests
-            chosen   = random.choice(pool)
-        else:
-            best_idx = max(
-                range(len(result.options)),
-                key=lambda i: result.options[i].voter_count
-            )
-            chosen = vote_tids[best_idx]
+    await asyncio.sleep(2)
 
-        return chosen
+    # vote_counts dan g'olibni aniqlaymiz
+    vote_counts = sched.get("vote_counts", {})
+    chosen = None
 
-    except Exception as e:
-        log.error(f"Ovozni yopishda xato: {e}")
+    if vote_counts:
+        # Eng ko'p ovoz olgan variant
+        best_idx = max(vote_counts, key=lambda k: vote_counts[k])
+        idx = int(best_idx)
+        if 0 <= idx < len(vote_tids):
+            chosen = vote_tids[idx]
+
+    # Hech kim ovoz bermasa — random
+    if not chosen:
         not_done = [t for t in tests if t not in done]
-        return random.choice(not_done) if not_done else random.choice(tests)
+        chosen   = random.choice(not_done) if not_done else random.choice(tests)
+
+    # Natija xabarini o'chir
+    if calc_msg:
+        try: await bot.delete_message(chat_id, calc_msg.message_id)
+        except: pass
+
+    # vote_counts ni tozalash — keyingi ovoz uchun
+    sched["vote_counts"] = {}
+
+    return chosen
 
 
 async def _wait_for_test(bot, chat_id):
@@ -627,4 +642,11 @@ async def scheduler_poll_answer(poll_answer):
     poll_id = poll_answer.poll_id
     for sched in _schedules.values():
         if sched.get("vote_poll_id") == poll_id:
+            # Ovozni vote_counts da saqlab boramiz
+            opt_ids = poll_answer.option_ids
+            if opt_ids:
+                if "vote_counts" not in sched:
+                    sched["vote_counts"] = {}
+                idx = str(opt_ids[0])
+                sched["vote_counts"][idx] = sched["vote_counts"].get(idx, 0) + 1
             break
