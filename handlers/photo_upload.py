@@ -36,7 +36,8 @@ async def cmd_upload_photo(message: Message):
         "B) Variant\n"
         "C) Variant\n"
         "D) Variant</pre>",
-        parse_mode="HTML"
+        parse_mode="HTML",
+        protect_content=True,
     )
 
 
@@ -46,15 +47,13 @@ async def handle_photo(message: Message):
     photo   = message.photo[-1]  # Eng yuqori sifatli rasm
     file_id = photo.file_id
 
+    # file_id qismi — protect_content=False (nusxa olish uchun)
     await message.answer(
         f"✅ <b>Rasm qabul qilindi!</b>\n\n"
-        f"<b>file_id:</b>\n"
-        f"<code>[rasm: {file_id}]</code>\n\n"
-        f"Shu qatorni savol oldiga qo'ying:\n"
-        f"<pre>[rasm: {file_id}]\n"
-        f"Savol matni...\n"
-        f"*A) To'g'ri javob</pre>",
-        parse_mode="HTML"
+        f"Quyidagi qatorni ko'chiring va savol oldiga qo'ying:\n\n"
+        f"<code>[rasm: {file_id}]</code>",
+        parse_mode="HTML",
+        protect_content=False,
     )
     log.info(f"Rasm yuklandi: {file_id[:30]}...")
 
