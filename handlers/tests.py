@@ -65,6 +65,19 @@ def _timer_bar(remaining, total_sec, width=15):
 
 async def _show_next_question(bot, cid, msg_id, qs, idx, state, uid):
     """Keyingi savolni edit orqali ko'rsatib, to'g'ri state o'rnatadi va timer ishlatadi"""
+    # Rasm bo'lsa — savol oldidan yuborish
+    q = qs[idx]
+    photo_id = q.get("photo") or q.get("image") or None
+    if not photo_id:
+        qtxt_raw = re.sub(r'^\[\d+/\d+\]\s*', '', q.get("question", q.get("text", ""))).strip()
+        pm_match = re.match(r'^\[rasm:\s*([^\]]+)\]\s*', qtxt_raw)
+        if pm_match:
+            photo_id = pm_match.group(1).strip()
+    if photo_id:
+        try:
+            await bot.send_photo(cid, photo_id, protect_content=True)
+        except Exception as e:
+            log.error(f"Inline rasm xato: {e}")
     text, kb, is_text = _build_question_content(qs, idx, time_left=QUESTION_SEC)
     try:
         await bot.edit_message_text(chat_id=cid, message_id=msg_id, text=text, reply_markup=kb)
@@ -391,6 +404,19 @@ async def _send_question_new(bot, cid, state, uid):
         await _finish_inline(bot, cid, state, d)
         return
 
+    # Rasm bo'lsa — savol oldidan yuborish
+    q_first = qs[idx]
+    photo_id_first = q_first.get("photo") or q_first.get("image") or None
+    if not photo_id_first:
+        qtxt_f = re.sub(r'^\[\d+/\d+\]\s*', '', q_first.get("question", q_first.get("text", ""))).strip()
+        pm_f = re.match(r'^\[rasm:\s*([^\]]+)\]\s*', qtxt_f)
+        if pm_f:
+            photo_id_first = pm_f.group(1).strip()
+    if photo_id_first:
+        try:
+            await bot.send_photo(cid, photo_id_first, protect_content=True)
+        except Exception as e:
+            log.error(f"Inline rasm xato: {e}")
     text, kb, is_text = _build_question_content(qs, idx, time_left=QUESTION_SEC)
     msg = await bot.send_message(cid, text, reply_markup=kb,
         protect_content=True)

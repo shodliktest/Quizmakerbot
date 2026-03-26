@@ -279,6 +279,20 @@ async def _send_poll(bot, cid, state):
 
     qtxt = q.get("question", q.get("text","Savol"))
     qtxt = re.sub(r'^\[\d+/\d+\]\s*', '', qtxt).strip()
+
+    # Rasm bo'lsa — poll oldidan yuborish
+    photo_id = q.get("photo") or q.get("image") or None
+    if not photo_id:
+        pm_match = re.match(r'^\[rasm:\s*([^\]]+)\]\s*', qtxt)
+        if pm_match:
+            photo_id = pm_match.group(1).strip()
+            qtxt     = qtxt[pm_match.end():].strip()
+    if photo_id:
+        try:
+            await bot.send_photo(cid, photo_id)
+        except Exception as e:
+            log.error(f"Poll rasm xato: {e}")
+
     hdr  = f"[{idx+1}/{len(qs)}] "
     if len(hdr + qtxt) > 295:
         qtxt = qtxt[:295 - len(hdr)] + "..."
