@@ -471,6 +471,20 @@ async def _run_inline_session(
         qtxt = q.get("question", q.get("text","Savol"))
         qtxt = re.sub(r'^\[\d+/\d+\]\s*', '', qtxt).strip()
 
+        # ── Rasm bo'lsa — savol oldidan yuborish ──
+        photo_id = q.get("photo") or q.get("image") or None
+        if not photo_id:
+            pm_match = re.match(r'^\[rasm:\s*([^\]]+)\]\s*', qtxt)
+            if pm_match:
+                photo_id = pm_match.group(1).strip()
+                qtxt     = qtxt[pm_match.end():].strip()
+        if photo_id:
+            try:
+                await bot.send_photo(chat_id, photo_id, protect_content=True)
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                log.error(f"Inline rasm yuborishda xato (savol {i+1}): {e}")
+
         # ── Savol xabarini yasash ──
         def _q_text(remaining: int) -> str:
             filled = int((poll_time - remaining) / poll_time * 10) if poll_time else 0
