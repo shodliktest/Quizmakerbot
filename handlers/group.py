@@ -253,13 +253,29 @@ async def _run_group_polls(bot, chat_id: int, tid: str, qs: list, poll_time: int
         qtxt = q.get("question", q.get("text","Savol"))
         qtxt = re.sub(r'^\[\d+/\d+\]\s*', '', qtxt).strip()
 
-        total   = len(qs)
-        current = i + 1
+        # Savol ichidan [rasm: file_id] ni ajratib olish
+        photo_id = q.get("photo") or q.get("image") or None
+        if not photo_id:
+            pm_match = re.match(r'^\[rasm:\s*([^\]]+)\]\s*', qtxt)
+            if pm_match:
+                photo_id = pm_match.group(1).strip()
+                qtxt     = qtxt[pm_match.end():].strip()
+
+        total    = len(qs)
+        current  = i + 1
         hdr_poll = f"【{current}/{total}】"
         if len(hdr_poll + qtxt) > 295:
             qtxt = qtxt[:295 - len(hdr_poll)] + "..."
 
         prog_msg = None
+
+        # Rasm bo'lsa — poll oldidan yuborish
+        if photo_id:
+            try:
+                await bot.send_photo(chat_id, photo_id, protect_content=True)
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                log.error(f"Rasm yuborishda xato (savol {current}): {e}")
 
         try:
             pm = await bot.send_poll(
