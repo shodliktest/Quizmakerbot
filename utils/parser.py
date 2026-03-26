@@ -125,15 +125,27 @@ def _parse_block(block: str) -> dict | None:
     if not q_text:
         return None
 
-    opts   = []
-    corr   = None
-    expl   = ""
-    javob  = None
-    acc    = []
+    opts     = []
+    corr     = None
+    expl     = ""
+    javob    = None
+    acc      = []
+    photo_id = None
+
+    # Savol matni ichida [rasm: file_id] bor-yo'qligini tekshirish
+    pm_match = re.match(r'^\[rasm:\s*([^\]]+)\]\s*', q_text)
+    if pm_match:
+        photo_id = pm_match.group(1).strip()
+        q_text   = q_text[pm_match.end():].strip()
 
     for line in lines[1:]:
         ls = line.strip()
         if not ls:
+            continue
+
+        # [rasm: file_id] — alohida qatorda
+        if ls.startswith("[rasm:") and ls.endswith("]"):
+            photo_id = ls[6:-1].strip()
             continue
 
         # Izoh
@@ -201,7 +213,7 @@ def _parse_block(block: str) -> dict | None:
         corr = re.sub(r"^[*+]\s*", "", corr).strip()
         corr = re.sub(r"^===\s*", "", corr).strip()
 
-    return {
+    result = {
         "type":             qtype,
         "question":         q_text,
         "options":          clean_opts if qtype in ("multiple_choice", "multi_select") else [],
@@ -210,3 +222,6 @@ def _parse_block(block: str) -> dict | None:
         "accepted_answers": acc,
         "points":           1,
     }
+    if photo_id:
+        result["photo"] = photo_id
+    return result
