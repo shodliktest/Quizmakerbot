@@ -69,7 +69,7 @@ async def main():
     from handlers.roles_admin  import router as r_roles
     from handlers.referral        import router as r_referral
     from handlers.group_scheduler import router as r_scheduler
-    from handlers.photo_upload     import router as r_photo
+    from handlers.photo_upload    import router as r_photo
 
     bot = Bot(token=BOT_TOKEN,
               default=DefaultBotProperties(parse_mode=ParseMode.HTML, protect_content=True))
@@ -299,7 +299,7 @@ async def _main_no_signals():
     from handlers.roles_admin import router as r_roles
     from handlers.referral        import router as r_referral
     from handlers.group_scheduler import router as r_scheduler
-    from handlers.photo_upload     import router as r_photo
+    from handlers.photo_upload    import router as r_photo
 
     bot = Bot(token=BOT_TOKEN,
               default=DefaultBotProperties(parse_mode=ParseMode.HTML, protect_content=True))
