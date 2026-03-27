@@ -672,6 +672,8 @@ async def get_test_full(tid):
         _tests_cache[tid] = cached
         return cached
     msg_id = _index.get(f"test_{tid}")
+
+    # 1. fid_ (cache) orqali tez yuklab olishga urinish
     if msg_id and _index.get(f"fid_{msg_id}"):
         data = await _read_file(_index[f"fid_{msg_id}"])
         if data and data.get("questions"):
@@ -679,8 +681,11 @@ async def get_test_full(tid):
             ram.cache_questions(tid, data)
             log.info(f"✅ {tid} yuklandi ({len(data['questions'])} savol)")
             return data
-        else:
-            _index.pop(f"fid_{msg_id}", None)
+        # fid eskirgan — o'chirib, msg_id orqali qayta urinish
+        log.info(f"♻️ {tid} fid eskirgan, msg_id orqali qayta yuklanmoqda")
+        _index.pop(f"fid_{msg_id}", None)
+
+    # 2. msg_id yo'q bo'lsa — index ni qayta yuklab topishga urinish
     if not msg_id:
         new_index = await _load_index()
         if new_index:
@@ -696,18 +701,20 @@ async def get_test_full(tid):
         if not msg_id:
             log.info(f"ℹ️ {tid} msg_id yo'q")
             return {}
-    log.info(f"⬇️ Lazy load: {tid}")
+
+    # 3. msg_id bor — to'g'ridan Telegram'dan yuklab olish
+    log.info(f"⬇️ Lazy load: {tid} (msg_id={msg_id})")
     data = await _download_doc(msg_id)
     if data and data.get("questions"):
         _tests_cache[tid] = data
         ram.cache_questions(tid, data)
+        # Yangi fid_ ni saqlab qo'yish
+        if _index.get(f"fid_{msg_id}"):
+            await _save_index()
         return data
-    if not data:
-        for m in _index.get("tests_meta", []):
-            if m.get("test_id") == tid:
-                m["is_active"] = False
-                break
-        ram.update_test_meta(tid, {"is_active": False})
+    # Fayl topilmadi — is_active=False qilinmaydi, faqat log yoziladi
+    # (xabar o'chirilgan bo'lishi mumkin, lekin test hali mavjud)
+    log.warning(f"⚠️ {tid} yuklanmadi (msg_id={msg_id} o'chirilgan bo'lishi mumkin)")
     return {}
 
 async def get_tests():
@@ -892,6 +899,8 @@ async def _download_doc(msg_id):
         data = await _read_file(cached_fid)
         if data: return data
         _index.pop(fid_key, None)
+
+    # 1-urinish: copy + forward
     try:
         copied     = await _bot.copy_message(_cid, _cid, int(msg_id), protect_content=False)
         copied_mid = copied.message_id
@@ -903,9 +912,12 @@ async def _download_doc(msg_id):
         except: pass
         if doc2:
             _index[fid_key] = doc2.file_id
-            return await _read_file(doc2.file_id)
+            data = await _read_file(doc2.file_id)
+            if data: return data
     except Exception as e:
         log.debug(f"copy+forward {msg_id}: {e}")
+
+    # 2-urinish: to'g'ridan forward
     try:
         fwd = await _bot.forward_message(_cid, _cid, int(msg_id))
         doc = getattr(fwd, "document", None)
@@ -913,9 +925,25 @@ async def _download_doc(msg_id):
         except: pass
         if doc:
             _index[fid_key] = doc.file_id
-            return await _read_file(doc.file_id)
+            data = await _read_file(doc.file_id)
+            if data: return data
     except Exception as e:
-        log.error(f"download_doc {msg_id}: {e}")
+        log.error(f"download_doc forward {msg_id}: {e}")
+
+    # 3-urinish: get_messages (supergroup uchun)
+    try:
+        msgs = await _bot.get_messages(_cid, [int(msg_id)])
+        if msgs:
+            m   = msgs[0]
+            doc = getattr(m, "document", None)
+            if doc:
+                _index[fid_key] = doc.file_id
+                data = await _read_file(doc.file_id)
+                if data: return data
+    except Exception as e:
+        log.debug(f"get_messages {msg_id}: {e}")
+
+    log.error(f"❌ download_doc: {msg_id} hech qaysi usulda yuklanmadi")
     return {}
 
 async def _read_file(file_id):
