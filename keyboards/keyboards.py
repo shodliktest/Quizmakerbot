@@ -200,6 +200,9 @@ def admin_kb():
         InlineKeyboardButton(text="📢 Broadcast",  callback_data="admin_broadcast"),
     )
     b.row(
+        InlineKeyboardButton(text="📣 Guruh E'lon", callback_data="admin_group_broadcast"),
+    )
+    b.row(
         InlineKeyboardButton(text="⚡ RAM → TG", callback_data="adm_flush"),
         InlineKeyboardButton(text="🔄 TG → RAM", callback_data="adm_refresh"),
     )
