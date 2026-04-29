@@ -5,6 +5,7 @@ from aiogram.exceptions import TelegramBadRequest
 from utils import ram_cache as ram
 from handlers import webauth
 
+
 class ClearMenuMiddleware(BaseMiddleware):
     """Har yangi xabar yoki callback kelganda asosiy menyu xabarini o'chiradi"""
     async def __call__(self, handler, event, data):
@@ -34,6 +35,42 @@ class ClearMenuMiddleware(BaseMiddleware):
             if "query is too old" in str(e) or "query ID is invalid" in str(e):
                 return
             raise
+
+
+class GroupTrackerMiddleware(BaseMiddleware):
+    """
+    Guruhdan kelgan har bir xabar/callbackda guruhni
+    avtomatik ro'yxatga qo'shadi. Shu tarzda bot
+    avval qo'shilgan guruhlar ham saqlanadi.
+    """
+    async def __call__(self, handler, event, data):
+        chat = None
+        bot  = None
+        if isinstance(event, Message):
+            chat = event.chat
+            bot  = event.bot
+        elif isinstance(event, CallbackQuery) and event.message:
+            chat = event.message.chat
+            bot  = event.bot
+
+        if chat and chat.type in ("group", "supergroup"):
+            cid = str(chat.id)
+            existing = ram.get_known_groups().get(cid)
+            # Faqat noma'lum yoki yangi ma'lumot bo'lsa yangilaymiz
+            if not existing or not existing.get("active"):
+                try:
+                    mc = await bot.get_chat_member_count(chat.id)
+                except Exception:
+                    mc = existing.get("member_count", 0) if existing else 0
+                ram.add_known_group(
+                    chat_id=chat.id,
+                    title=chat.title or "Nomsiz guruh",
+                    username=getattr(chat, "username", "") or "",
+                    chat_type=chat.type,
+                    member_count=mc,
+                )
+
+        return await handler(event, data)
 
 
 
@@ -76,7 +113,8 @@ async def main():
     dp  = Dispatcher(storage=MemoryStorage())
     dp.message.middleware(ClearMenuMiddleware())
     dp.callback_query.middleware(ClearMenuMiddleware())
-
+    dp.message.middleware(GroupTrackerMiddleware())
+    dp.callback_query.middleware(GroupTrackerMiddleware())
 
     dp.include_router(r_inline)
     dp.include_router(r_poll_router)
@@ -130,7 +168,48 @@ async def main():
 
 # ── MIDNIGHT FLUSH — kuniga 1 marta, faqat 00:00 ──────────────
 
-async def _midnight_flush_loop(bot):
+async def _scan_groups_on_startup(bot):
+    """
+    Bot yoqilganda getUpdates tarixi orqali avval faol bo'lgan
+    guruhlarni topadi va ram_cache ga qo'shadi.
+
+    Telegram faqat oxirgi 100 update ni saqlaydi, shuning uchun
+    middleware orqali keyinchalik ham to'ldiriladi.
+    """
+    await asyncio.sleep(5)   # polling boshlangandan keyin
+    from utils import ram_cache as ram
+    try:
+        updates = await bot.get_updates(limit=100, offset=-100, timeout=3,
+                                        allowed_updates=["message", "callback_query",
+                                                         "my_chat_member"])
+        found = set()
+        for upd in updates:
+            chat = None
+            if upd.message and upd.message.chat.type in ("group", "supergroup"):
+                chat = upd.message.chat
+            elif (upd.callback_query and upd.callback_query.message and
+                  upd.callback_query.message.chat.type in ("group", "supergroup")):
+                chat = upd.callback_query.message.chat
+            elif upd.my_chat_member:
+                chat = upd.my_chat_member.chat
+
+            if chat and chat.type in ("group", "supergroup") and chat.id not in found:
+                found.add(chat.id)
+                try:
+                    mc = await bot.get_chat_member_count(chat.id)
+                except Exception:
+                    mc = 0
+                ram.add_known_group(
+                    chat_id=chat.id,
+                    title=chat.title or "Nomsiz",
+                    username=getattr(chat, "username", "") or "",
+                    chat_type=chat.type,
+                    member_count=mc,
+                )
+        if found:
+            log.info(f"✅ Startup guruh skani: {len(found)} ta guruh topildi")
+    except Exception as e:
+        log.warning(f"Startup guruh skani xato: {e}")
     """
     Har kun 00:00 UTC da:
     1. Kecha kunlik natijalarni TG ga yuboradi (backup)
@@ -336,6 +415,9 @@ async def _main_no_signals():
         settings = await tg_db.get_settings_tg()
         if settings: ram.set_all_settings(settings)
         log.info(f"✅ Yuklandi: {ram.stats()['tests']} test meta, {ram.stats()['users']} user")
+
+    # Startup da bot admin bo'lgan guruhlarni aniqlash
+    asyncio.create_task(_scan_groups_on_startup(bot))
 
     asyncio.create_task(_midnight_flush_loop(bot))
     asyncio.create_task(_users_auto_flush_loop(bot))
