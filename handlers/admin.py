@@ -503,6 +503,137 @@ async def broadcast_send(message: Message, state: FSMContext):
     except: pass
 
 
+# ══ GURUH E'LON ════════════════════════════════════════════════
+
+@router.callback_query(F.data == "admin_group_broadcast")
+async def group_broadcast_start(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    if not is_admin(callback.from_user.id): return
+
+    groups = ram.get_known_groups()
+    active = {cid: g for cid, g in groups.items() if g.get("active", True)}
+
+    if not active:
+        b = InlineKeyboardBuilder()
+        b.row(InlineKeyboardButton(text="⬅️ Admin", callback_data="admin_panel"))
+        try:
+            await callback.message.edit_text(
+                "📣 <b>Guruh E'lon</b>\n\n"
+                "⚠️ Hali hech qaysi guruh yo'q.\n"
+                "Bot biror guruhga qo'shilganda bu ro'yxat to'ladi.",
+                reply_markup=b.as_markup()
+            )
+        except TelegramBadRequest: pass
+        return
+
+    lines = [f"📣 <b>GURUH E'LON</b>\n"]
+    lines.append(f"Bot admin bo'lgan guruhlar: <b>{len(active)} ta</b>\n")
+    for i, (cid, g) in enumerate(active.items(), 1):
+        title    = g.get("title", "?")
+        members  = g.get("member_count", "?")
+        lines.append(f"{i}. <b>{title}</b> — {members} a'zo  <code>{cid}</code>")
+
+    lines.append("\n✍️ Xabar yozing (matn, rasm, video — hammasi qo'llab-quvvatlanadi):")
+
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="❌ Bekor", callback_data="admin_panel"))
+    try:
+        await callback.message.edit_text(
+            "\n".join(lines),
+            reply_markup=b.as_markup()
+        )
+    except TelegramBadRequest:
+        await callback.message.answer("\n".join(lines), reply_markup=b.as_markup())
+
+    await state.set_state(AdminPanel.group_broadcast)
+
+
+@router.message(AdminPanel.group_broadcast)
+async def group_broadcast_send(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await state.clear()
+        return
+
+    groups = ram.get_known_groups()
+    active = {cid: g for cid, g in groups.items() if g.get("active", True)}
+
+    if not active:
+        await state.clear()
+        return await message.answer("⚠️ Guruh topilmadi.")
+
+    status = await message.answer(f"⏳ <b>Guruhlarga yuborilmoqda...</b> 0/{len(active)}")
+    ok = fail = 0
+
+    for cid, g in active.items():
+        try:
+            # Xabar turini aniqlash va forward qilish
+            if message.text:
+                await message.bot.send_message(
+                    int(cid),
+                    message.text,
+                    parse_mode="HTML"
+                )
+            elif message.photo:
+                await message.bot.send_photo(
+                    int(cid),
+                    message.photo[-1].file_id,
+                    caption=message.caption or ""
+                )
+            elif message.video:
+                await message.bot.send_video(
+                    int(cid),
+                    message.video.file_id,
+                    caption=message.caption or ""
+                )
+            elif message.document:
+                await message.bot.send_document(
+                    int(cid),
+                    message.document.file_id,
+                    caption=message.caption or ""
+                )
+            elif message.sticker:
+                await message.bot.send_sticker(int(cid), message.sticker.file_id)
+            elif message.voice:
+                await message.bot.send_voice(int(cid), message.voice.file_id,
+                                             caption=message.caption or "")
+            elif message.video_note:
+                await message.bot.send_video_note(int(cid), message.video_note.file_id)
+            else:
+                await message.forward(int(cid))
+            ok += 1
+            # Guruh member sonini yangilab qo'yish
+            try:
+                mc = await message.bot.get_chat_member_count(int(cid))
+                g["member_count"] = mc
+            except: pass
+        except Exception as e:
+            fail += 1
+            log.warning(f"Guruh e'lon xato {cid} ({g.get('title','?')}): {e}")
+            # Bot guruhdan chiqarilgan bo'lsa belgilaymiz
+            err = str(e).lower()
+            if "bot was kicked" in err or "bot is not a member" in err or "chat not found" in err:
+                ram.remove_known_group(int(cid))
+
+        try:
+            await status.edit_text(f"⏳ {ok+fail}/{len(active)} | ✅{ok} ❌{fail}")
+        except: pass
+
+    await state.clear()
+
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="📣 Yana e'lon", callback_data="admin_group_broadcast"))
+    b.row(InlineKeyboardButton(text="⬅️ Admin", callback_data="admin_panel"))
+    try:
+        await status.edit_text(
+            f"✅ <b>Guruh E'lon tugadi</b>\n\n"
+            f"✅ Yuborildi: <b>{ok}</b> ta guruh\n"
+            f"❌ Xato: <b>{fail}</b> ta\n"
+            f"📊 Jami guruhlar: <b>{len(active)}</b>",
+            reply_markup=b.as_markup()
+        )
+    except: pass
+
+
 # ══ FLUSH / REFRESH ════════════════════════════════════════════
 @router.callback_query(F.data == "adm_flush")
 async def adm_flush(callback: CallbackQuery):

@@ -1413,26 +1413,55 @@ async def _is_admin(bot, chat_id: int, uid: int) -> bool:
 
 @router.my_chat_member()
 async def on_bot_added(event: ChatMemberUpdated):
+    from utils import ram_cache as ram
     new_status = event.new_chat_member.status
-    if new_status in ("member","administrator") and event.chat.type in ("group","supergroup"):
-        bot_info = await event.bot.me()
-        b = InlineKeyboardBuilder()
-        b.row(InlineKeyboardButton(
-            text="📚 Testlarni ko'rish",
-            url=f"https://t.me/{bot_info.username}"
-        ))
+    old_status = event.old_chat_member.status
+    chat       = event.chat
+
+    if chat.type not in ("group", "supergroup"):
+        return
+
+    # Bot chiqarildi yoki kicked
+    if new_status in ("left", "kicked", "restricted"):
+        ram.remove_known_group(chat.id)
+        log.info(f"Guruhdan chiqarildi: {chat.title} ({chat.id})")
+        return
+
+    # Bot qo'shildi yoki admin bo'ldi
+    if new_status in ("member", "administrator"):
         try:
-            await event.bot.send_message(
-                event.chat.id,
-                f"👋 <b>Quiz Bot</b> guruhga qo'shildi! 🎉\n\n"
-                f"📊 <b>Poll usuli:</b> Telegram native poll savollar\n"
-                f"👥 <b>Inline usuli:</b> Tugmalar + countdown timer\n\n"
-                f"Botga yuborilgan testda:\n"
-                f"  • <b>\"📊 Quiz Poll\"</b> — poll usuli\n"
-                f"  • <b>\"👥 Guruhda (Inline)\"</b> — inline usuli\n\n"
-                f"<i>💡 Poll uchun botga admin huquqi kerak.</i>",
-                reply_markup=b.as_markup()
-            ,
-                protect_content=True)
-        except Exception as e:
-            log.warning(f"Guruh xabar: {e}")
+            member_count = await event.bot.get_chat_member_count(chat.id)
+        except:
+            member_count = 0
+        ram.add_known_group(
+            chat_id=chat.id,
+            title=chat.title or "Nomsiz guruh",
+            username=getattr(chat, "username", "") or "",
+            chat_type=chat.type,
+            member_count=member_count,
+        )
+        log.info(f"Guruhga qo'shildi: {chat.title} ({chat.id}), a'zolar: {member_count}")
+
+        if old_status in ("left", "kicked"):
+            # Faqat yangi qo'shilganda xabar yuborish
+            bot_info = await event.bot.me()
+            b = InlineKeyboardBuilder()
+            b.row(InlineKeyboardButton(
+                text="📚 Testlarni ko'rish",
+                url=f"https://t.me/{bot_info.username}"
+            ))
+            try:
+                await event.bot.send_message(
+                    chat.id,
+                    f"👋 <b>Quiz Bot</b> guruhga qo'shildi! 🎉\n\n"
+                    f"📊 <b>Poll usuli:</b> Telegram native poll savollar\n"
+                    f"👥 <b>Inline usuli:</b> Tugmalar + countdown timer\n\n"
+                    f"Botga yuborilgan testda:\n"
+                    f"  • <b>\"📊 Quiz Poll\"</b> — poll usuli\n"
+                    f"  • <b>\"👥 Guruhda (Inline)\"</b> — inline usuli\n\n"
+                    f"<i>💡 Poll uchun botga admin huquqi kerak.</i>",
+                    reply_markup=b.as_markup(),
+                    protect_content=True
+                )
+            except Exception as e:
+                log.warning(f"Guruh xabar: {e}")

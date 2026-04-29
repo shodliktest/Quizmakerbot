@@ -488,10 +488,14 @@ async def edit_title_input(message: Message, state: FSMContext):
     from utils.ram_cache import update_test_meta, get_test_meta
     from utils import tg_db
     update_test_meta(tid, {"title": new_title})
-    await tg_db.update_test_meta_tg(tid, {"title": new_title})
+    try:
+        await tg_db.update_test_meta_tg(tid, {"title": new_title})
+    except Exception as e:
+        log.error(f"edit_title TG save xato: {e}")
     meta = get_test_meta(tid) or {}
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="⚙️ Sozlamalar", callback_data=f"mytest_settings_{tid}"))
+    b.row(InlineKeyboardButton(text="⬅️ Mening testlarim", callback_data="back_to_mytests"))
     await message.answer(
         f"✅ <b>Test nomi o'zgartirildi!</b>\n\n"
         f"📝 Yangi nom: <b>{new_title}</b>\n"
@@ -525,14 +529,17 @@ async def set_att_cb(callback: CallbackQuery):
     new_att = int(parts[-1])
     tid     = "_".join(parts[2:-1])
     from utils.ram_cache import update_test_meta, get_test_meta
+    from utils import tg_db
     update_test_meta(tid, {"max_attempts": new_att})
+    asyncio.create_task(tg_db.update_test_meta_tg(tid, {"max_attempts": new_att}))
     att_t = f"{new_att} marta" if new_att else "Cheksiz"
     meta  = get_test_meta(tid) or {}
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="Sozlamalar", callback_data=f"mytest_settings_{tid}"))
+    b.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"mytest_settings_{tid}"))
     await callback.message.edit_text(
-        f"Urinishlar soni yangilandi: {att_t}\n"
-        f"Test: {meta.get('title', tid)}",
+        f"✅ <b>Urinishlar soni yangilandi!</b>\n\n"
+        f"🔄 Urinish: <b>{att_t}</b>\n"
+        f"📝 Test: {meta.get('title', tid)}",
         reply_markup=b.as_markup()
     )
 
@@ -575,24 +582,27 @@ async def set_poll_time_cb(callback: CallbackQuery):
     from utils.ram_cache import update_test_meta
     from utils import tg_db
     update_test_meta(tid, {"poll_time": new_sec})
-    tg_db.mark_stats_dirty()
-    # Index + test_XXX.json ham yangilanadi
-    import asyncio
+    # TG indexda va test_XXX.json da ham yangilash
     async def _save_poll_time():
-        await tg_db.update_test_meta_tg(tid, {"poll_time": new_sec})
-        # test_XXX.json ni ham qayta yozish
-        test = await tg_db.get_test_full(tid)
-        if test:
-            test["poll_time"] = new_sec
-            await tg_db.save_test_full(test)
+        try:
+            await tg_db.update_test_meta_tg(tid, {"poll_time": new_sec})
+            # test_XXX.json ni ham qayta yozish (to'liq fayl)
+            test = await tg_db.get_test_full(tid)
+            if test and test.get("questions"):
+                test["poll_time"] = new_sec
+                await tg_db.save_test_full(test)
+        except Exception as e:
+            log.error(f"set_poll_time TG save xato: {e}")
     asyncio.create_task(_save_poll_time())
     meta = get_test_meta(tid) or {}
     b    = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="⚙️ Sozlamalar", callback_data=f"mytest_settings_{tid}"))
+    b.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"edit_poll_time_{tid}"))
     try:
         await callback.message.edit_text(
-            f"✅ Poll vaqti <b>{new_sec}s</b> ga o'zgartirildi!\n"
-            f"Test: {meta.get('title', tid)}",
+            f"✅ <b>Poll vaqti o'zgartirildi!</b>\n\n"
+            f"⏱ Yangi vaqt: <b>{new_sec}s</b>/savol\n"
+            f"📝 Test: {meta.get('title', tid)}",
             reply_markup=b.as_markup()
         )
     except Exception: pass
@@ -657,8 +667,12 @@ async def allowed_clear_cb(callback: CallbackQuery):
     from utils import tg_db
     update_test_meta(tid, {"allowed_users": []})
     tg_db.mark_stats_dirty()
-    import asyncio
-    asyncio.create_task(tg_db.update_test_meta_tg(tid, {"allowed_users": []}))
+    async def _clear_allowed():
+        try:
+            await tg_db.update_test_meta_tg(tid, {"allowed_users": []})
+        except Exception as e:
+            log.error(f"allowed_clear TG save xato: {e}")
+    asyncio.create_task(_clear_allowed())
     await callback.answer("🔓 Hammaga ochildi!", show_alert=True)
     await edit_allowed_cb(callback)
 
@@ -802,7 +816,12 @@ async def allowed_ids_received(message: Message, state: FSMContext):
 
     update_test_meta(tid, {"allowed_users": result})
     tg_db.mark_stats_dirty()
-    asyncio.create_task(tg_db.update_test_meta_tg(tid, {"allowed_users": result}))
+    async def _save_allowed():
+        try:
+            await tg_db.update_test_meta_tg(tid, {"allowed_users": result})
+        except Exception as e:
+            log.error(f"allowed_ids TG save xato: {e}")
+    asyncio.create_task(_save_allowed())
 
     status  = f"🔐 {len(result)} ta foydalanuvchi" if result else "🔓 Hammaga ochiq"
     ids_txt = ", ".join(str(i) for i in result) if result else "yo'q"
