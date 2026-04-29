@@ -24,9 +24,10 @@ class CreateTest(StatesGroup):
     set_visibility = State()
 
 class AdminPanel(StatesGroup):
-    broadcast   = State()
-    block_user  = State()
-    delete_test = State()
+    broadcast         = State()
+    block_user        = State()
+    delete_test       = State()
+    group_broadcast   = State()
 
 class ContactAdmin(StatesGroup):
     waiting_message = State()

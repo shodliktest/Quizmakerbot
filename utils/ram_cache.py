@@ -652,3 +652,38 @@ def get_all_custom_subjects():
 
 def set_all_custom_subjects(d):
     _set("user_custom_subjects", d)
+
+
+# ══ GURUHLAR (bot admin bo'lgan guruhlar) ══════════════════════
+
+def get_known_groups() -> dict:
+    """
+    {str(chat_id): {chat_id, title, username, type, added_at, active}}
+    """
+    return _get("known_groups", {})
+
+def add_known_group(chat_id: int, title: str, username: str = "",
+                    chat_type: str = "supergroup", member_count: int = 0):
+    groups = _get("known_groups", {})
+    cid    = str(chat_id)
+    groups[cid] = {
+        "chat_id":      chat_id,
+        "title":        title,
+        "username":     username or "",
+        "type":         chat_type,
+        "member_count": member_count,
+        "added_at":     groups.get(cid, {}).get("added_at",
+                        datetime.now(UTC).strftime("%Y-%m-%d %H:%M")),
+        "active":       True,
+    }
+    _set("known_groups", groups)
+
+def remove_known_group(chat_id: int):
+    groups = _get("known_groups", {})
+    cid    = str(chat_id)
+    if cid in groups:
+        groups[cid]["active"] = False
+        _set("known_groups", groups)
+
+def set_known_groups(d: dict):
+    _set("known_groups", d)
