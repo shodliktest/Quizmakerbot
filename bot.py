@@ -172,11 +172,8 @@ async def _scan_groups_on_startup(bot):
     """
     Bot yoqilganda getUpdates tarixi orqali avval faol bo'lgan
     guruhlarni topadi va ram_cache ga qo'shadi.
-
-    Telegram faqat oxirgi 100 update ni saqlaydi, shuning uchun
-    middleware orqali keyinchalik ham to'ldiriladi.
     """
-    await asyncio.sleep(5)   # polling boshlangandan keyin
+    await asyncio.sleep(5)
     from utils import ram_cache as ram
     try:
         updates = await bot.get_updates(limit=100, offset=-100, timeout=3,
@@ -210,6 +207,9 @@ async def _scan_groups_on_startup(bot):
             log.info(f"✅ Startup guruh skani: {len(found)} ta guruh topildi")
     except Exception as e:
         log.warning(f"Startup guruh skani xato: {e}")
+
+
+async def _midnight_flush_loop(bot):
     """
     Har kun 00:00 UTC da:
     1. Kecha kunlik natijalarni TG ga yuboradi (backup)
@@ -227,27 +227,21 @@ async def _scan_groups_on_startup(bot):
                 log.info("🌙 Midnight flush boshlanmoqda...")
                 from utils import tg_db, ram_cache as ram
 
-                # Kecha sanasi (chunki 00:00 da kecha tugagan)
                 yesterday = str(today - timedelta(days=1))
                 daily     = ram.get_daily()
                 users     = ram.get_users()
                 settings  = ram.get_all_settings()
 
                 if tg_db.ready():
-                    # 1. Kunlik backup
                     if daily:
                         mid = await tg_db.upload_backup(daily, yesterday)
                         log.info(f"✅ Backup yuborildi: {yesterday} msg={mid}")
-                    # 2. Users
                     await tg_db.save_users(users)
                     ram.clear_users_dirty()
-                    # 3. Settings
                     await tg_db.save_settings(settings)
-                    # 4. RAM daily tozalash (yangi kun uchun)
                     ram.clear_daily()
                     log.info("✅ Midnight flush yakunlandi, daily RAM tozalandi")
 
-                # Admin ga xabar
                 for aid in ADMIN_IDS:
                     try:
                         await bot.send_message(
