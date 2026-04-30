@@ -297,11 +297,19 @@ async def test_resume_cb(callback: CallbackQuery):
 async def back_main(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.answer()
-    try: await callback.message.delete()
-    except: pass
-    uid  = callback.from_user.id
+    uid = callback.from_user.id
+    # Faqat inline keyboard ni tozalaymiz — xabarni O'CHIRMAYMIZ
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    # Keyboard doim pastda turishi uchun qayta yuboramiz
     from utils import ram_cache as ram
-    msg  = await callback.bot.send_message(uid, "🏠 <b>Asosiy menyu</b> 👇", reply_markup=main_kb(uid, "private"))
+    msg = await callback.bot.send_message(
+        uid,
+        "🏠 <b>Asosiy menyu</b> 👇",
+        reply_markup=main_kb(uid, "private")
+    )
     ram.set_menu_msg(uid, uid, msg.message_id)
 
 @router.callback_query(F.data == "noop")
