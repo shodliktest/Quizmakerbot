@@ -83,10 +83,10 @@ def main_kb(uid=None, chat_type="private"):
     if chat_type != "private":
         return ReplyKeyboardRemove()
     kb = [
-        [KeyboardButton(text="📚 Testlar"),         KeyboardButton(text="➕ Test Yaratish")],
-        [KeyboardButton(text="📊 Natijalarim"),      KeyboardButton(text="🏆 Reyting")],
-        [KeyboardButton(text="🗂 Mening testlarim"), KeyboardButton(text="👥 Referallarim")],
-        [KeyboardButton(text="👤 Profil"),           KeyboardButton(text="ℹ️ Yordam")],
+        [KeyboardButton(text="📚 Testlar"),          KeyboardButton(text="➕ Test Yaratish")],
+        [KeyboardButton(text="📊 Natijalarim"),       KeyboardButton(text="🏆 Reyting")],
+        [KeyboardButton(text="🗂 Mening testlarim"),  KeyboardButton(text="👥 Referallarim")],
+        [KeyboardButton(text="👤 Profil"),            KeyboardButton(text="ℹ️ Yordam")],
     ]
     if uid:
         from config import ADMIN_IDS
@@ -95,7 +95,12 @@ def main_kb(uid=None, chat_type="private"):
                 KeyboardButton(text="👑 Admin Panel"),
                 KeyboardButton(text="⚙️ Sozlamalar"),
             ])
-    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True, persistent=True)
+    return ReplyKeyboardMarkup(
+        keyboard=kb,
+        resize_keyboard=True,
+        persistent=True,
+        is_persistent=True,
+    )
 
 
 # ── Test kartochkasi (katalogda) ──────────────────────────────
