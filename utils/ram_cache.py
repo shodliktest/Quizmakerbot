@@ -604,6 +604,10 @@ def load_history_to_ram(history_dict):
 def set_menu_msg(uid, cid, msg_id):
     _set(f"menu_msg_{uid}", {"cid": cid, "mid": msg_id})
 
+def get_menu_msg(uid):
+    with _lck:
+        return _RAM.get(f"menu_msg_{uid}")
+
 def pop_menu_msg(uid):
     with _lck:
         return _RAM.pop(f"menu_msg_{uid}", None)
