@@ -7,7 +7,10 @@ from handlers import webauth
 
 
 class ClearMenuMiddleware(BaseMiddleware):
-    """Har yangi xabar yoki callback kelganda asosiy menyu xabarini o'chiradi"""
+    """
+    Xabarni O'CHIRMAYDI — chunki o'chirilsa pastdagi ReplyKeyboard yo'qoladi.
+    Faqat inline keyboard ni tozalaydi (edit).
+    """
     async def __call__(self, handler, event, data):
         uid = None
         bot = None
@@ -21,17 +24,21 @@ class ClearMenuMiddleware(BaseMiddleware):
             bot = event.bot
 
         if uid and bot:
-            menu = ram.pop_menu_msg(uid)
+            menu = ram.get_menu_msg(uid)
             if menu:
                 try:
-                    await bot.delete_message(menu["cid"], menu["mid"])
+                    await bot.edit_message_reply_markup(
+                        chat_id=menu["cid"],
+                        message_id=menu["mid"],
+                        reply_markup=None
+                    )
                 except Exception:
                     pass
+                ram.pop_menu_msg(uid)
 
         try:
             return await handler(event, data)
         except TelegramBadRequest as e:
-            # Eski callback query (bot restart dan keyin) — yutib yuboramiz
             if "query is too old" in str(e) or "query ID is invalid" in str(e):
                 return
             raise
@@ -170,43 +177,12 @@ async def main():
 
 async def _scan_groups_on_startup(bot):
     """
-    Bot yoqilganda getUpdates tarixi orqali avval faol bo'lgan
-    guruhlarni topadi va ram_cache ga qo'shadi.
+    Bot yoqilganda get_chat_administrators orqali guruhlarni topish.
+    get_updates ishlatilmaydi — conflict oldini olish uchun.
+    Middleware har xabar kelganda guruhni avtomatik qo'shadi.
     """
-    await asyncio.sleep(5)
-    from utils import ram_cache as ram
-    try:
-        updates = await bot.get_updates(limit=100, offset=-100, timeout=3,
-                                        allowed_updates=["message", "callback_query",
-                                                         "my_chat_member"])
-        found = set()
-        for upd in updates:
-            chat = None
-            if upd.message and upd.message.chat.type in ("group", "supergroup"):
-                chat = upd.message.chat
-            elif (upd.callback_query and upd.callback_query.message and
-                  upd.callback_query.message.chat.type in ("group", "supergroup")):
-                chat = upd.callback_query.message.chat
-            elif upd.my_chat_member:
-                chat = upd.my_chat_member.chat
-
-            if chat and chat.type in ("group", "supergroup") and chat.id not in found:
-                found.add(chat.id)
-                try:
-                    mc = await bot.get_chat_member_count(chat.id)
-                except Exception:
-                    mc = 0
-                ram.add_known_group(
-                    chat_id=chat.id,
-                    title=chat.title or "Nomsiz",
-                    username=getattr(chat, "username", "") or "",
-                    chat_type=chat.type,
-                    member_count=mc,
-                )
-        if found:
-            log.info(f"✅ Startup guruh skani: {len(found)} ta guruh topildi")
-    except Exception as e:
-        log.warning(f"Startup guruh skani xato: {e}")
+    await asyncio.sleep(10)
+    log.info("Guruh startup skani: middleware orqali avtomatik to'ldiriladi")
 
 
 async def _midnight_flush_loop(bot):
@@ -322,20 +298,33 @@ if __name__ == "__main__":
 
 # ── Streamlit uchun background thread ────────────────────────
 
-_bot_thread = None
+_bot_thread    = None
+_BOT_LOCK_FILE = "/tmp/quizmakerbot.lock"
+
 
 def run_in_background():
     """
     streamlit_app.py tomonidan chaqiriladi.
-    Allaqachon ishlaётgan bo'lsa — qayta ishga tushirmaydi (Conflict oldini olish).
+    OS lock fayl orqali faqat BITTA instance ishlashini ta'minlaydi.
     """
     global _bot_thread
-    import threading
+    import threading, fcntl, os
 
-    # Allaqachon ishlaётgan thread bormi?
+    # 1. Thread allaqachon ishlayaptimi?
     if _bot_thread is not None and _bot_thread.is_alive():
-        log.info("⚠️ Bot thread allaqachon ishlaёtibdi — qayta ishga tushirilmadi")
+        log.info("Bot thread allaqachon ishlayapti — qayta tushirilmadi")
         return _bot_thread
+
+    # 2. Lock fayl — boshqa process ishlayaptimi?
+    try:
+        lock_fd = open(_BOT_LOCK_FILE, "w")
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock_fd.write(str(os.getpid()))
+        lock_fd.flush()
+        log.info(f"Bot lock olindi: {_BOT_LOCK_FILE}")
+    except BlockingIOError:
+        log.warning("Boshqa bot instance ishlayapti — bu instance ishga tushmaydi")
+        return None
 
     def _run():
         import asyncio
@@ -350,10 +339,16 @@ def run_in_background():
                 loop.close()
             except Exception:
                 pass
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                lock_fd.close()
+                os.unlink(_BOT_LOCK_FILE)
+            except Exception:
+                pass
 
     _bot_thread = threading.Thread(target=_run, daemon=True, name="TelegramBot")
     _bot_thread.start()
-    log.info("✅ Bot thread ishga tushdi")
+    log.info("Bot thread ishga tushdi")
     return _bot_thread
 
 
