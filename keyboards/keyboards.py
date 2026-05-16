@@ -205,7 +205,8 @@ def admin_kb():
         InlineKeyboardButton(text="📢 Broadcast",  callback_data="admin_broadcast"),
     )
     b.row(
-        InlineKeyboardButton(text="📣 Guruh E'lon", callback_data="admin_group_broadcast"),
+        InlineKeyboardButton(text="📣 Guruh E'lon",    callback_data="admin_group_broadcast"),
+        InlineKeyboardButton(text="🗑 O'chirilganlar", callback_data="admin_deleted_tests"),
     )
     b.row(
         InlineKeyboardButton(text="⚡ RAM → TG", callback_data="adm_flush"),
@@ -260,14 +261,17 @@ def mytest_settings_kb(tid, is_paused=False):
     b.row(InlineKeyboardButton(text="👁 Ko'rish",          callback_data=f"mytest_view_{tid}"))
     b.row(
         InlineKeyboardButton(text="📤 Ulashish",           switch_inline_query=f"test_{tid}"),
+        InlineKeyboardButton(text="🔍 Demo ulashish",      switch_inline_query=f"demo_{tid}"),
+    )
+    b.row(
         InlineKeyboardButton(text="📊 Kim yechgan",        callback_data=f"test_solvers_{tid}_0"),
+        InlineKeyboardButton(text="📄 TXT yuklab olish",   callback_data=f"mytest_txt_{tid}"),
     )
     b.row(
         InlineKeyboardButton(
             text="▶️ Davom ettirish" if is_paused else "⏸ To'xtatib qo'yish",
             callback_data=f"test_resume_{tid}" if is_paused else f"test_pause_{tid}"
         ),
-        InlineKeyboardButton(text="📄 TXT yuklab olish",   callback_data=f"mytest_txt_{tid}"),
     )
     b.row(
         InlineKeyboardButton(text="✏️ Nomini o'zgartirish", callback_data=f"edit_title_{tid}"),
