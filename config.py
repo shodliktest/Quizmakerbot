@@ -15,6 +15,7 @@ BOT_TOKEN:           str  = _s("BOT_TOKEN", "")
 _raw                      = str(_s("ADMIN_IDS", "123456789"))
 ADMIN_IDS:           list = [int(x.strip()) for x in _raw.split(",") if x.strip().isdigit()]
 ADMIN_PASSWORD:      str  = _s("ADMIN_PASSWORD", "admin123")
+ADMIN_USERNAME:      str  = _s("ADMIN_USERNAME", "Shodlikai")
 
 # Yopiq Telegram kanal — bot shu kanalga admin (post + pin huquqi)
 STORAGE_CHANNEL_ID:  int  = int(_s("STORAGE_CHANNEL_ID", "0"))
