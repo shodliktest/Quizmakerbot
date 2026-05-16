@@ -95,18 +95,18 @@ async def init(bot, channel_id):
 
     log.info(f"Meta yuklandi: {len(_meta.get('index_chunks',[]))} index chunk")
 
-    await _load_all_index_chunks()
+    # Tezkor yuklash — faqat fid orqali (kanal skanerlashsiz)
+    # Bot polling shu qadar tezroq boshlanadi
+    await _load_all_index_chunks_fast()
     await _load_tests_stats()
-    await _load_users_list()
-    await _load_leaderboard()
-    await load_known_groups()
 
-    if _stats_dirty:
-        await save_tests_stats()
-    if _users_dirty:
-        await _flush_users_list()
+    # Users va guruhlar — background da yuklanadi (bot allaqachon ishlaydi)
+    asyncio.create_task(_load_users_list())
+    asyncio.create_task(load_known_groups())
+    asyncio.create_task(_load_leaderboard())
 
-    log.info(f"Tayyor: {len(_index.get('tests_meta',[]))} test meta yuklandi")
+    log.info(f"Tayyor (tez): {len(_index.get('tests_meta',[]))} test meta yuklandi")
+    log.info("Users, guruhlar va leaderboard background da yuklanmoqda...")
 
 
 def ready():
@@ -445,6 +445,65 @@ async def _save_meta():
 # INDEX CHUNKS — xavfsiz saqlash
 # ══════════════════════════════════════════════════════════════
 
+async def _load_all_index_chunks_fast():
+    """
+    TEZKOR yuklash — faqat mavjud fid/msg_id dan o'qiydi.
+    Kanal skanerlashsiz. Bot polling tezroq boshlanadi.
+    Agar ma'lumotlar to'liq bo'lmasa — background da to'liq skan ishga tushadi.
+    """
+    chunks    = _meta.get("index_chunks", [])
+    all_metas = []
+
+    for ch in chunks:
+        fid = ch.get("fid")
+        mid = ch.get("msg_id")
+        data = {}
+        if fid:
+            data = await _read_file(fid)
+        if not data and mid:
+            data = await _download_doc(mid)
+        if not data:
+            continue
+        for m in data.get("tests_meta", []):
+            if not any(x.get("test_id") == m.get("test_id") for x in all_metas):
+                all_metas.append(m)
+        for k, v in data.items():
+            if k.startswith("test_") or k.startswith("fid_"):
+                _index[k] = v
+
+    _index["tests_meta"] = all_metas
+
+    # Kutilgan va yuklangan sonini solishtirish
+    expected = sum(ch.get("count", 0) for ch in chunks)
+    actual   = len(all_metas)
+    log.info(f"Tezkor yuklash: {actual} test meta (kutilgan: {expected})")
+
+    # Agar to'liq emas — background da to'liq skanerlash
+    need_full = (
+        not all_metas
+        or (expected > 0 and actual < expected * 0.5)
+        or (expected == 0 and actual <= 1 and chunks)
+    )
+    if need_full:
+        log.warning(f"Ma'lumotlar to'liq emas — background skanerlash boshlanadi...")
+        asyncio.create_task(_background_full_rescan())
+
+
+async def _background_full_rescan():
+    """
+    Background da to'liq kanal skanerlash.
+    Bot polling ishlayotgan paytda amalga oshadi.
+    """
+    await asyncio.sleep(3)   # Polling boshlangandan keyin
+    log.info("⬇️ Background to'liq skanerlash boshlandi...")
+    result = await _migrate_from_old_index()
+    if result:
+        log.info(f"✅ Background skanerlash tugadi: "
+                 f"{len(_index.get('tests_meta',[]))} test meta tiklandi")
+    else:
+        log.warning("Background skanerlash natija bermadi")
+
+
 async def _load_all_index_chunks():
     chunks    = _meta.get("index_chunks", [])
     all_metas = []
@@ -491,13 +550,25 @@ async def _load_all_index_chunks():
         log.info(f"  chunk {ch.get('n')}: {loaded} yangi + "
                  f"{len(data.get('tests_meta',[]))-loaded} mavjud test meta")
 
-    # Agar hech narsa yuklanmasa — kanaldan qidirish
-    if not all_metas and chunks:
-        log.warning("Barcha chunklar bo'sh — kanaldan qayta skanerlash...")
-        all_metas = await _recover_index_from_channel()
-        meta_updated = True
-    elif not all_metas and not chunks:
-        log.warning("index_chunks bo'sh — kanaldan qidirilmoqda...")
+    # Kutilgan test soni bilan solishtirish
+    expected_total = sum(ch.get("count", 0) for ch in chunks)
+    actual_total   = len(all_metas)
+
+    # Kanal skanerlash kerak bo'lgan holatlar:
+    # 1. Hech narsa yuklanmadi
+    # 2. Yuklanganlar kutilgandan 2x kam (chunk eskirgan)
+    need_rescan = (
+        not all_metas
+        or (expected_total > 0 and actual_total < expected_total * 0.5)
+        or (expected_total == 0 and actual_total <= 1 and chunks)
+    )
+
+    if need_rescan:
+        log.warning(
+            f"Chunk ma'lumotlari to'liq emas "
+            f"(yuklandi: {actual_total}, kutilgan: {expected_total}) "
+            f"— kanaldan qayta skanerlash..."
+        )
         all_metas = await _recover_index_from_channel()
         meta_updated = True
 
