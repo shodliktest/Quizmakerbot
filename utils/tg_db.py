@@ -77,15 +77,21 @@ async def init(bot, channel_id):
 
     _meta = await _load_meta()
     if not _meta:
-        log.info("Yangi baza yaratilmoqda...")
-        _meta = {
-            "index_chunks":      [],
-            "users_list_chunks": [],
-            "user_stats_chunks": [],
-            "backups":           {},
-        }
-        await _save_meta()
-        return
+        # Yangi meta topilmadi — eski index.json formatini tekshirish
+        log.info("index_meta topilmadi — eski format tekshirilmoqda...")
+        _meta = await _migrate_from_old_index()
+        if _meta:
+            log.info("✅ Eski format migratsiya qilindi!")
+        else:
+            log.info("Yangi baza yaratilmoqda...")
+            _meta = {
+                "index_chunks":      [],
+                "users_list_chunks": [],
+                "user_stats_chunks": [],
+                "backups":           {},
+            }
+            await _save_meta()
+            return
 
     log.info(f"Meta yuklandi: {len(_meta.get('index_chunks',[]))} index chunk")
 
@@ -93,6 +99,7 @@ async def init(bot, channel_id):
     await _load_tests_stats()
     await _load_users_list()
     await _load_leaderboard()
+    await load_known_groups()
 
     if _stats_dirty:
         await save_tests_stats()
@@ -124,6 +131,153 @@ def is_dirty():
 # ══════════════════════════════════════════════════════════════
 # INDEX META — pinned kichik fayl
 # ══════════════════════════════════════════════════════════════
+
+async def _migrate_from_old_index() -> dict:
+    """
+    Eski index.json formatidan yangi chunked formatga o'tkazish.
+
+    Eski format (bitta katta fayl):
+      {tests_meta: [...], test_TID: msg_id, fid_MSG: fid,
+       users: {...}, leaderboard_msg_id: ..., ...}
+
+    Yangi format:
+      index_meta.json (kichik) + index_chunk_N.json lar
+    """
+    if not ready(): return {}
+
+    # Pin dan o'qi — eski format ham pin qilingan bo'lishi mumkin
+    old_data = {}
+    try:
+        chat = await _bot.get_chat(_cid)
+        pin  = getattr(chat, "pinned_message", None)
+        if pin:
+            doc = getattr(pin, "document", None)
+            if doc and doc.file_name and doc.file_name.lower().endswith(".json"):
+                data = await _read_file(doc.file_id)
+                if isinstance(data, dict) and "tests_meta" in data:
+                    old_data = data
+                    log.info(f"Eski index.json pindan topildi: "
+                             f"{len(data.get('tests_meta',[]))} test")
+    except Exception as e:
+        log.warning(f"Eski pin o'qish: {e}")
+
+    # Pin da topilmasa — oxirgi 200 xabarni skanerlash
+    if not old_data:
+        try:
+            probe = await _bot.send_message(_cid, ".", protect_content=False)
+            cur   = probe.message_id
+            await _bot.delete_message(_cid, cur)
+            for mid in range(cur - 1, max(1, cur - 200), -1):
+                try:
+                    fwd = await _bot.forward_message(_cid, _cid, mid)
+                    doc = getattr(fwd, "document", None)
+                    try:
+                        await _bot.delete_message(_cid, fwd.message_id)
+                    except: pass
+                    if doc and doc.file_name and doc.file_name.lower().endswith(".json"):
+                        data = await _read_file(doc.file_id)
+                        if isinstance(data, dict) and "tests_meta" in data:
+                            old_data = data
+                            log.info(f"Eski index.json topildi (msg {mid}): "
+                                     f"{len(data.get('tests_meta',[]))} test")
+                            break
+                    await asyncio.sleep(0.05)
+                except: pass
+        except Exception as e:
+            log.warning(f"Eski index skanerlash: {e}")
+
+    if not old_data:
+        return {}
+
+    # Eski ma'lumotlarni yangi formatga ko'chirish
+    global _index
+    _index["tests_meta"] = old_data.get("tests_meta", [])
+
+    # test_{tid} va fid_ larni _index ga ko'chirish
+    for k, v in old_data.items():
+        if k.startswith("test_") or k.startswith("fid_"):
+            _index[k] = v
+
+    # ── KANALDAN BARCHA test_XXX.json FAYLLARNI TIKLASH ──────────
+    # tests_meta to'liq bo'lmasligi mumkin, shuning uchun kanal skan qilamiz
+    log.info("Kanal tarixidan test fayllar tiklanmoqda (2000 xabar)...")
+    recovered_tids = {m.get("test_id") for m in _index.get("tests_meta", [])}
+    try:
+        probe = await _bot.send_message(_cid, ".", protect_content=False)
+        cur   = probe.message_id
+        await _bot.delete_message(_cid, cur)
+        scan_count = 0
+        for mid in range(cur - 1, max(1, cur - 2000), -1):
+            try:
+                fwd = await _bot.forward_message(_cid, _cid, mid)
+                doc = getattr(fwd, "document", None)
+                try:
+                    await _bot.delete_message(_cid, fwd.message_id)
+                except: pass
+                if doc and doc.file_name:
+                    fname = doc.file_name.lower()
+                    if (fname.startswith("test_") and fname.endswith(".json")
+                            and "deleted" not in fname and "chunk" not in fname
+                            and "stats" not in fname and "backup" not in fname
+                            and "meta" not in fname):
+                        data = await _read_file(doc.file_id)
+                        if (isinstance(data, dict) and data.get("test_id")
+                                and data.get("questions")):
+                            tid = data["test_id"]
+                            scan_count += 1
+                            _index[f"test_{tid}"] = mid
+                            _index[f"fid_{mid}"]  = doc.file_id
+                            if tid not in recovered_tids:
+                                recovered_tids.add(tid)
+                                meta = {k: v for k, v in data.items()
+                                        if k != "questions"}
+                                meta["question_count"] = len(data["questions"])
+                                meta.setdefault("is_active", True)
+                                _index.setdefault("tests_meta", []).append(meta)
+                                log.info(f"  + Tiklandi: {data.get('title','?')} [{tid}]")
+                await asyncio.sleep(0.06)
+            except: pass
+        log.info(f"Kanal skani tugadi: {scan_count} test, "
+                 f"{len(_index.get('tests_meta', []))} jami meta")
+    except Exception as e:
+        log.warning(f"Kanal skani xato: {e}")
+
+    # Yangi meta tuzish
+    new_meta = {
+        "index_chunks":      [],
+        "users_list_chunks": [],
+        "user_stats_chunks": [],
+        "backups":           old_data.get("backups", {}),
+    }
+
+    # Eski users, leaderboard, settings ma'lumotlarini saqlab olish
+    if old_data.get("leaderboard_msg_id"):
+        new_meta["leaderboard_msg_id"] = old_data["leaderboard_msg_id"]
+    if old_data.get("leaderboard_fid"):
+        new_meta["leaderboard_fid"] = old_data["leaderboard_fid"]
+    if old_data.get("tests_stats_msg_id"):
+        new_meta["tests_stats_msg_id"] = old_data["tests_stats_msg_id"]
+    if old_data.get("tests_stats_fid"):
+        new_meta["tests_stats_fid"] = old_data["tests_stats_fid"]
+    if old_data.get("settings_msg_id"):
+        new_meta["settings_msg_id"] = old_data["settings_msg_id"]
+
+    # Users chunk formatiga o'tkazish (eski to'g'ridan saqlangan bo'lsa)
+    if old_data.get("users_list_chunks"):
+        new_meta["users_list_chunks"] = old_data["users_list_chunks"]
+    if old_data.get("user_stats_chunks"):
+        new_meta["user_stats_chunks"] = old_data["user_stats_chunks"]
+
+    _meta.update(new_meta)
+
+    # Yangi chunked formatda saqlash
+    log.info(f"Migratsiya: {len(_index.get('tests_meta',[]))} test "
+             f"yangi chunked formatga yozilmoqda...")
+    await _save_index_chunks()
+
+    log.info("✅ Migratsiya yakunlandi!")
+    return new_meta
+
 
 async def _load_meta() -> dict:
     if not ready(): return {}
@@ -731,6 +885,7 @@ async def auto_flush_loop():
                 await flush_dirty_user_stats()
                 await save_leaderboard()
                 await save_group_leaderboard()
+                await save_known_groups()
                 log.info("Soatlik flush tugadi")
 
         except asyncio.CancelledError:
@@ -1039,6 +1194,57 @@ async def get_settings_tg():
     if not data and mid:
         data = await _download_doc(mid)
     return data.get("settings", {}) if isinstance(data, dict) else {}
+
+
+# ══════════════════════════════════════════════════════════════
+# GURUHLAR
+# ══════════════════════════════════════════════════════════════
+
+async def save_known_groups():
+    """Bot admin bo'lgan guruhlarni TG ga JSON sifatida saqlaydi."""
+    if not ready(): return False
+    from utils import ram_cache as ram
+    groups  = ram.get_known_groups()
+    if not groups: return True
+    ts      = datetime.now(UTC).strftime("%Y-%m-%d %H:%M")
+    old_mid = _meta.get("known_groups_msg_id")
+    try:
+        msg = await _bot.send_document(
+            _cid,
+            document=_buf({"groups": groups, "count": len(groups), "saved_at": ts},
+                          "known_groups.json"),
+            caption=f"KNOWN_GROUPS | {len(groups)} guruh | {ts}",
+            protect_content=False
+        )
+        _meta["known_groups_msg_id"] = msg.message_id
+        _meta["known_groups_fid"]    = msg.document.file_id
+        await _save_meta()
+        if old_mid and old_mid != msg.message_id:
+            try: await _bot.delete_message(_cid, old_mid)
+            except: pass
+        log.info(f"known_groups saqlandi: {len(groups)} ta")
+        return True
+    except Exception as e:
+        log.error(f"save_known_groups: {e}")
+        return False
+
+
+async def load_known_groups():
+    """Bot yoqilganda guruhlarni TG dan yuklaydi."""
+    from utils import ram_cache as ram
+    fid = _meta.get("known_groups_fid")
+    mid = _meta.get("known_groups_msg_id")
+    if not mid: return
+    data = {}
+    if fid:
+        data = await _read_file(fid)
+    if not data and mid:
+        data = await _download_doc(mid)
+    if not data: return
+    groups = data.get("groups", {})
+    if groups:
+        ram.set_known_groups(groups)
+        log.info(f"known_groups yuklandi: {len(groups)} ta guruh")
 
 
 # ══════════════════════════════════════════════════════════════
