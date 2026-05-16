@@ -875,93 +875,43 @@ async def adm_backups(callback: CallbackQuery):
 # ══════════════════════════════════════════════════════════════
 
 
+
 @router.message(Command("rescan"))
 async def cmd_rescan(message: Message):
     """
-    TG kanaldan barcha test fayllarni topib RAMga yuklaydi.
-    Testlar yo'qolib qolsa shu buyruqni ishlating.
+    TG kanaldan BARCHA JSON fayllarni skanerlaydi va ma'lumotlarni tiklaydi.
+    Testlar, userlar, guruhlar — hammasi tiklanadi.
     """
     if not is_admin(message.from_user.id):
         return
     from utils import tg_db, ram_cache as ram
     msg = await message.answer(
-        "🔍 <b>Kanal skanerlash boshlandi...</b>\n"
-        "TG kanaldan barcha test fayllar izlanmoqda.\n"
-        "Bu 1-3 daqiqa davom etishi mumkin. Kuting..."
+        "🔍 <b>To'liq kanal skanerlash boshlandi...</b>\n"
+        "3000 xabar skanerlash ~2-4 daqiqa davom etadi.\n"
+        "⏳ Kuting..."
     )
-    before = len(ram.get_all_tests_meta())
-    found = 0
-    errors = 0
-    try:
-        probe = await message.bot.send_message(tg_db._cid, ".", protect_content=False)
-        cur   = probe.message_id
-        await message.bot.delete_message(tg_db._cid, cur)
-        existing_tids = {m.get("test_id") for m in ram.get_all_tests_meta()}
+    before_tests = len(ram.get_all_tests_meta())
+    before_users = len(ram.get_users())
 
-        for mid in range(cur - 1, max(1, cur - 3000), -1):
-            try:
-                fwd = await message.bot.forward_message(tg_db._cid, tg_db._cid, mid)
-                doc = getattr(fwd, "document", None)
-                try:
-                    await message.bot.delete_message(tg_db._cid, fwd.message_id)
-                except: pass
+    # To'liq skanerlash
+    result = await tg_db._migrate_from_old_index()
 
-                if doc and doc.file_name:
-                    fname = doc.file_name.lower()
-                    if (fname.startswith("test_") and fname.endswith(".json")
-                            and "deleted" not in fname and "chunk" not in fname
-                            and "stats" not in fname and "backup" not in fname
-                            and "meta" not in fname):
-                        data = await tg_db._read_file(doc.file_id)
-                        if (isinstance(data, dict) and data.get("test_id")
-                                and data.get("questions")):
-                            tid = data["test_id"]
-                            found += 1
-                            tg_db._index[f"test_{tid}"] = mid
-                            tg_db._index[f"fid_{mid}"]  = doc.file_id
-                            tg_db._tests_cache[tid]      = data
-                            ram.cache_questions(tid, data)
-                            if tid not in existing_tids:
-                                existing_tids.add(tid)
-                                meta = {k: v for k, v in data.items()
-                                        if k != "questions"}
-                                meta["question_count"] = len(data["questions"])
-                                meta.setdefault("is_active", True)
-                                tg_db._index.setdefault("tests_meta", []).append(meta)
-                                ram.add_test_meta(meta)
+    after_tests = len(ram.get_all_tests_meta())
+    after_users = len(ram.get_users())
 
-                if found % 10 == 0 and found > 0:
-                    try:
-                        await msg.edit_text(
-                            f"🔍 <b>Skanerlash davom etmoqda...</b>\n"
-                            f"✅ {found} ta test topildi (msg {mid} gacha)"
-                        )
-                    except: pass
+    if result:
+        await msg.edit_text(
+            f"✅ <b>To'liq skanerlash yakunlandi!</b>\n\n"
+            f"📋 Testlar: <b>{before_tests}</b> → <b>{after_tests}</b> ta\n"
+            f"👥 Userlar: <b>{before_users}</b> → <b>{after_users}</b> ta\n\n"
+            f"Endi barcha ma'lumotlar tiklanib saqlandi. ✅"
+        )
+    else:
+        await msg.edit_text(
+            "⚠️ Skanerlash natija bermadi.\n"
+            "Kanal bo'sh yoki xato yuz berdi."
+        )
 
-                import asyncio as _aio
-                await _aio.sleep(0.06)
-            except Exception as e:
-                errors += 1
-
-    except Exception as e:
-        await msg.edit_text(f"❌ Xato: {e}")
-        return
-
-    after = len(ram.get_all_tests_meta())
-    new_count = after - before
-
-    # Index ni yangilash
-    if new_count > 0:
-        await tg_db._save_index()
-
-    await msg.edit_text(
-        f"✅ <b>Kanal skanerlash tugadi!</b>\n\n"
-        f"📋 Topilgan test fayllar: <b>{found} ta</b>\n"
-        f"🆕 Yangi qo\'shildi: <b>{new_count} ta</b>\n"
-        f"📊 Jami RAMda: <b>{after} ta</b>\n"
-        f"❌ Xato: {errors} ta\n\n"
-        f"Endi testlar botda ko\'rinadi. ✅"
-    )
 
 @router.message(Command("reindex"))
 async def cmd_reindex(message: Message):
