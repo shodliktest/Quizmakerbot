@@ -418,45 +418,213 @@ async def adm_test_detail(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("del_test_"))
 async def del_test_confirm(callback: CallbackQuery):
-    await callback.answer()   # Telegram timeoutni oldini olish
-    if not is_admin(callback.from_user.id):
-        return
+    await callback.answer()
+    if not is_admin(callback.from_user.id): return
     tid  = callback.data[9:]
-    meta = ram.get_test_meta(tid) or {}
-    if not meta:
-        meta = next((t for t in ram.get_all_tests_meta() if t.get("test_id")==tid), {})
+    meta = ram.get_test_meta_any(tid) or {}
     b = InlineKeyboardBuilder()
     b.row(
-        InlineKeyboardButton(text="✅ Ha, o'chirish", callback_data=f"del_confirm_{tid}"),
-        InlineKeyboardButton(text="❌ Yo'q",          callback_data=f"adm_test_{tid}"),
+        InlineKeyboardButton(text="✅ Ha, butunlay o'chirish", callback_data=f"del_confirm_{tid}"),
+        InlineKeyboardButton(text="❌ Yo'q", callback_data=f"adm_test_{tid}"),
     )
     try:
         await callback.message.edit_text(
-            f"⚠️ <b>O'CHIRISH TASDIQLASH</b>\n\n"
+            f"⚠️ <b>BUTUNLAY O'CHIRISH</b>\n\n"
             f"📝 {meta.get('title','?')} [{tid}]\n\n"
-            f"TG ga backup yuboriladi. Qaytarib bo'lmaydi!",
+            f"Test bazadan, RAMdan, TG dan <b>butunlay o'chiriladi</b>.\n"
+            f"Faqat backup TG kanalda qoladi.",
             reply_markup=b.as_markup()
         )
     except TelegramBadRequest: pass
 
 @router.callback_query(F.data.startswith("del_confirm_"))
 async def del_test_exec(callback: CallbackQuery):
-    await callback.answer("⏳ O'chirilmoqda...")   # DARHOL javob
-    if not is_admin(callback.from_user.id):
-        return
+    await callback.answer("⏳ O'chirilmoqda...")
+    if not is_admin(callback.from_user.id): return
     tid  = callback.data[12:]
-    meta = ram.get_test_meta(tid) or {}
+    meta = ram.get_test_meta_any(tid) or {}
     from utils.db import delete_test
     await delete_test(tid)
     try:
         await callback.message.edit_text(
-            f"✅ <b>{meta.get('title','?')} [{tid}]</b>\n\n"
-            f"🗑 RAMdan o'chirildi\n"
-            f"🗑 Katalogdan yashirildi\n"
-            f"✅ TG kanalda backup saqlanadi"
+            f"✅ <b>{meta.get('title','?')}</b> butunlay o'chirildi.\n"
+            f"🗑 Baza, RAM, TG — tozalandi.\n"
+            f"💾 Backup TG kanalda saqlanadi."
         )
     except: pass
     await _show_admin_test_cats(callback.message)
+
+
+# ══ O'CHIRILGAN TESTLAR (yaratuvchi o'chirgan) ══════════════════
+
+@router.callback_query(F.data == "admin_deleted_tests")
+async def admin_deleted_tests(callback: CallbackQuery):
+    await callback.answer()
+    if not is_admin(callback.from_user.id): return
+    deleted = ram.get_deleted_tests()
+    if not deleted:
+        b = InlineKeyboardBuilder()
+        b.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data="admin_panel"))
+        try:
+            await callback.message.edit_text(
+                "🗑 <b>O'chirilgan testlar</b>\n\nHozircha o'chirilgan test yo'q.",
+                reply_markup=b.as_markup()
+            )
+        except TelegramBadRequest: pass
+        return
+
+    # Fan bo'yicha guruhlash
+    cats = {}
+    for t in deleted:
+        cat = t.get("category") or t.get("subject") or "Boshqa"
+        cats.setdefault(cat, []).append(t)
+
+    lines = ["🗑 <b>O'chirilgan testlar</b> (yaratuvchi o'chirgan)\n"]
+    for cat, tests in sorted(cats.items()):
+        lines.append(f"\n📂 <b>{cat}</b> — {len(tests)} ta")
+        for t in tests[:5]:
+            lines.append(
+                f"  • {t.get('title','?')} [{t.get('test_id','')}] "
+                f"— {t.get('question_count',0)} savol"
+            )
+        if len(tests) > 5:
+            lines.append(f"  ... va yana {len(tests)-5} ta")
+
+    b = InlineKeyboardBuilder()
+    for cat in sorted(cats.keys()):
+        b.row(InlineKeyboardButton(
+            text=f"📂 {cat} ({len(cats[cat])})",
+            callback_data=f"del_cat_{cat[:30]}"
+        ))
+    b.row(InlineKeyboardButton(text="⬅️ Admin", callback_data="admin_panel"))
+    try:
+        await callback.message.edit_text("\n".join(lines), reply_markup=b.as_markup())
+    except TelegramBadRequest:
+        await callback.message.answer("\n".join(lines), reply_markup=b.as_markup())
+
+
+@router.callback_query(F.data.startswith("del_cat_"))
+async def admin_deleted_cat(callback: CallbackQuery):
+    await callback.answer()
+    if not is_admin(callback.from_user.id): return
+    cat     = callback.data[8:]
+    deleted = ram.get_deleted_tests()
+    tests   = [t for t in deleted
+               if (t.get("category") or t.get("subject") or "Boshqa")[:30] == cat]
+    b = InlineKeyboardBuilder()
+    for t in tests:
+        tid = t.get("test_id","")
+        b.row(
+            InlineKeyboardButton(
+                text=f"📝 {t.get('title','?')[:30]}",
+                callback_data=f"del_view_{tid}"
+            )
+        )
+    b.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data="admin_deleted_tests"))
+    lines = [f"📂 <b>{cat}</b> — o'chirilgan testlar\n"]
+    for t in tests:
+        lines.append(
+            f"• <b>{t.get('title','?')}</b>\n"
+            f"  🆔 <code>{t.get('test_id','')}</code> | "
+            f"❓ {t.get('question_count',0)} savol | "
+            f"👤 {t.get('creator_name','?')}"
+        )
+    try:
+        await callback.message.edit_text("\n".join(lines), reply_markup=b.as_markup())
+    except TelegramBadRequest:
+        await callback.message.answer("\n".join(lines), reply_markup=b.as_markup())
+
+
+@router.callback_query(F.data.startswith("del_view_"))
+async def admin_deleted_view(callback: CallbackQuery):
+    await callback.answer()
+    if not is_admin(callback.from_user.id): return
+    tid  = callback.data[9:]
+    meta = ram.get_test_meta_any(tid) or {}
+    cat  = (meta.get("category") or meta.get("subject") or "Boshqa")[:30]
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="📄 TXT yuklab olish", callback_data=f"del_txt_{tid}"))
+    b.row(
+        InlineKeyboardButton(text="♻️ Qayta tiklash",  callback_data=f"del_restore_{tid}"),
+        InlineKeyboardButton(text="🗑 Butunlay o'chir", callback_data=f"del_confirm_{tid}"),
+    )
+    b.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"del_cat_{cat}"))
+    try:
+        await callback.message.edit_text(
+            f"🗑 <b>O'chirilgan test</b>\n\n"
+            f"📝 {meta.get('title','?')}\n"
+            f"🆔 <code>{tid}</code>\n"
+            f"📂 {cat}\n"
+            f"❓ {meta.get('question_count',0)} savol\n"
+            f"👤 {meta.get('creator_name','?')}\n"
+            f"📅 {meta.get('created_at','?')}",
+            reply_markup=b.as_markup()
+        )
+    except TelegramBadRequest:
+        await callback.message.answer(
+            f"Test: {meta.get('title','?')} [{tid}]",
+            reply_markup=b.as_markup()
+        )
+
+
+@router.callback_query(F.data.startswith("del_restore_"))
+async def admin_restore_test(callback: CallbackQuery):
+    await callback.answer("♻️ Tiklanmoqda...")
+    if not is_admin(callback.from_user.id): return
+    tid = callback.data[12:]
+    from utils import tg_db
+    ram.update_test_meta(tid, {"is_deleted": False})
+    if tg_db.ready():
+        await tg_db.update_test_meta_tg(tid, {"is_deleted": False})
+    meta = ram.get_test_meta_any(tid) or {}
+    try:
+        await callback.message.edit_text(
+            f"✅ <b>{meta.get('title','?')}</b> tiklandi!\n"
+            f"Test endi foydalanuvchilarga ko'rinadi."
+        )
+    except: pass
+
+
+@router.callback_query(F.data.startswith("del_txt_"))
+async def admin_download_txt(callback: CallbackQuery):
+    await callback.answer("📄 TXT tayyorlanmoqda...")
+    if not is_admin(callback.from_user.id): return
+    tid  = callback.data[8:]
+    from utils import tg_db
+    test = await tg_db.get_test_full(tid)
+    if not test or not test.get("questions"):
+        meta = ram.get_test_meta_any(tid) or {}
+        return await callback.message.answer(
+            f"❌ <b>{meta.get('title','?')}</b> savollari topilmadi.\n"
+            f"Test TG kanalda bo'lishi kerak."
+        )
+    # TXT format
+    lines = [
+        f"Test: {test.get('title','?')}",
+        f"Fan: {test.get('category') or test.get('subject','?')}",
+        f"Savollar: {len(test.get('questions',[]))}",
+        f"ID: {tid}",
+        "="*50,
+        ""
+    ]
+    for i, q in enumerate(test.get("questions", []), 1):
+        lines.append(f"{i}. {q.get('question', q.get('q','?'))}")
+        options = q.get("options", q.get("variants", []))
+        correct = q.get("correct", q.get("correct_index", 0))
+        for j, opt in enumerate(options):
+            mark = "✓" if j == correct else " "
+            lines.append(f"   {mark} {chr(65+j)}) {opt}")
+        if q.get("explanation"):
+            lines.append(f"   💡 {q['explanation']}")
+        lines.append("")
+
+    txt_content = "\n".join(lines).encode("utf-8")
+    from aiogram.types import BufferedInputFile
+    doc = BufferedInputFile(txt_content, filename=f"{test.get('title','test')}_{tid}.txt")
+    await callback.message.answer_document(
+        doc,
+        caption=f"📄 <b>{test.get('title','?')}</b>\n{len(test.get('questions',[]))} savol | {tid}"
+    )
 
 
 # ══ BROADCAST ══════════════════════════════════════════════════
@@ -705,6 +873,96 @@ async def adm_backups(callback: CallbackQuery):
 # ══════════════════════════════════════════════════════════════
 # /reindex — Barcha testlarni qayta protect_content=False bilan saqlash
 # ══════════════════════════════════════════════════════════════
+
+
+@router.message(Command("rescan"))
+async def cmd_rescan(message: Message):
+    """
+    TG kanaldan barcha test fayllarni topib RAMga yuklaydi.
+    Testlar yo'qolib qolsa shu buyruqni ishlating.
+    """
+    if not is_admin(message.from_user.id):
+        return
+    from utils import tg_db, ram_cache as ram
+    msg = await message.answer(
+        "🔍 <b>Kanal skanerlash boshlandi...</b>\n"
+        "TG kanaldan barcha test fayllar izlanmoqda.\n"
+        "Bu 1-3 daqiqa davom etishi mumkin. Kuting..."
+    )
+    before = len(ram.get_all_tests_meta())
+    found = 0
+    errors = 0
+    try:
+        probe = await message.bot.send_message(tg_db._cid, ".", protect_content=False)
+        cur   = probe.message_id
+        await message.bot.delete_message(tg_db._cid, cur)
+        existing_tids = {m.get("test_id") for m in ram.get_all_tests_meta()}
+
+        for mid in range(cur - 1, max(1, cur - 3000), -1):
+            try:
+                fwd = await message.bot.forward_message(tg_db._cid, tg_db._cid, mid)
+                doc = getattr(fwd, "document", None)
+                try:
+                    await message.bot.delete_message(tg_db._cid, fwd.message_id)
+                except: pass
+
+                if doc and doc.file_name:
+                    fname = doc.file_name.lower()
+                    if (fname.startswith("test_") and fname.endswith(".json")
+                            and "deleted" not in fname and "chunk" not in fname
+                            and "stats" not in fname and "backup" not in fname
+                            and "meta" not in fname):
+                        data = await tg_db._read_file(doc.file_id)
+                        if (isinstance(data, dict) and data.get("test_id")
+                                and data.get("questions")):
+                            tid = data["test_id"]
+                            found += 1
+                            tg_db._index[f"test_{tid}"] = mid
+                            tg_db._index[f"fid_{mid}"]  = doc.file_id
+                            tg_db._tests_cache[tid]      = data
+                            ram.cache_questions(tid, data)
+                            if tid not in existing_tids:
+                                existing_tids.add(tid)
+                                meta = {k: v for k, v in data.items()
+                                        if k != "questions"}
+                                meta["question_count"] = len(data["questions"])
+                                meta.setdefault("is_active", True)
+                                tg_db._index.setdefault("tests_meta", []).append(meta)
+                                ram.add_test_meta(meta)
+
+                if found % 10 == 0 and found > 0:
+                    try:
+                        await msg.edit_text(
+                            f"🔍 <b>Skanerlash davom etmoqda...</b>\n"
+                            f"✅ {found} ta test topildi (msg {mid} gacha)"
+                        )
+                    except: pass
+
+                import asyncio as _aio
+                await _aio.sleep(0.06)
+            except Exception as e:
+                errors += 1
+
+    except Exception as e:
+        await msg.edit_text(f"❌ Xato: {e}")
+        return
+
+    after = len(ram.get_all_tests_meta())
+    new_count = after - before
+
+    # Index ni yangilash
+    if new_count > 0:
+        await tg_db._save_index()
+
+    await msg.edit_text(
+        f"✅ <b>Kanal skanerlash tugadi!</b>\n\n"
+        f"📋 Topilgan test fayllar: <b>{found} ta</b>\n"
+        f"🆕 Yangi qo\'shildi: <b>{new_count} ta</b>\n"
+        f"📊 Jami RAMda: <b>{after} ta</b>\n"
+        f"❌ Xato: {errors} ta\n\n"
+        f"Endi testlar botda ko\'rinadi. ✅"
+    )
+
 @router.message(Command("reindex"))
 async def cmd_reindex(message: Message):
     if not is_admin(message.from_user.id):
