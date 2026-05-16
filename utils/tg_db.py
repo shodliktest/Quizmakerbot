@@ -448,25 +448,133 @@ async def _save_meta():
 async def _load_all_index_chunks():
     chunks    = _meta.get("index_chunks", [])
     all_metas = []
+    meta_updated = False
+
     for ch in chunks:
         fid  = ch.get("fid")
         mid  = ch.get("msg_id")
         data = {}
+
+        # 1. fid orqali o'qi
         if fid:
             data = await _read_file(fid)
-        if not data and mid:
-            data = await _download_doc(mid)
-        if not data:
-            log.warning(f"Index chunk {ch.get('n')} yuklanmadi")
+            if data and len(data.get("tests_meta", [])) == 0 and mid:
+                # fid ishlamoqda lekin bo'sh natija — msg_id orqali ham tekshir
+                data2 = await _download_doc(mid)
+                if data2 and len(data2.get("tests_meta", [])) > 0:
+                    data = data2
+                    # fid ni yangilash
+                    ch["fid"] = ""
+                    meta_updated = True
+
+        # 2. fid ishlamadi — msg_id orqali
+        if not data or len(data.get("tests_meta", [])) == 0:
+            if mid:
+                data = await _download_doc(mid)
+                if data:
+                    # Yangi fid ni saqlash
+                    ch["fid"] = ""
+                    meta_updated = True
+
+        if not data or not data.get("tests_meta"):
+            log.warning(f"Index chunk {ch.get('n')} yuklanmadi yoki bo'sh")
             continue
+
+        loaded = 0
         for m in data.get("tests_meta", []):
             if not any(x.get("test_id") == m.get("test_id") for x in all_metas):
                 all_metas.append(m)
+                loaded += 1
         for k, v in data.items():
             if k.startswith("test_") or k.startswith("fid_"):
                 _index[k] = v
+        log.info(f"  chunk {ch.get('n')}: {loaded} yangi + "
+                 f"{len(data.get('tests_meta',[]))-loaded} mavjud test meta")
+
+    # Agar hech narsa yuklanmasa — kanaldan qidirish
+    if not all_metas and chunks:
+        log.warning("Barcha chunklar bo'sh — kanaldan qayta skanerlash...")
+        all_metas = await _recover_index_from_channel()
+        meta_updated = True
+    elif not all_metas and not chunks:
+        log.warning("index_chunks bo'sh — kanaldan qidirilmoqda...")
+        all_metas = await _recover_index_from_channel()
+        meta_updated = True
+
     _index["tests_meta"] = all_metas
     log.info(f"Index chunks yuklandi: {len(all_metas)} test meta")
+
+
+async def _recover_index_from_channel() -> list:
+    """
+    Kanaldan index_chunk_N.json fayllarini topib meta va msg_id larni tiklaydi.
+    """
+    if not ready(): return []
+    log.info("Kanaldan index_chunk fayllar qidirilmoqda...")
+    all_metas    = []
+    new_chunks   = []
+    seen_tids    = set()
+    chunk_names  = {}   # {name: (mid, fid)}
+
+    try:
+        probe = await _bot.send_message(_cid, ".", protect_content=False)
+        cur   = probe.message_id
+        await _bot.delete_message(_cid, cur)
+
+        for mid in range(cur - 1, max(1, cur - 2000), -1):
+            try:
+                fwd = await _bot.forward_message(_cid, _cid, mid)
+                doc = getattr(fwd, "document", None)
+                try:
+                    await _bot.delete_message(_cid, fwd.message_id)
+                except: pass
+                if doc and doc.file_name:
+                    fname = doc.file_name.lower()
+                    if "index_chunk" in fname and fname.endswith(".json"):
+                        if fname not in chunk_names:
+                            chunk_names[fname] = (mid, doc.file_id)
+                            log.info(f"  index_chunk topildi: {doc.file_name} (msg {mid})")
+                await asyncio.sleep(0.05)
+            except: pass
+
+        # Har bir chunk ni yuklash
+        for fname, (mid, fid) in sorted(chunk_names.items()):
+            data = await _read_file(fid)
+            if not data:
+                data = await _download_doc(mid)
+            if not data: continue
+
+            # Chunk raqami
+            import re as _re
+            m = _re.search(r'(\d+)', fname)
+            n = int(m.group(1)) if m else len(new_chunks) + 1
+
+            for meta in data.get("tests_meta", []):
+                tid = meta.get("test_id")
+                if tid and tid not in seen_tids:
+                    seen_tids.add(tid)
+                    all_metas.append(meta)
+            for k, v in data.items():
+                if k.startswith("test_") or k.startswith("fid_"):
+                    _index[k] = v
+
+            new_chunks.append({
+                "n":      n,
+                "msg_id": mid,
+                "fid":    fid,
+                "count":  len(data.get("tests_meta", [])),
+            })
+            log.info(f"  chunk {n}: {len(data.get('tests_meta',[]))} test meta yuklandi")
+
+        if new_chunks:
+            _meta["index_chunks"] = sorted(new_chunks, key=lambda x: x["n"])
+            log.info(f"✅ Kanaldan {len(all_metas)} test meta tiklandi "
+                     f"({len(new_chunks)} chunk)")
+
+    except Exception as e:
+        log.error(f"_recover_index_from_channel: {e}")
+
+    return all_metas
 
 
 async def _save_index_chunks():
@@ -574,6 +682,13 @@ async def _load_users_list():
     from utils import ram_cache as ram
     chunks = _meta.get("users_list_chunks", [])
     total  = 0
+
+    if not chunks:
+        # Chunk yo'q — kanaldan users_list fayllarni qidirish
+        log.info("users_list_chunks yo'q — kanaldan qidirilmoqda...")
+        await _recover_users_from_channel()
+        return
+
     for chunk in chunks:
         fid  = chunk.get("fid")
         mid  = chunk.get("msg_id")
@@ -584,13 +699,70 @@ async def _load_users_list():
             data = await _download_doc(mid)
         if not data:
             _users_dirty = True
+            log.warning(f"users_list chunk yuklanmadi: msg_id={mid}")
             continue
         users = data.get("users", {})
         cur   = ram.get_users()
         cur.update(users)
         ram.set_users(cur)
         total += len(users)
+
+    if total == 0 and chunks:
+        # Chunklar bor lekin yuklanmadi — kanaldan qidirish
+        log.warning("users_list chunklar yuklanmadi — kanaldan qidirilmoqda...")
+        await _recover_users_from_channel()
+        return
+
     log.info(f"Users: {total} ta ({len(chunks)} chunk)")
+
+
+async def _recover_users_from_channel():
+    """Kanaldan users_list fayllarni topib yuklaydi"""
+    global _users_dirty
+    from utils import ram_cache as ram
+    try:
+        probe = await _bot.send_message(_cid, ".", protect_content=False)
+        cur   = probe.message_id
+        await _bot.delete_message(_cid, cur)
+        all_users = {}
+        new_chunks = []
+        chunk_names_seen = set()
+
+        for mid in range(cur - 1, max(1, cur - 3000), -1):
+            try:
+                fwd = await _bot.forward_message(_cid, _cid, mid)
+                doc = getattr(fwd, "document", None)
+                try:
+                    await _bot.delete_message(_cid, fwd.message_id)
+                except: pass
+                if doc and doc.file_name:
+                    fname = doc.file_name.lower()
+                    if "users_list" in fname and fname.endswith(".json"):
+                        if fname not in chunk_names_seen:
+                            chunk_names_seen.add(fname)
+                            data = await _read_file(doc.file_id)
+                            if isinstance(data, dict) and data.get("users"):
+                                all_users.update(data["users"])
+                                new_chunks.append({
+                                    "n":     len(new_chunks) + 1,
+                                    "msg_id": mid,
+                                    "fid":   doc.file_id,
+                                    "count": len(data["users"]),
+                                })
+                                log.info(f"  users_list topildi: {len(data['users'])} user")
+                await asyncio.sleep(0.05)
+            except: pass
+
+        if all_users:
+            ram.set_users(all_users)
+            _meta["users_list_chunks"] = new_chunks
+            log.info(f"Kanaldan users tiklandi: {len(all_users)} ta, {len(new_chunks)} chunk")
+        else:
+            log.warning("Kanaldan users topilmadi")
+            _users_dirty = True
+    except Exception as e:
+        log.error(f"_recover_users_from_channel: {e}")
+        _users_dirty = True
 
 
 async def _flush_users_list():
@@ -1311,16 +1483,44 @@ async def save_known_groups():
 
 
 async def load_known_groups():
-    """Bot yoqilganda guruhlarni TG dan yuklaydi."""
+    """Bot yoqilganda guruhlarni TG dan yuklaydi.
+    known_groups_msg_id yo'q bo'lsa kanaldan qidiradi."""
     from utils import ram_cache as ram
     fid = _meta.get("known_groups_fid")
     mid = _meta.get("known_groups_msg_id")
-    if not mid: return
+
     data = {}
     if fid:
         data = await _read_file(fid)
     if not data and mid:
         data = await _download_doc(mid)
+
+    # msg_id yo'q yoki yuklanmadi — kanaldan qidirish
+    if not data:
+        if not ready(): return
+        try:
+            probe = await _bot.send_message(_cid, ".", protect_content=False)
+            cur   = probe.message_id
+            await _bot.delete_message(_cid, cur)
+            for scan_mid in range(cur - 1, max(1, cur - 2000), -1):
+                try:
+                    fwd = await _bot.forward_message(_cid, _cid, scan_mid)
+                    doc = getattr(fwd, "document", None)
+                    try:
+                        await _bot.delete_message(_cid, fwd.message_id)
+                    except: pass
+                    if doc and doc.file_name and "known_groups" in doc.file_name.lower():
+                        data = await _read_file(doc.file_id)
+                        if isinstance(data, dict) and data.get("groups"):
+                            _meta["known_groups_msg_id"] = scan_mid
+                            _meta["known_groups_fid"]    = doc.file_id
+                            log.info(f"known_groups kanaldan topildi (msg {scan_mid})")
+                            break
+                    await asyncio.sleep(0.05)
+                except: pass
+        except Exception as e:
+            log.warning(f"load_known_groups kanal skani: {e}")
+
     if not data: return
     groups = data.get("groups", {})
     if groups:
