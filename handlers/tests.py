@@ -16,13 +16,97 @@ from keyboards.keyboards import main_kb, inline_pause_kb, CAT_ICONS, get_cat_ico
 log    = logging.getLogger(__name__)
 router = Router()
 
-# {uid: asyncio.Task}
 _inline_timers: dict = {}
-ANSWER_SHOW_SEC = 30   # Javob ko'rsatilgandan keyin keyingi savolga o'tish
-QUESTION_SEC    = 30   # Savol chiqgandan so'ng javobsiz kutish
+ANSWER_SHOW_SEC = 30
+QUESTION_SEC    = 30
 
 _CIRCLE = {"A":"🅐","B":"🅑","C":"🅒","D":"🅓","E":"🅔","F":"🅕","G":"🅖","H":"🅗"}
 def _cl(l): return _CIRCLE.get(str(l).upper(), f"[{str(l).upper()}]")
+
+
+async def _send_no_access(callback: CallbackQuery, meta: dict):
+    """Ruxsat yo'q xabari — to'liq xabar + admin bilan bog'lanish tugmasi"""
+    from config import ADMIN_USERNAME
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(
+        text="📩 Adminga murojat",
+        url=f"https://t.me/{ADMIN_USERNAME}"
+    ))
+    b.row(InlineKeyboardButton(
+        text="🤖 Bot orqali murojat",
+        callback_data="contact_admin"
+    ))
+    title = meta.get("title", "Bu test")
+    try:
+        await callback.message.answer(
+            f"🔐 <b>Kirish cheklangan</b>\n\n"
+            f"<b>{title}</b> testiga kirishga ruxsatingiz yo'q.\n\n"
+            f"Ruxsat olish uchun:\n"
+            f"• Adminga murojat qiling: @{ADMIN_USERNAME}\n"
+            f"• Yoki quyidagi tugmani bosing 👇",
+            reply_markup=b.as_markup()
+        )
+    except Exception:
+        pass
+    await callback.answer("🔐 Kirish cheklangan!", show_alert=True)
+
+
+def _check_attempts(uid: int, tid: str, meta: dict) -> tuple[bool, str]:
+    """
+    Urinishlar sonini tekshiradi.
+    allowed_users ro'yxatida bo'lsa — cheksiz.
+    Returns: (can_start, reason_text)
+    """
+    from utils.ram_cache import get_test_stats_for_user
+    max_att = meta.get("max_attempts", 0)  # 0 = cheksiz
+
+    # allowed_users da bo'lsa cheksiz
+    allowed = meta.get("allowed_users", [])
+    if allowed and uid in allowed:
+        return True, ""
+
+    if max_att == 0:
+        return True, ""
+
+    stats = get_test_stats_for_user(uid, tid)
+    used  = stats.get("attempts", 0) if stats else 0
+
+    if used >= max_att:
+        return False, (
+            f"⛔ <b>Urinishlar tugadi</b>\n\n"
+            f"Bu test uchun {max_att} ta urinish berilgan edi.\n"
+            f"Siz {used} marta yechdingiz.\n\n"
+            f"Yangi urinish uchun test egasiga murojat qiling."
+        )
+    return True, ""
+
+
+async def _save_partial_result(uid: int, tid: str, answers: list,
+                               questions: list, state_data: dict):
+    """
+    Chala yechilgan test natijasini saqlaydi.
+    answered_count / total_count ko'rsatiladi.
+    """
+    if not answers or not questions:
+        return
+    from utils.db import save_result as _sr
+    answered = len(answers)
+    total    = len(questions)
+    correct  = sum(1 for a in answers if a.get("is_correct"))
+    pct      = round(correct / answered * 100) if answered else 0
+    result   = {
+        "pct":          pct,
+        "correct":      correct,
+        "total":        total,
+        "answered":     answered,
+        "partial":      True,
+        "time_spent":   state_data.get("time_spent", 0),
+        "answers":      answers,
+    }
+    try:
+        await _sr(uid, tid, result)
+    except Exception as e:
+        log.error(f"partial save error: {e}")
 
 
 def _shuffle_options(qs):
@@ -326,7 +410,7 @@ async def search_by_code_cb(callback: CallbackQuery):
 #  INLINE TEST — edit_message asosida
 # ══════════════════════════════════════════════════════════════
 
-@router.callback_query(F.data.startswith("start_test_"))
+@router.callback_query(F.data.startswith("start_test_") | F.data.startswith("start_demo_"))
 async def start_inline_test(callback: CallbackQuery, state: FSMContext):
     tid = callback.data[11:]
     if is_test_paused(tid):
@@ -334,15 +418,30 @@ async def start_inline_test(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     uid  = callback.from_user.id
     meta = get_test_meta(tid) or {}
+
+    # Demo rejim tekshiruvi
+    is_demo = tid.startswith("DEMO_") or callback.data.startswith("start_demo_")
+    if is_demo:
+        tid = tid.replace("DEMO_", "", 1)
+        meta = get_test_meta(tid) or {}
+
+    # Ruxsat tekshiruvi
     allowed = meta.get("allowed_users", [])
     if allowed and uid not in allowed:
-        return await callback.answer("🔐 Bu test faqat maxsus foydalanuvchilar uchun!", show_alert=True)
-    # Kirish nazorati
-    from utils.ram_cache import get_test_meta as _gtm
-    _meta_a = _gtm(tid) or {}
-    _allowed = _meta_a.get("allowed_users", [])
-    if _allowed and uid not in _allowed:
-        return await callback.answer("🔐 Bu test faqat tanlangan foydalanuvchilar uchun!\nKirish ruxsatingiz yo'q.", show_alert=True)
+        return await _send_no_access(callback, meta)
+
+    # Urinishlar cheklovi
+    can_start, reason = _check_attempts(uid, tid, meta)
+    if not can_start:
+        from config import ADMIN_USERNAME
+        b = InlineKeyboardBuilder()
+        b.row(InlineKeyboardButton(text="📩 Adminga murojat",
+                                   url=f"https://t.me/{ADMIN_USERNAME}"))
+        try:
+            await callback.message.answer(reason, reply_markup=b.as_markup())
+        except Exception:
+            pass
+        return await callback.answer("⛔ Urinishlar tugadi!", show_alert=True)
     cid = callback.message.chat.id if callback.message else uid
 
     # Avvalgi testni to'xtatish
@@ -364,6 +463,13 @@ async def start_inline_test(callback: CallbackQuery, state: FSMContext):
 
     import random, copy
     qs = copy.deepcopy(qs)
+
+    # Demo rejimda savollar sonini cheklaymiz
+    if is_demo:
+        from handlers.inline_mode import DEMO_MIN, DEMO_MAX
+        demo_count = min(DEMO_MAX, max(DEMO_MIN, len(qs) // 3))
+        random.shuffle(qs)
+        qs = qs[:demo_count]
 
     # Savollarni aralashtirish (test sozlamasiga qarab)
     if test.get("shuffle_questions", True):
@@ -971,13 +1077,15 @@ async def _finish_inline(bot, cid, state, d):
     from utils.scoring import calculate_score, format_result
     from keyboards.keyboards import result_kb
 
-    test     = d.get("test", {})
-    qs       = d.get("qs", [])
-    ans      = d.get("ans", {})
-    elapsed  = int(time.time() - d.get("t0", time.time()))
-    uid      = d.get("uid", cid)
-    via_link = d.get("via_link", False)
-    msg_id   = d.get("q_msg_id")
+    test       = d.get("test", {})
+    qs         = d.get("qs", [])
+    ans        = d.get("ans", {})
+    elapsed    = int(time.time() - d.get("t0", time.time()))
+    uid        = d.get("uid", cid)
+    via_link   = d.get("via_link", False)
+    msg_id     = d.get("q_msg_id")
+    is_demo    = d.get("is_demo", False)
+    is_partial = d.get("is_partial", False)
     _cancel_timer(uid)
 
     scored = calculate_score(qs, ans)
@@ -985,22 +1093,47 @@ async def _finish_inline(bot, cid, state, d):
         "time_spent":    elapsed,
         "passing_score": test.get("passing_score", 60),
         "mode":          "inline",
+        "partial":       is_partial,
+        "demo":          is_demo,
     })
-    rid = save_result(uid, test.get("test_id", ""), scored, via_link=via_link)
+    tid = test.get("test_id", "")
+    rid = save_result(uid, tid, scored, via_link=via_link)
     await state.clear()
 
     result_text = format_result(scored, test)
-    kb          = result_kb(test.get("test_id", ""), rid)
+    if is_partial:
+        result_text = "⚠️ <b>Test yarim qoldirildi</b>\n\n" + result_text
+    kb = result_kb(tid, rid)
 
-    # Oxirgi savol xabarini natija bilan almashtirish
+    if is_demo:
+        from config import ADMIN_USERNAME
+        from aiogram.utils.keyboard import InlineKeyboardBuilder as _IKB
+        from aiogram.types import InlineKeyboardButton as _IKBtn
+        b = _IKB()
+        b.row(_IKBtn(text="📩 To'liq test olish", url=f"https://t.me/{ADMIN_USERNAME}"))
+        b.row(_IKBtn(text="🤖 Bot orqali murojat", callback_data="contact_admin"))
+        demo_text = (
+            f"{result_text}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔍 <b>Bu sinov (demo) rejimi edi!</b>\n\n"
+            f"To'liq testni olish uchun:\n"
+            f"• @{ADMIN_USERNAME} ga yozing\n"
+            f"• Yoki quyidagi tugmani bosing 👇"
+        )
+        if msg_id:
+            try:
+                await bot.edit_message_text(chat_id=cid, message_id=msg_id,
+                    text=demo_text, reply_markup=b.as_markup())
+                return
+            except TelegramBadRequest: pass
+        await bot.send_message(cid, demo_text, reply_markup=b.as_markup(), protect_content=True)
+        return
+
     if msg_id:
         try:
-            await bot.edit_message_text(
-                chat_id=cid, message_id=msg_id,
-                text=result_text, reply_markup=kb
-            )
+            await bot.edit_message_text(chat_id=cid, message_id=msg_id,
+                text=result_text, reply_markup=kb)
             return
         except TelegramBadRequest: pass
 
-    await bot.send_message(cid, result_text, reply_markup=kb,
-        protect_content=True)
+    await bot.send_message(cid, result_text, reply_markup=kb, protect_content=True)

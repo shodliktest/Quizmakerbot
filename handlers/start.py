@@ -118,6 +118,54 @@ async def cmd_start(message: Message, state: FSMContext):
             await message.answer(welcome, reply_markup=main_kb(uid, chat_type))
             return
 
+        # ── DEMO DEEP LINK ━━━━━━━━━━━━━━━━━━━━━━━━
+        if param.lower().startswith("demo_"):
+            tid  = param[5:].upper()
+            test = get_test_by_id(tid) or await _gtf(tid)
+            if test:
+                await message.answer(welcome, reply_markup=main_kb(uid, chat_type))
+                b = InlineKeyboardBuilder()
+                b.row(InlineKeyboardButton(
+                    text="🔍 Demo (Inline)",
+                    callback_data=f"start_demo_{tid}"
+                ))
+                b.row(InlineKeyboardButton(
+                    text="🔍 Demo (Poll)",
+                    callback_data=f"start_demopoll_{tid}"
+                ))
+                from config import ADMIN_USERNAME
+                b.row(InlineKeyboardButton(
+                    text="📩 To'liq test olish",
+                    url=f"https://t.me/{ADMIN_USERNAME}"
+                ))
+                qc = len(test.get("questions",[])) or test.get("question_count",0)
+                from handlers.inline_mode import DEMO_MIN, DEMO_MAX
+                demo_q = min(DEMO_MAX, max(DEMO_MIN, qc // 3))
+                await message.answer(
+                    f"🔍 <b>[DEMO] {test.get('title')}</b>\n\n"
+                    f"Bu sinov rejimi — faqat <b>{demo_q} ta</b> savol yechish mumkin.\n"
+                    f"To'liq test uchun adminga murojat qiling.",
+                    reply_markup=b.as_markup()
+                )
+            return
+
+        if param.lower().startswith("demopoll_"):
+            tid  = param[9:].upper()
+            test = get_test_by_id(tid) or await _gtf(tid)
+            if test:
+                await message.answer(welcome, reply_markup=main_kb(uid, chat_type))
+                b = InlineKeyboardBuilder()
+                b.row(InlineKeyboardButton(
+                    text="🔍 Demo Poll boshlash",
+                    callback_data=f"start_demopoll_{tid}"
+                ))
+                await message.answer(
+                    f"🔍 <b>[DEMO] {test.get('title')}</b>",
+                    reply_markup=b.as_markup()
+                )
+            return
+        # ━━━━━━━━━━━━━━━━━━━━━━━━
+
         if param.lower().startswith("poll_"):
             tid  = param[5:].upper()
             test = get_test_by_id(tid) or await _gtf(tid)

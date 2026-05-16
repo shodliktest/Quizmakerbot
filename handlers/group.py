@@ -1209,9 +1209,23 @@ async def _start_group_test(bot, chat_id: int, uid: int, tid: str, mode: str):
 
     # ── Kirish nazorati ───────────────────────────────────────
     from utils.ram_cache import get_test_meta as _gtm
-    _allowed = (_gtm(tid) or {}).get("allowed_users", [])
+    from config import ADMIN_USERNAME
+    _meta_g  = _gtm(tid) or {}
+    _allowed = _meta_g.get("allowed_users", [])
     if _allowed and uid not in _allowed:
-        return await bot.send_message(chat_id, "🔐 Bu test faqat maxsus foydalanuvchilar uchun!", protect_content=True)
+        b = InlineKeyboardBuilder()
+        b.row(InlineKeyboardButton(
+            text="📩 Adminga murojat",
+            url=f"https://t.me/{ADMIN_USERNAME}"
+        ))
+        return await bot.send_message(
+            chat_id,
+            f"🔐 <b>Kirish cheklangan</b>\n\n"
+            f"Bu testga kirishga ruxsatingiz yo'q.\n"
+            f"Ruxsat olish uchun @{ADMIN_USERNAME} ga yozing.",
+            reply_markup=b.as_markup(),
+            protect_content=True
+        )
 
     if mode == "inline":
         qs            = test.get("questions", [])
@@ -1425,6 +1439,8 @@ async def on_bot_added(event: ChatMemberUpdated):
     if new_status in ("left", "kicked", "restricted"):
         ram.remove_known_group(chat.id)
         log.info(f"Guruhdan chiqarildi: {chat.title} ({chat.id})")
+        from utils import tg_db
+        asyncio.create_task(tg_db.save_known_groups())
         return
 
     # Bot qo'shildi yoki admin bo'ldi
@@ -1441,6 +1457,8 @@ async def on_bot_added(event: ChatMemberUpdated):
             member_count=member_count,
         )
         log.info(f"Guruhga qo'shildi: {chat.title} ({chat.id}), a'zolar: {member_count}")
+        from utils import tg_db
+        asyncio.create_task(tg_db.save_known_groups())
 
         if old_status in ("left", "kicked"):
             # Faqat yangi qo'shilganda xabar yuborish

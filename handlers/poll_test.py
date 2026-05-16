@@ -7,7 +7,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardButton
 
 from utils.db import get_test_full, save_result
-from utils.ram_cache import get_test_by_id, get_daily, is_test_paused
+from utils.ram_cache import get_test_by_id, get_daily, is_test_paused, get_test_meta
 from utils.states import PollTest
 from utils.scoring import calculate_score, format_result
 from keyboards.keyboards import main_kb, result_kb, poll_pause_kb
@@ -19,6 +19,32 @@ POLL_TYPES = ("multiple_choice", "true_false", "multi_select")
 _poll_timers: dict = {}
 
 COUNT_EMOJIS = ["3️⃣","2️⃣","1️⃣","🚀"]
+
+
+async def _send_no_access(callback: CallbackQuery, meta: dict):
+    from config import ADMIN_USERNAME
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(
+        text="📩 Adminga murojat",
+        url=f"https://t.me/{ADMIN_USERNAME}"
+    ))
+    b.row(InlineKeyboardButton(
+        text="🤖 Bot orqali murojat",
+        callback_data="contact_admin"
+    ))
+    title = meta.get("title", "Bu test")
+    try:
+        await callback.message.answer(
+            f"🔐 <b>Kirish cheklangan</b>\n\n"
+            f"<b>{title}</b> testiga kirishga ruxsatingiz yo'q.\n\n"
+            f"Ruxsat olish uchun:\n"
+            f"• Adminga murojat qiling: @{ADMIN_USERNAME}\n"
+            f"• Yoki quyidagi tugmani bosing 👇",
+            reply_markup=b.as_markup()
+        )
+    except Exception:
+        pass
+    await callback.answer("🔐 Kirish cheklangan!", show_alert=True)
 
 
 async def route_poll_answer(poll_answer: PollAnswer, state: FSMContext, bot=None):
@@ -68,24 +94,39 @@ async def start_poll(callback: CallbackQuery, state: FSMContext):
     via_link = raw.endswith("_link")
     tid    = raw[:-5].upper() if via_link else raw.upper()
     uid    = callback.from_user.id
-    # Kirish nazorati
-    from utils.ram_cache import get_test_meta as _gtm
-    _meta_a = _gtm(tid) or {}
-    _allowed = _meta_a.get("allowed_users", [])
-    if _allowed and uid not in _allowed:
-        return await callback.answer("🔐 Bu test faqat tanlangan foydalanuvchilar uchun!\nKirish ruxsatingiz yo'q.", show_alert=True)
+    meta   = get_test_meta(tid) or {}
+
+    # Ruxsat tekshiruvi
+    allowed = meta.get("allowed_users", [])
+    if allowed and uid not in allowed:
+        return await _send_no_access(callback, meta)
+
+    # Urinishlar cheklovi
+    max_att = meta.get("max_attempts", 0)
+    if max_att > 0 and uid not in allowed:
+        from utils.ram_cache import get_test_stats_for_user
+        stats = get_test_stats_for_user(uid, tid)
+        used  = stats.get("attempts", 0) if stats else 0
+        if used >= max_att:
+            from config import ADMIN_USERNAME
+            b = InlineKeyboardBuilder()
+            b.row(InlineKeyboardButton(text="📩 Adminga murojat",
+                                       url=f"https://t.me/{ADMIN_USERNAME}"))
+            try:
+                await callback.message.answer(
+                    f"⛔ <b>Urinishlar tugadi</b>\n\n"
+                    f"Bu test uchun {max_att} ta urinish berilgan edi.\n"
+                    f"Siz {used} marta yechdingiz.",
+                    reply_markup=b.as_markup()
+                )
+            except Exception: pass
+            return await callback.answer("⛔ Urinishlar tugadi!", show_alert=True)
+
     msg    = callback.message
     chat_id= msg.chat.id if msg and msg.chat else uid
 
     if is_test_paused(tid):
         return await callback.answer("⚠️ Bu test vaqtincha to'xtatilgan!", show_alert=True)
-
-    # ── Kirish nazorati ───────────────────────────────────────
-    from utils.ram_cache import get_test_meta as _gtm
-    _meta    = _gtm(tid) or {}
-    _allowed = _meta.get("allowed_users", [])
-    if _allowed and uid not in _allowed:
-        return await callback.answer("🔐 Bu test faqat maxsus foydalanuvchilar uchun!", show_alert=True)
 
     # ── Aktiv test tekshiruvi ─────────────────────────────────
     from utils.states import TestSolving as _TS
