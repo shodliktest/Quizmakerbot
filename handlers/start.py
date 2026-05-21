@@ -171,17 +171,20 @@ async def cmd_start(message: Message, state: FSMContext):
             test = get_test_by_id(tid) or await _gtf(tid)
             if test:
                 await message.answer(welcome, reply_markup=main_kb(uid, chat_type))
+                # To'g'ridan poll boshlaymiz — foydalanuvchi allaqachon tanlagan
                 b = InlineKeyboardBuilder()
                 b.row(InlineKeyboardButton(
                     text="📊 Quiz Poll boshlash",
                     callback_data=f"start_poll_{tid}"
                 ))
-                b.row(InlineKeyboardButton(text="▶️ Inline test", callback_data=f"start_test_{tid}"))
+                title = test.get("title", "?")
                 await message.answer(
-                    f"📝 <b>{test.get('title')}</b>\nQaysi rejimda boshlash?",
+                    f"📝 <b>{title}</b>\n\n"
+                    f"📊 Quiz Poll rejimi tanlandi.\n"
+                    f"Boshlash uchun tugmani bosing 👇",
                     reply_markup=b.as_markup()
                 )
-                return
+            return
 
         # ── GURUHDA ISHLASH — startgroup deep link ━━━━━━━━━━━━━━━━━━━━━━━━
         if param.lower().startswith("gpoll_"):
@@ -194,7 +197,8 @@ async def cmd_start(message: Message, state: FSMContext):
                 test = get_test_by_id(tid) or await _gtf(tid)
                 if test:
                     await message.answer(welcome, reply_markup=main_kb(uid, chat_type))
-                    await _send_test_card(message, test, tid, viewer_uid=uid)
+                    await _send_test_card(message, test, tid,
+                                          viewer_uid=uid, poll_only=True)
             return
 
         if param.lower().startswith("ginline_"):
@@ -259,7 +263,7 @@ async def _send_help(msg, edit=False):
         await msg.answer(text, reply_markup=b.as_markup())
 
 
-async def _send_test_card(event, test, tid, viewer_uid=None, edit=False):
+async def _send_test_card(event, test, tid, viewer_uid=None, edit=False, poll_only=False):
     from keyboards.keyboards import get_cat_icon
     meta     = get_test_meta(tid) or test
     qc       = len(test.get("questions",[])) or meta.get("question_count",0)
@@ -291,7 +295,7 @@ async def _send_test_card(event, test, tid, viewer_uid=None, edit=False):
         f"📊 Poll — Telegram quiz, vaqt bilan"
     )
     creator_id = meta.get("creator_id")
-    kb = test_info_kb(tid, creator_id=creator_id, viewer_uid=viewer_uid)
+    kb = test_info_kb(tid, creator_id=creator_id, viewer_uid=viewer_uid, poll_only=poll_only)
     target = event if isinstance(event, Message) else event.message
     try:
         if edit and not isinstance(event, Message):
