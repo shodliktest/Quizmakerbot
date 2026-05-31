@@ -1,8 +1,296 @@
-"""🌐 QUIZ BOT — Admin Panel"""
+"""🌐 QUIZ BOT — Admin Panel + Web API"""
 import streamlit as st
 import pandas as pd
+import json
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
+
+# ══ WEB API — Sayt (Vercel) dan kelgan so'rovlar ══════════════
+# edit.html va catalog.html quyidagi endpointlarni ishlatadi:
+#   ?api=public_tests          → public testlar ro'yxati (JSON)
+#   ?api=test&id=TID           → bitta test to'liq (JSON)
+#   ?api=save_test  (POST)     → yangi test saqlash (JSON)
+#   ?api=otp&code=CODE         → OTP tekshirish va test olish
+# Streamlit query_params orqali aniqlanadi, JSON text qaytariladi.
+
+def _json_response(data: dict):
+    """Streamlit orqali JSON qaytarish."""
+    payload = json.dumps(data, ensure_ascii=False, default=str)
+    # HTML meta redirect o'rniga to'g'ridan JSON ko'rsatish
+    st.markdown(
+        f"<script>window.parent.postMessage({payload},'*')</script>"
+        f"<pre style='font-family:monospace;font-size:12px;white-space:pre-wrap'>{payload}</pre>",
+        unsafe_allow_html=True
+    )
+    st.stop()
+
+_qp = st.query_params
+_api_action = _qp.get("api", "")
+
+if _api_action == "public_tests":
+    # Barcha public testlar ro'yxati (savollar BEZ — faqat meta)
+    try:
+        from utils import ram_cache as ram
+        tests = ram.get_tests_meta()
+        public = [
+            {k: v for k, v in t.items() if k != "questions"}
+            for t in tests
+            if t.get("visibility") == "public" and t.get("is_active", True)
+        ]
+        _json_response({"ok": True, "tests": public, "count": len(public)})
+    except Exception as e:
+        _json_response({"ok": False, "error": str(e)})
+
+elif _api_action == "test":
+    # Bitta test to'liq (savollar bilan)
+    tid = _qp.get("id", "").strip().upper()
+    if not tid:
+        _json_response({"ok": False, "error": "id parametri kerak"})
+    try:
+        import asyncio
+        from utils import tg_db, ram_cache as ram
+
+        # Avval RAM cache dan tekshir
+        cached = ram.get_cached_questions(tid)
+        if cached:
+            _json_response({"ok": True, "test": cached})
+
+        # Yo'q bo'lsa TG dan yuklash
+        async def _load():
+            return await tg_db.get_test_full(tid)
+
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    future = pool.submit(asyncio.run, _load())
+                    test = future.result(timeout=15)
+            else:
+                test = loop.run_until_complete(_load())
+        except Exception:
+            test = asyncio.run(_load())
+
+        if test and test.get("questions"):
+            _json_response({"ok": True, "test": test})
+        else:
+            # Faqat meta qaytaramiz
+            meta = ram.get_test_meta(tid)
+            if meta:
+                _json_response({"ok": True, "test": meta, "meta_only": True})
+            else:
+                _json_response({"ok": False, "error": "Test topilmadi"})
+    except Exception as e:
+        _json_response({"ok": False, "error": str(e)})
+
+elif _api_action == "otp":
+    # OTP kod bilan testni olish
+    code = _qp.get("code", "").strip()
+    if not code:
+        _json_response({"ok": False, "error": "code parametri kerak"})
+    try:
+        from utils import tg_db, ram_cache as ram
+        result = tg_db.verify_otp(code)
+        if not result.get("ok"):
+            _json_response(result)
+        tid = result.get("test_id", "")
+        cached = ram.get_cached_questions(tid)
+        if cached:
+            _json_response({"ok": True, "test": cached, "uid": result.get("uid", 0)})
+        else:
+            _json_response({"ok": True, "test_id": tid, "uid": result.get("uid", 0),
+                            "meta_only": True})
+    except Exception as e:
+        _json_response({"ok": False, "error": str(e)})
+
+elif _api_action == "save_test":
+    # edit.html dan POST so'rovi — yangi test saqlash
+    # Streamlit POST body ni to'g'ridan o'qiy olmaydi,
+    # shu sababli GET parametr sifatida JSON yuborilgan bo'lsa ham qabul qilamiz
+    try:
+        payload_str = _qp.get("payload", "")
+        if payload_str:
+            payload = json.loads(payload_str)
+        else:
+            _json_response({"ok": False, "error": "payload parametri kerak (GET orqali)"})
+
+        import asyncio
+        from utils import tg_db, ram_cache as ram
+
+        async def _save(test_data):
+            return await tg_db.save_test_full(test_data)
+
+        try:
+            ok = asyncio.run(_save(payload))
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            ok = loop.run_until_complete(_save(payload))
+            loop.close()
+
+        if ok:
+            ram.add_test_meta(payload)
+            _json_response({"ok": True, "test_id": payload.get("test_id", "")})
+        else:
+            _json_response({"ok": False, "error": "TG ga saqlanmadi"})
+    except Exception as e:
+        _json_response({"ok": False, "error": str(e)})
+
+# ══ RAM UPDATE — Proxy TG ga saqlagan, biz faqat RAM yangilaymiz ══
+elif _api_action == "ram_update":
+    try:
+        import asyncio, datetime
+        from utils import ram_cache as ram
+
+        tid     = _qp.get("tid", "").strip().upper()
+        qs_json = _qp.get("questions", "")
+        old_qc  = int(_qp.get("old_qc", "0") or "0")
+        new_msg = _qp.get("new_msg_id", "").strip()
+
+        if not tid:
+            _json_response({"ok": False, "error": "tid kerak"})
+
+        questions = json.loads(qs_json) if qs_json else []
+
+        # Meta
+        meta = (
+            ram.get_test_meta_any(tid)
+            if hasattr(ram, "get_test_meta_any")
+            else (ram.get_test_meta(tid) or {})
+        )
+        if not meta:
+            _json_response({"ok": False, "error": "Test meta topilmadi"})
+
+        # 1. RAM cache dan eski savollarni o'chirish
+        ram.invalidate_cached_questions(tid)
+
+        # 2. RAM meta yangilash
+        upd = {
+            "question_count": len(questions),
+            "updated_at":     datetime.datetime.utcnow().isoformat(),
+        }
+        if new_msg:
+            upd["_last_msg_id"] = new_msg
+        ram.update_test_meta(tid, upd)
+
+        # 3. Creator ga hisobot (bot orqali)
+        creator_id = meta.get("creator_id")
+        if creator_id:
+            try:
+                from utils import tg_db
+                new_qc = len(questions)
+                diff   = new_qc - old_qc
+                if diff > 0:
+                    change = f"\U0001f4c8 +{diff} ta savol qo'shildi"
+                elif diff < 0:
+                    change = f"\U0001f4c9 {abs(diff)} ta savol o'chirildi"
+                else:
+                    change = "\u270f\ufe0f Savol matnlari / javoblari yangilandi"
+                NL  = "\n"
+                txt = (
+                    "\u270f\ufe0f <b>Test tahrirlandi!</b>" + NL
+                    + "\u2501" * 24 + NL
+                    + "\U0001f4dd <b>" + meta.get("title", tid) + "</b>" + NL
+                    + "\U0001f194 <code>" + tid + "</code>" + NL + NL
+                    + change + NL
+                    + "\U0001f4cb Jami: " + str(new_qc) + " ta savol" + NL + NL
+                    + "\u2139\ufe0f Yangilangan test keyingi yechishdan kuchga kiradi."
+                )
+                async def _send():
+                    await tg_db._bot.send_message(creator_id, txt)
+                try:
+                    asyncio.run(_send())
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    loop.run_until_complete(_send())
+                    loop.close()
+            except Exception:
+                pass
+
+        _json_response({"ok": True, "count": len(questions), "tid": tid})
+
+    except Exception as e:
+        _json_response({"ok": False, "error": str(e)})
+
+
+# ══ RAM SPLIT — Bo'lingan testlarni bot RAMga yozadi ════════════
+elif _api_action == "ram_split":
+    """
+    edit.html testni bo'ldi:
+    Har bir bo'lak uchun:
+      1. TG kanalga saqlash
+      2. RAMga qo'shish
+      3. Creator ga test_created_kb bilan xabar
+    """
+    try:
+        import asyncio
+        from utils import tg_db, ram_cache as ram
+
+        parts_json  = _qp.get("parts", "")
+        creator_id  = int(_qp.get("creator_id", "0") or "0")
+
+        if not parts_json:
+            _json_response({"ok": False, "error": "parts kerak"})
+
+        parts = json.loads(parts_json)  # [{test_id, title, questions, ...}, ...]
+
+        async def _do_split():
+            from keyboards.keyboards import test_created_kb
+            bu = (await tg_db._bot.get_me()).username
+            created = []
+
+            for part in parts:
+                tid   = part.get("test_id", "")
+                if not tid:
+                    continue
+
+                # TG kanalga saqlash
+                ok = await tg_db.save_test_full(part)
+                if not ok:
+                    continue
+
+                # RAMga qo'shish
+                clean = {k: v for k, v in part.items() if k != "questions"}
+                ram.add_test_meta(clean)
+
+                # Creator ga xabar
+                if creator_id:
+                    title = part.get("title", tid)
+                    NL2 = "\n"
+                    txt = (
+                        "\u2702\ufe0f <b>Test bo'linmasi saqlandi!</b>" + NL2
+                        + "\u2501" * 24 + NL2
+                        + "\U0001f4dd <b>" + title + "</b>" + NL2
+                        + "\U0001f4cb " + str(qc) + " ta savol" + NL2
+                        + "\U0001f194 <code>" + tid + "</code>" + NL2 + NL2
+                        + "\U0001f447 Boshlash usulini tanlang:"
+                    )
+                    try:
+                        await tg_db._bot.send_message(
+                            creator_id, txt,
+                            reply_markup=test_created_kb(tid, bu)
+                        )
+                    except Exception:
+                        pass
+
+                created.append({"tid": tid, "title": part.get("title", tid),
+                                 "count": len(part.get("questions", []))})
+
+            return created
+
+        try:
+            created = asyncio.run(_do_split())
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            created = loop.run_until_complete(_do_split())
+            loop.close()
+
+        _json_response({"ok": True, "created": created})
+
+    except Exception as e:
+        _json_response({"ok": False, "error": str(e)})
+
+
+# ══ Normal UI (API so'rovi bo'lmasa) ══════════════════════════
 
 st.set_page_config(
     page_title="Quiz Bot Admin",

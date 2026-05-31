@@ -4,6 +4,70 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.exceptions import TelegramBadRequest
 from utils import ram_cache as ram
 from handlers import webauth
+from handlers import web_cmd
+
+
+import blocked as _blocked_mod
+
+async def _send_blocked_msg(bot, uid: int):
+    """Bloklangan userga xabar + tugmalar."""
+    from config import ADMIN_USERNAME
+    from aiogram.utils.keyboard import InlineKeyboardBuilder as _IKB
+    from aiogram.types import InlineKeyboardButton as _IKBtn
+    b = _IKB()
+    b.row(_IKBtn(text="📩 Adminga murojat", url=f"https://t.me/{ADMIN_USERNAME}"))
+    b.row(_IKBtn(text="🤖 Bot orqali yozish", callback_data="contact_admin"))
+    try:
+        await bot.send_message(
+            uid,
+            "🚫 <b>Hisobingiz bloklangan</b>\n\n"
+            "Botdan foydalanish to\'xtatilgan.\n\n"
+            "To\'lov qilgan bo\'lsangiz yoki xato bo\'lsa\n"
+            "admin bilan bog\'laning 👇",
+            reply_markup=b.as_markup()
+        )
+    except Exception:
+        pass
+
+
+class BlockedUserMiddleware(BaseMiddleware):
+    """
+    Barcha event turlarida bloklangan userlarni to'xtatadi.
+    blocked.py dan tez O(1) tekshiruv.
+    """
+    # contact_admin — bloklangan user ham murojat qila olsin
+    ALLOWED_CALLBACKS = {"contact_admin"}
+
+    async def __call__(self, handler, event, data):
+        from aiogram.types import PollAnswer as _PA, InlineQuery as _IQ
+
+        uid = None
+        if isinstance(event, Message):
+            uid = event.from_user.id if event.from_user else None
+        elif isinstance(event, CallbackQuery):
+            uid = event.from_user.id if event.from_user else None
+            # Murojat tugmasi — o'tkazib yuborish
+            if uid and event.data in self.ALLOWED_CALLBACKS:
+                return await handler(event, data)
+        elif isinstance(event, _PA):
+            uid = event.user.id if event.user else None
+        elif isinstance(event, _IQ):
+            uid = event.from_user.id if event.from_user else None
+
+        if uid and _blocked_mod.is_blocked(uid):
+            bot = data.get("bot")
+            if bot:
+                await _send_blocked_msg(bot, uid)
+            if isinstance(event, CallbackQuery):
+                try:
+                    await event.answer(
+                        "🚫 Hisobingiz bloklangan!", show_alert=True
+                    )
+                except Exception:
+                    pass
+            return  # Handler ga O'TKAZMAYMIZ
+
+        return await handler(event, data)
 
 
 class ClearMenuMiddleware(BaseMiddleware):
@@ -118,6 +182,10 @@ async def main():
     bot = Bot(token=BOT_TOKEN,
               default=DefaultBotProperties(parse_mode=ParseMode.HTML, protect_content=True))
     dp  = Dispatcher(storage=MemoryStorage())
+    dp.message.middleware(BlockedUserMiddleware())
+    dp.callback_query.middleware(BlockedUserMiddleware())
+    dp.poll_answer.middleware(BlockedUserMiddleware())
+    dp.inline_query.middleware(BlockedUserMiddleware())
     dp.message.middleware(ClearMenuMiddleware())
     dp.callback_query.middleware(ClearMenuMiddleware())
     dp.message.middleware(GroupTrackerMiddleware())
@@ -138,6 +206,7 @@ async def main():
     dp.include_router(r_scheduler)
     dp.include_router(r_photo)
     dp.include_router(webauth.router)
+    dp.include_router(web_cmd.router)
     # TG DB boshlash
     if STORAGE_CHANNEL_ID:
         from utils import tg_db
@@ -152,6 +221,7 @@ async def main():
         settings = await tg_db.get_settings_tg()
         if settings: ram.set_all_settings(settings)
         log.info(f"✅ Yuklandi: {ram.stats()['tests']} test meta, {ram.stats()['users']} user (savollar lazy)")
+        _blocked_mod.load()
 
     # Background tasklar
     asyncio.create_task(_midnight_flush_loop(bot))
@@ -391,6 +461,38 @@ async def _main_no_signals():
     dp.include_router(r_scheduler)
     dp.include_router(r_photo)
     dp.include_router(webauth.router)
+    dp.include_router(web_cmd.router)
+
+    # ── Baza guruhiga yuborilgan fayllarni handle qilish ──
+    from aiogram import F as _F
+    from aiogram.types import Message as _Msg
+    from aiogram import Router as _Router
+
+    _baza_router = _Router()
+
+    @_baza_router.message(_F.document)
+    async def _handle_group_doc(message: _Msg):
+        """Baza guruhiga yuborilgan fayl → parse → test yaratish"""
+        try:
+            from utils.baza_publisher import parse_group_file
+            from config import BAZA_GROUP_ID
+            if not BAZA_GROUP_ID:
+                return
+            if message.chat.id != int(BAZA_GROUP_ID):
+                return
+            u = message.from_user
+            await parse_group_file(
+                bot              = message.bot,
+                message          = message,
+                creator_id       = u.id,
+                creator_name     = u.full_name or "",
+                creator_username = u.username or "",
+            )
+        except Exception as _e:
+            import logging
+            logging.getLogger(__name__).warning(f"Group doc handler: {_e}")
+
+    dp.include_router(_baza_router)
 
     if STORAGE_CHANNEL_ID:
         from utils import tg_db
@@ -404,6 +506,7 @@ async def _main_no_signals():
         settings = await tg_db.get_settings_tg()
         if settings: ram.set_all_settings(settings)
         log.info(f"✅ Yuklandi: {ram.stats()['tests']} test meta, {ram.stats()['users']} user")
+        _blocked_mod.load()
 
     # Startup da bot admin bo'lgan guruhlarni aniqlash
     asyncio.create_task(_scan_groups_on_startup(bot))
