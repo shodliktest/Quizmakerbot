@@ -416,6 +416,42 @@ async def start_inline_test(callback: CallbackQuery, state: FSMContext):
     if is_test_paused(tid):
         return await callback.answer("⚠️ Bu test vaqtincha to'xtatilgan!", show_alert=True)
     await callback.answer()
+
+    # ── Web test ga yo'naltirish (inline o'rniga) ──
+    if not (tid.startswith("DEMO_") or callback.data.startswith("start_demo_")):
+        try:
+            from handlers.webauth import WEBAPP_URL
+            import urllib.parse
+            u       = callback.from_user
+            _name   = u.full_name or f"User{u.id}"
+            _uname  = u.username or ""
+            _meta   = get_test_meta(tid) or {}
+            _params = urllib.parse.urlencode({
+                "id": tid, "uid": u.id,
+                "name": _name, "uname": _uname, "auto": "1"
+            })
+            _web_url = f"{WEBAPP_URL}/web_test.html?{_params}"
+            from aiogram.utils.keyboard import InlineKeyboardBuilder
+            from aiogram.types import InlineKeyboardButton
+            _bld = InlineKeyboardBuilder()
+            _bld.row(InlineKeyboardButton(text="🌐 Web testni ochish", url=_web_url))
+            _bld.row(InlineKeyboardButton(
+                text="📊 Quiz Poll o'rniga",
+                callback_data=f"start_poll_{tid}"
+            ))
+            _qc = _meta.get("question_count", 0)
+            _title = _meta.get("title", tid)
+            await callback.message.answer(
+                f"🌐 <b>Web test tayyor!</b>\n"
+                f"📝 <b>{_title}</b>\n"
+                f"📋 {_qc} ta savol\n\n"
+                "Natijalar avtomatik saqlanadi va statistikaga qo'shiladi.",
+                reply_markup=_bld.as_markup()
+            )
+            return
+        except Exception:
+            pass  # fallback: inline test davom etadi
+
     uid  = callback.from_user.id
     meta = get_test_meta(tid) or {}
 
@@ -483,9 +519,24 @@ async def start_inline_test(callback: CallbackQuery, state: FSMContext):
         "cid": cid, "t0": time.time(), "uid": uid,
         "via_link": test.get("visibility") == "link",
         "no_ans_streak": 0, "q_msg_id": None,
+        "is_demo": is_demo,
     })
 
-    # Test kartochkasini o'chirmasdan, YANGI xabar sifatida birinchi savol
+    # Demo yoki oddiy: test nomini ko'rsatamiz
+    title = test.get("title", "?")
+    prefix = "🔍 [DEMO] " if is_demo else "📝 "
+    qc_total = len(test.get("questions", []))
+    demo_count = len(qs) if is_demo else qc_total
+    demo_note = (
+        f"\n⚠️ Sinov rejimi: <b>{demo_count} ta</b> savol yechish mumkin"
+        f" (jami {qc_total} ta)" if is_demo else ""
+    )
+    try:
+        await callback.message.answer(
+            f"{prefix}<b>{title}</b>{demo_note}"
+        )
+    except Exception: pass
+
     await _send_question_new(callback.bot, cid, state, uid)
 
 

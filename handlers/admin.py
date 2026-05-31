@@ -183,8 +183,13 @@ async def adm_block_user(callback: CallbackQuery):
     users   = ram.get_users()
     u       = users.get(str(uid_str), {})
     new_blk = not u.get("is_blocked", False)
-    block_user(int(uid_str), new_blk)
-    await callback.answer("🚫 Bloklandi" if new_blk else "✅ Blok ochildi", show_alert=True)
+    import blocked as _bl
+    if new_blk:
+        _bl.block(int(uid_str))
+        await callback.answer("🚫 Bloklandi!", show_alert=True)
+    else:
+        _bl.unblock(int(uid_str))
+        await callback.answer("✅ Blok ochildi!", show_alert=True)
     await adm_user_detail(callback)
 
 
@@ -409,6 +414,12 @@ async def adm_test_detail(callback: CallbackQuery):
             InlineKeyboardButton(text="👥 Kim yechgan",    callback_data=f"test_solvers_{tid}_0"),
             InlineKeyboardButton(text="⏱ Poll vaqti",      callback_data=f"edit_poll_time_{tid}"),
         )
+        # Web tahrirlash tugmasi
+        from handlers.webauth import WEBAPP_URL
+        b.row(InlineKeyboardButton(
+            text="🌐 Tahrirlash (web)",
+            url=f"{WEBAPP_URL}/edit.html?id={tid}"
+        ))
         b.row(InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"del_test_{tid}"))
     cat = meta.get("category","")[:30]
     b.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"adm_cat_{cat}_0"))
@@ -885,26 +896,62 @@ async def cmd_rescan(message: Message):
     if not is_admin(message.from_user.id):
         return
     from utils import tg_db, ram_cache as ram
+    import time as _time
+
+    before_tests  = len(ram.get_all_tests_meta())
+    before_users  = len(ram.get_users())
+    before_groups = len([g for g in ram.get_known_groups().values() if g.get("active")])
+
     msg = await message.answer(
-        "🔍 <b>To'liq kanal skanerlash boshlandi...</b>\n"
-        "3000 xabar skanerlash ~2-4 daqiqa davom etadi.\n"
-        "⏳ Kuting..."
+        "🔍 <b>Kanal skanerlash boshlandi</b>\n\n"
+        "<code>[░░░░░░░░░░░░░░░░░░░░]</code> 0%\n"
+        "📨 0/3000 xabar ko'rildi\n"
+        "✅ 0 ta topildi\n\n"
+        "Bot ishlayveradi ✅"
     )
-    before_tests = len(ram.get_all_tests_meta())
-    before_users = len(ram.get_users())
 
-    # To'liq skanerlash
-    result = await tg_db._migrate_from_old_index()
+    # Progress callback
+    last_edit = [0]
+    async def on_progress(scanned, total, found, stage):
+        now = _time.time()
+        if now - last_edit[0] < 8:
+            return
+        last_edit[0] = now
+        bar_len = 20
+        filled  = int(bar_len * scanned / total) if total > 0 else 0
+        bar     = "█" * filled + "░" * (bar_len - filled)
+        pct     = int(100 * scanned / total) if total > 0 else 0
+        stage_txt = {
+            "scan":   "📡 Kanal skanerlash...",
+            "index":  "📋 Index chunklar...",
+            "tests":  "📝 Test fayllar...",
+            "users":  "👥 Foydalanuvchilar...",
+            "groups": "🏘 Guruhlar...",
+        }.get(stage, "⏳ Yuklanmoqda...")
+        try:
+            await msg.edit_text(
+                f"🔍 <b>Kanal skanerlash</b>\n\n"
+                f"{stage_txt}\n"
+                f"<code>[{bar}]</code> {pct}%\n"
+                f"📨 {scanned}/{total} xabar ko'rildi\n"
+                f"✅ {found} ta topildi\n\n"
+                f"Bot ishlayveradi ✅"
+            )
+        except Exception: pass
 
-    after_tests = len(ram.get_all_tests_meta())
-    after_users = len(ram.get_users())
+    result = await tg_db._migrate_from_old_index(progress_callback=on_progress)
+
+    after_tests  = len(ram.get_all_tests_meta())
+    after_users  = len(ram.get_users())
+    after_groups = len([g for g in ram.get_known_groups().values() if g.get("active")])
 
     if result:
         await msg.edit_text(
-            f"✅ <b>To'liq skanerlash yakunlandi!</b>\n\n"
+            f"✅ <b>Skanerlash yakunlandi!</b>\n\n"
             f"📋 Testlar: <b>{before_tests}</b> → <b>{after_tests}</b> ta\n"
-            f"👥 Userlar: <b>{before_users}</b> → <b>{after_users}</b> ta\n\n"
-            f"Endi barcha ma'lumotlar tiklanib saqlandi. ✅"
+            f"👥 Userlar: <b>{before_users}</b> → <b>{after_users}</b> ta\n"
+            f"🏘 Guruhlar: <b>{before_groups}</b> → <b>{after_groups}</b> ta\n\n"
+            f"✅ Hammasi tiklanib saqlandi!"
         )
     else:
         await msg.edit_text(
@@ -971,3 +1018,252 @@ async def cmd_reindex(message: Message):
         )
     except Exception:
         pass
+
+
+# ── Forward rejimi ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+_forward_mode_users = set()   # Forward rejimda turgan adminlar
+
+@router.callback_query(F.data == "admin_forward_mode")
+async def enter_forward_mode(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id): return
+    await callback.answer()
+    uid = callback.from_user.id
+    _forward_mode_users.add(uid)
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="❌ Forward rejimdan chiqish",
+                               callback_data="exit_forward_mode"))
+    try:
+        await callback.message.edit_text(
+            "📨 <b>Forward rejimi YOQILDI</b>\n\n"
+            "Endi siz yuborgan har qanday xabar —\n"
+            "rasm, video, hujjat, matn —\n"
+            "<b>screenshot va forward qilish mumkin</b> holda qayta yuboriladi.\n\n"
+            "📌 Qo\'llanish:\n"
+            "• Xabarni menga yuboring → men uni forward qilish mumkin holda qayta yubora men\n"
+            "• /cancel — rejimdan chiqish\n\n"
+            "<i>Bu rejimda protect_content=False ishlaydi</i>",
+            reply_markup=b.as_markup()
+        )
+    except TelegramBadRequest: pass
+
+
+@router.callback_query(F.data == "exit_forward_mode")
+async def exit_forward_mode_cb(callback: CallbackQuery):
+    uid = callback.from_user.id
+    _forward_mode_users.discard(uid)
+    await callback.answer("✅ Rejimdan chiqildi.")
+    try:
+        await callback.message.edit_text(
+            "📨 Forward rejimi <b>o\'chirildi</b>.",
+        )
+    except TelegramBadRequest: pass
+
+
+@router.message(Command("cancel"))
+async def cancel_forward(message: Message):
+    uid = message.from_user.id
+    if uid in _forward_mode_users:
+        _forward_mode_users.discard(uid)
+        await message.answer("✅ Forward rejimdan chiqildi.")
+
+
+@router.message(F.from_user.func(lambda u: u.id in _forward_mode_users))
+async def forward_mode_handler(message: Message):
+    """
+    Forward rejimda: admin yuborgan har qanday xabarni
+    protect_content=False bilan qayta yuboradi.
+    Screenshot va forward qilish mumkin bo'ladi.
+    """
+    uid = message.from_user.id
+    if uid not in _forward_mode_users:
+        return
+
+    try:
+        # Xabar turini aniqlash
+        if message.text and not message.text.startswith("/"):
+            sent = await message.bot.send_message(
+                uid, message.text,
+                parse_mode="HTML", protect_content=False
+            )
+        elif message.photo:
+            sent = await message.bot.send_photo(
+                uid, message.photo[-1].file_id,
+                caption=message.caption or "", protect_content=False
+            )
+        elif message.video:
+            sent = await message.bot.send_video(
+                uid, message.video.file_id,
+                caption=message.caption or "", protect_content=False
+            )
+        elif message.document:
+            sent = await message.bot.send_document(
+                uid, message.document.file_id,
+                caption=message.caption or "", protect_content=False
+            )
+        elif message.voice:
+            sent = await message.bot.send_voice(
+                uid, message.voice.file_id,
+                caption=message.caption or "", protect_content=False
+            )
+        elif message.sticker:
+            sent = await message.bot.send_sticker(
+                uid, message.sticker.file_id, protect_content=False
+            )
+        elif message.video_note:
+            sent = await message.bot.send_video_note(
+                uid, message.video_note.file_id, protect_content=False
+            )
+        else:
+            return
+
+        b = InlineKeyboardBuilder()
+        b.row(InlineKeyboardButton(text="❌ Rejimdan chiqish",
+                                   callback_data="exit_forward_mode"))
+        await message.answer(
+            "✅ Yuborildi. Endi screenshot va forward qilish mumkin.\n"
+            "Yana xabar yuboring yoki rejimdan chiqing.",
+            reply_markup=b.as_markup()
+        )
+    except Exception as e:
+        await message.answer(f"❌ Xato: {e}")
+
+
+
+# ══ TEST YARATISH SOZLAMALARI ═══════════════════════════════════
+
+@router.callback_query(F.data == "admin_creation_settings")
+async def admin_creation_settings(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id): return
+    await callback.answer()
+    from utils.roles import get_creation_settings
+    s = get_creation_settings()
+
+    disabled   = s["test_creation_disabled"]
+    open_all   = s["open_test_creation"]
+    ref_off    = s["referral_creation_disabled"]
+    refs_need  = s["refs_needed_for_create"]
+
+    b = InlineKeyboardBuilder()
+
+    # 1. Butunlay berkitish
+    if disabled:
+        b.row(InlineKeyboardButton(
+            text="✅ Test yaratish YOPIQ — ochish",
+            callback_data="creation_toggle_disabled"
+        ))
+    else:
+        b.row(InlineKeyboardButton(
+            text="🔒 Test yaratishni BERKITISH",
+            callback_data="creation_toggle_disabled"
+        ))
+
+    # 2. Hammaga ochish
+    if not disabled:
+        if open_all:
+            b.row(InlineKeyboardButton(
+                text="✅ Hammaga OCHIQ — yopish",
+                callback_data="creation_toggle_open"
+            ))
+        else:
+            b.row(InlineKeyboardButton(
+                text="🌐 Hammaga ochish",
+                callback_data="creation_toggle_open"
+            ))
+
+    # 3. Referal orqali yaratish
+    if not disabled and not open_all:
+        if ref_off:
+            b.row(InlineKeyboardButton(
+                text="✅ Referal yaratish YOPIQ — ochish",
+                callback_data="creation_toggle_referal"
+            ))
+        else:
+            b.row(InlineKeyboardButton(
+                text="🔗 Referal yaratishni berkitish",
+                callback_data="creation_toggle_referal"
+            ))
+
+        # 4. Referal soni
+        b.row(
+            InlineKeyboardButton(text="➖", callback_data="creation_refs_minus"),
+            InlineKeyboardButton(text=f"🔗 {refs_need} ta referal kerak",
+                                 callback_data="noop"),
+            InlineKeyboardButton(text="➕", callback_data="creation_refs_plus"),
+        )
+
+    b.row(InlineKeyboardButton(text="⬅️ Admin", callback_data="admin_panel"))
+
+    status_lines = [
+        "⚙️ <b>Test yaratish sozlamalari</b>\n",
+        f"🔒 Butunlay berkitilgan: {'✅ HA' if disabled else '❌ YOQ'}",
+        f"🌐 Hammaga ochiq: {'✅ HA' if open_all else '❌ YOQ'}",
+        f"🔗 Referal orqali: {'❌ YOPIQ' if ref_off else '✅ OCHIQ'}",
+        f"🔢 Kerakli referal soni: <b>{refs_need} ta</b>",
+    ]
+    if not disabled and not open_all and not ref_off:
+        status_lines.append(
+            f"\n💡 Foydalanuvchi bugun <b>{refs_need} ta</b> referal "
+            f"yuborsa test yaratishi mumkin."
+        )
+    if disabled:
+        status_lines.append("\n⚠️ Hozir hech kim (admindan tashqari) test yarata olmaydi!")
+
+    try:
+        await callback.message.edit_text(
+            "\n".join(status_lines),
+            reply_markup=b.as_markup()
+        )
+    except TelegramBadRequest: pass
+
+
+@router.callback_query(F.data == "creation_toggle_disabled")
+async def creation_toggle_disabled(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id): return
+    from utils.roles import get_creation_settings, set_creation_settings
+    s = get_creation_settings()
+    new_val = not s["test_creation_disabled"]
+    set_creation_settings({"test_creation_disabled": new_val})
+    status = "🔒 BERKITILDI" if new_val else "🔓 OCHILDI"
+    await callback.answer(f"Test yaratish {status}!", show_alert=True)
+    await admin_creation_settings(callback)
+
+
+@router.callback_query(F.data == "creation_toggle_open")
+async def creation_toggle_open(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id): return
+    from utils.roles import get_creation_settings, set_creation_settings
+    s = get_creation_settings()
+    new_val = not s["open_test_creation"]
+    set_creation_settings({"open_test_creation": new_val})
+    status = "✅ Hammaga OCHILDI" if new_val else "❌ Yopildi"
+    await callback.answer(status, show_alert=True)
+    await admin_creation_settings(callback)
+
+
+@router.callback_query(F.data == "creation_toggle_referal")
+async def creation_toggle_referal(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id): return
+    from utils.roles import get_creation_settings, set_creation_settings
+    s = get_creation_settings()
+    new_val = not s["referral_creation_disabled"]
+    set_creation_settings({"referral_creation_disabled": new_val})
+    status = "🔒 Referal yaratish BERKITILDI" if new_val else "✅ Referal yaratish OCHILDI"
+    await callback.answer(status, show_alert=True)
+    await admin_creation_settings(callback)
+
+
+@router.callback_query(F.data.in_({"creation_refs_plus", "creation_refs_minus"}))
+async def creation_refs_count(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id): return
+    from utils.roles import get_creation_settings, set_creation_settings
+    s    = get_creation_settings()
+    cur  = s["refs_needed_for_create"]
+    if callback.data == "creation_refs_plus":
+        new = min(cur + 1, 20)
+    else:
+        new = max(cur - 1, 1)
+    set_creation_settings({"refs_needed_for_create": new})
+    await callback.answer(f"✅ {new} ta referal kerak")
+    await admin_creation_settings(callback)
+
