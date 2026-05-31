@@ -39,6 +39,9 @@ NOTIFS  = ["off", "on"]
 MAX_ANALYSIS_PER_USER = 30   # Max 30 test tahlil per user
 
 
+def _delete(k):
+    with _lck: _RAM.pop(k, None)
+
 def _get(k, d=None):
     with _lck: return _RAM.get(k, d)
 
@@ -93,8 +96,21 @@ def set_tests_meta(m):
     _set("tests_meta", m)
 
 def get_test_meta(tid):
+    """Faqat aktiv testlarni qaytaradi (foydalanuvchilar uchun)"""
+    return next((t for t in _get("tests_meta", [])
+                 if t.get("test_id") == tid
+                 and t.get("is_active", True)
+                 and not t.get("is_deleted", False)), {})
+
+def get_test_meta_any(tid):
+    """Har qanday holatdagi testni qaytaradi (admin uchun)"""
     return next((t for t in _get("tests_meta", [])
                  if t.get("test_id") == tid), {})
+
+def get_deleted_tests():
+    """Yaratuvchi o'chirgan testlar (admin ko'rishi uchun)"""
+    return [t for t in _get("tests_meta", [])
+            if t.get("is_deleted", False) and t.get("is_active", True)]
 
 def add_test_meta(meta):
     m = [x for x in _get("tests_meta", []) if x.get("test_id") != meta.get("test_id")]
@@ -109,11 +125,18 @@ def update_test_meta(tid, updates):
             break
     _set("tests_meta", m)
 
+def soft_delete_test(tid):
+    """Yaratuvchi o'chirganda — yashirin qiladi, lekin admin ko'radi"""
+    update_test_meta(tid, {"is_deleted": True})
+    _pop(f"qcache_{tid}")
+    log.info(f"RAM: test_{tid} soft-deleted")
+
 def delete_test_from_ram(tid):
+    """Admin o'chirganda — butunlay o'chiradi"""
     m = [t for t in _get("tests_meta", []) if t.get("test_id") != tid]
     _set("tests_meta", m)
     _pop(f"qcache_{tid}")
-    log.info(f"RAM: test_{tid} o'chirildi")
+    log.info(f"RAM: test_{tid} butunlay o'chirildi")
 
 def pause_test(tid, paused: bool):
     update_test_meta(tid, {"is_paused": paused})
@@ -174,6 +197,10 @@ def get_cached_questions(tid):
     _set(f"qcache_{tid}", e)
     return e["test"]
 
+def invalidate_cached_questions(tid):
+    """Tahrirlangandan keyin RAM cache dan eski savollarni o'chirish."""
+    _delete(f"qcache_{tid}")
+
 def touch_test_access(tid):
     e = _get(f"qcache_{tid}")
     if e:
@@ -213,6 +240,39 @@ def get_cache_stats():
 def get_users():         return _get("users_cache", {})
 def set_users(u):        _set("users_cache", u)
 def get_user(tg_id):     return get_users().get(str(tg_id))
+
+# ══ BLOCKED USERS — tez tekshiruv ══════════════════════════════
+_blocked_set: set = set()   # O(1) tez tekshiruv uchun
+
+def is_user_blocked(tg_id) -> bool:
+    """Foydalanuvchi bloklangan yoki yo'qligini tez tekshirish."""
+    uid = str(tg_id)
+    if uid in _blocked_set:
+        return True
+    u = get_users().get(uid)
+    if u and u.get("is_blocked"):
+        _blocked_set.add(uid)
+        return True
+    return False
+
+def set_blocked(tg_id, blocked: bool):
+    """Bloklash holatini yangilash — RAM set + cache."""
+    uid = str(tg_id)
+    if blocked:
+        _blocked_set.add(uid)
+    else:
+        _blocked_set.discard(uid)
+    users = get_users()
+    if uid in users:
+        users[uid]["is_blocked"] = blocked
+        _set("users_cache", users)
+
+def load_blocked_from_cache():
+    """Bot yoqilganda blocked_users ni cache dan yuklash."""
+    for uid, u in get_users().items():
+        if u.get("is_blocked"):
+            _blocked_set.add(uid)
+
 
 def upsert_user(tg_id, data):
     u = get_users()

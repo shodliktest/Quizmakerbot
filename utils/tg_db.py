@@ -104,6 +104,7 @@ async def init(bot, channel_id):
     asyncio.create_task(_load_users_list())
     asyncio.create_task(load_known_groups())
     asyncio.create_task(_load_leaderboard())
+    asyncio.create_task(_load_blocked_to_ram())
 
     log.info(f"Tayyor (tez): {len(_index.get('tests_meta',[]))} test meta yuklandi")
     log.info("Users, guruhlar va leaderboard background da yuklanmoqda...")
@@ -132,7 +133,7 @@ def is_dirty():
 # INDEX META — pinned kichik fayl
 # ══════════════════════════════════════════════════════════════
 
-async def _migrate_from_old_index() -> dict:
+async def _migrate_from_old_index(progress_callback=None) -> dict:
     """
     TO'LIQ KANAL SKANERLASH:
     Kanaldan barcha JSON fayllarni topib ma'lumotlarni tiklaydi.
@@ -156,7 +157,8 @@ async def _migrate_from_old_index() -> dict:
         cur   = probe.message_id
         await _bot.delete_message(_cid, cur)
 
-        for mid in range(cur - 1, max(1, cur - 3000), -1):
+        total_range = min(3000, cur - 1)
+        for i, mid in enumerate(range(cur - 1, max(1, cur - 3000), -1)):
             try:
                 fwd = await _bot.forward_message(_cid, _cid, mid)
                 doc = getattr(fwd, "document", None)
@@ -168,8 +170,16 @@ async def _migrate_from_old_index() -> dict:
                         "name": doc.file_name.lower(),
                         "fid":  doc.file_id,
                     }
-                await asyncio.sleep(0.05)
-            except: pass
+                # Polling ga joy berish — har 5 xabardan keyin
+                if i % 5 == 0:
+                    await asyncio.sleep(0)
+                else:
+                    await asyncio.sleep(0.03)
+                # Progress callback
+                if progress_callback and i % 50 == 0:
+                    await progress_callback(i, total_range, len(all_json_files), "scan")
+            except Exception:
+                await asyncio.sleep(0)
 
         log.info(f"Topilgan JSON fayllar: {len(all_json_files)} ta")
     except Exception as e:
@@ -395,7 +405,7 @@ async def _load_meta() -> dict:
                         log.info(f"index_meta topildi (msg {mid})")
                         await _pin_msg(mid)
                         return data
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0)
             except: pass
     except Exception as e:
         log.warning(f"Meta qidirish: {e}")
@@ -493,15 +503,107 @@ async def _background_full_rescan():
     """
     Background da to'liq kanal skanerlash.
     Bot polling ishlayotgan paytda amalga oshadi.
+    Admin ga progress xabarlari yuboriladi.
     """
-    await asyncio.sleep(3)   # Polling boshlangandan keyin
-    log.info("⬇️ Background to'liq skanerlash boshlandi...")
-    result = await _migrate_from_old_index()
-    if result:
-        log.info(f"✅ Background skanerlash tugadi: "
-                 f"{len(_index.get('tests_meta',[]))} test meta tiklandi")
-    else:
-        log.warning("Background skanerlash natija bermadi")
+    await asyncio.sleep(5)   # Polling boshlangandan keyin
+
+    from config import ADMIN_IDS
+    admin_id = ADMIN_IDS[0] if ADMIN_IDS else None
+
+    log.info("Background to'liq skanerlash boshlandi...")
+
+    # Admin ga boshlash xabari
+    progress_msg_id = None
+    if admin_id and _bot:
+        try:
+            msg = await _bot.send_message(
+                admin_id,
+                "🔍 <b>Kanal skanerlash boshlandi</b>\n\n"
+                "⏳ Bot testlar, userlar va guruhlarni tiklamoqda...\n"
+                "Bu 2-5 daqiqa davom etishi mumkin.\n\n"
+                "Bot shu paytda ham ishlayveradi ✅"
+            )
+            progress_msg_id = msg.message_id
+        except Exception: pass
+
+    result = await _migrate_from_old_index(
+        progress_callback=_make_progress_callback(admin_id, progress_msg_id)
+    )
+
+    tests_count = len(_index.get("tests_meta", []))
+    from utils import ram_cache as ram
+    users_count  = len(ram.get_users())
+    groups_count = len([g for g in ram.get_known_groups().values() if g.get("active")])
+
+    if admin_id and _bot and progress_msg_id:
+        try:
+            if result:
+                await _bot.edit_message_text(
+                    chat_id=admin_id,
+                    message_id=progress_msg_id,
+                    text=(
+                        f"✅ <b>Kanal skanerlash tugadi!</b>\n\n"
+                        f"📋 Testlar: <b>{tests_count} ta</b>\n"
+                        f"👥 Foydalanuvchilar: <b>{users_count} ta</b>\n"
+                        f"🏘 Guruhlar: <b>{groups_count} ta</b>\n\n"
+                        f"Bot to'liq tayyor! 🚀"
+                    )
+                )
+            else:
+                await _bot.edit_message_text(
+                    chat_id=admin_id,
+                    message_id=progress_msg_id,
+                    text="⚠️ Skanerlash natija bermadi. Kanal bo'sh bo'lishi mumkin."
+                )
+        except Exception: pass
+
+    log.info(f"Background skanerlash tugadi: {tests_count} test, "
+             f"{users_count} user, {groups_count} guruh")
+
+
+def _make_progress_callback(admin_id, msg_id):
+    """Progress callback — har 50 xabardan keyin admin ga yangilash"""
+    if not admin_id or not msg_id or not _bot:
+        return None
+
+    last_update = [0]
+
+    async def callback(scanned: int, total: int, found: int, stage: str):
+        import time
+        now = time.time()
+        if now - last_update[0] < 10:   # 10 soniyada 1 marta yangilash
+            return
+        last_update[0] = now
+
+        bar_len   = 20
+        filled    = int(bar_len * scanned / total) if total > 0 else 0
+        bar       = "█" * filled + "░" * (bar_len - filled)
+        pct       = int(100 * scanned / total) if total > 0 else 0
+
+        stage_txt = {
+            "scan":   "📡 Kanal skanerlash...",
+            "index":  "📋 Index chunklar...",
+            "tests":  "📝 Test fayllar...",
+            "users":  "👥 Foydalanuvchilar...",
+            "groups": "🏘 Guruhlar...",
+        }.get(stage, "⏳ Yuklanmoqda...")
+
+        try:
+            await _bot.edit_message_text(
+                chat_id=admin_id,
+                message_id=msg_id,
+                text=(
+                    f"🔍 <b>Kanal skanerlash</b>\n\n"
+                    f"{stage_txt}\n"
+                    f"<code>[{bar}]</code> {pct}%\n"
+                    f"📨 {scanned}/{total} xabar ko'rildi\n"
+                    f"✅ {found} ta topildi\n\n"
+                    f"Bot ishlayveradi ✅"
+                )
+            )
+        except Exception: pass
+
+    return callback
 
 
 async def _load_all_index_chunks():
@@ -605,7 +707,7 @@ async def _recover_index_from_channel() -> list:
                         if fname not in chunk_names:
                             chunk_names[fname] = (mid, doc.file_id)
                             log.info(f"  index_chunk topildi: {doc.file_name} (msg {mid})")
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0)
             except: pass
 
         # Har bir chunk ni yuklash
@@ -821,7 +923,7 @@ async def _recover_users_from_channel():
                                     "count": len(data["users"]),
                                 })
                                 log.info(f"  users_list topildi: {len(data['users'])} user")
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0)
             except: pass
 
         if all_users:
@@ -991,12 +1093,27 @@ async def _load_tests_stats():
     global _stats_dirty
     fid = _meta.get("tests_stats_fid")
     mid = _meta.get("tests_stats_msg_id")
-    if not mid: return
     data = {}
     if fid:
         data = await _read_file(fid)
     if not data and mid:
         data = await _download_doc(mid)
+    if not data and not mid:
+        # tests_stats_msg_id yo'q — kanaldan qidirish
+        log.info("tests_stats: meta da yo'q, kanaldan qidirilmoqda...")
+        try:
+            # Kanaldan so'nggi TESTS_STATS caption li xabar topish
+            async for msg in _bot.get_chat_history(_cid, limit=200):
+                if msg.document and msg.caption and "TESTS_STATS" in (msg.caption or ""):
+                    found = await _read_file(msg.document.file_id)
+                    if found and found.get("stats"):
+                        data = found
+                        _meta["tests_stats_msg_id"] = msg.message_id
+                        _meta["tests_stats_fid"]    = msg.document.file_id
+                        log.info(f"tests_stats: kanaldan topildi (msg_id={msg.message_id})")
+                        break
+        except Exception as e:
+            log.warning(f"tests_stats kanaldan qidirish: {e}")
     if not data:
         _stats_dirty = True
         return
@@ -1170,6 +1287,19 @@ async def load_group_leaderboard():
 # AUTO FLUSH LOOP — MINIMAL YOZUV
 # ══════════════════════════════════════════════════════════════
 
+
+async def _load_blocked_to_ram():
+    """Background da bloklangan IDlarni TG dan yuklab RAMga qo'yadi."""
+    try:
+        ids = await load_blocked_users()
+        if ids:
+            import blocked as _bl
+            for bid in ids:
+                _bl._blocked.add(bid)
+            log.info(f"Bloklangan IDlar yuklandi: {len(ids)} ta")
+    except Exception as e:
+        log.error(f"_load_blocked_to_ram: {e}")
+
 async def auto_flush_loop():
     """
     QOIDA: auto_flush faqat stats va users ni saqlaydi.
@@ -1257,20 +1387,139 @@ def get_otp_info(code: str) -> dict:
 # WEB SYNC
 # ══════════════════════════════════════════════════════════════
 
+
+async def _notify_web_test(meta: dict, tid: str):
+    if not meta.get("creator_id"):
+        return
+    try:
+        from keyboards.keyboards import test_created_kb
+        bu    = (await _bot.get_me()).username
+        title = meta.get("title", tid)
+        qc    = meta.get("question_count", 0)
+        lines = [
+            "\u2705 <b>Yangi test saqlandi!</b>",
+            "\u2501" * 24,
+            "\U0001f4dd <b>" + title + "</b>",
+            "\U0001f4cb " + str(qc) + " ta savol | \U0001f194 <code>" + tid + "</code>",
+            "",
+            "\U0001f447 Boshlash usulini tanlang:",
+        ]
+        await _bot.send_message(
+            meta["creator_id"],
+            "\n".join(lines),
+            reply_markup=test_created_kb(tid, bu)
+        )
+
+        # Baza guruhiga publish
+        try:
+            from utils.baza_publisher import publish_to_baza
+            full = await get_test_full(tid)
+            if full and full.get("questions"):
+                await publish_to_baza(
+                    bot           = _bot,
+                    tid           = tid,
+                    title         = meta.get("title", tid),
+                    questions     = full["questions"],
+                    creator_id    = int(meta.get("creator_id") or 0),
+                    creator_name  = meta.get("creator_name", ""),
+                    bot_username  = bu,
+                    category      = meta.get("category", ""),
+                    difficulty    = meta.get("difficulty", "medium"),
+                    passing_score = int(meta.get("passing_score") or 60),
+                )
+        except Exception as _bp:
+            log.warning("_notify_web_test baza: %s", _bp)
+    except Exception as _e:
+        log.warning("_notify_web_test %s: %s", tid, _e)
+
+
+async def _notify_updated_test(meta: dict, tid: str, old_qc: int, new_qc: int):
+    """Tahrirlangan test haqida creator ga hisobot."""
+    if not meta.get("creator_id"):
+        return
+    try:
+        diff = new_qc - old_qc
+        if diff > 0:
+            change = f"\U0001f4c8 +{diff} ta savol qo\u2018shildi"
+        elif diff < 0:
+            change = f"\U0001f4c9 {abs(diff)} ta savol o\u2018chirildi"
+        else:
+            change = "\u270f\ufe0f Savol matnlari / javoblari yangilandi"
+        NL    = "\n"
+        title = meta.get("title", tid)
+        txt   = (
+            "\u270f\ufe0f <b>Test tahrirlandi!</b>" + NL
+            + "\u2501" * 24 + NL
+            + "\U0001f4dd <b>" + title + "</b>" + NL
+            + "\U0001f194 <code>" + tid + "</code>" + NL + NL
+            + change + NL
+            + "\U0001f4cb Jami: " + str(new_qc) + " ta savol" + NL + NL
+            + "\u2139\ufe0f Yangilangan test keyingi yechishdan kuchga kiradi."
+        )
+        await _bot.send_message(meta["creator_id"], txt)
+        log.info(f"_notify_updated_test: {tid} → {meta['creator_id']}")
+    except Exception as _e:
+        log.warning("_notify_updated_test %s: %s", tid, _e)
+
+
+async def _read_pinned_index() -> dict:
+    """
+    Pinned xabardagi faylni o'qiydi.
+    Fayl nomi muhim emas — index.json ham, index_meta.json ham ishlaydi.
+    """
+    if not ready():
+        return {}
+    try:
+        chat = await _bot.get_chat(_cid)
+        pin  = getattr(chat, "pinned_message", None)
+        if not pin:
+            return {}
+        doc = getattr(pin, "document", None)
+        if not doc:
+            return {}
+        data = await _read_file(doc.file_id)
+        if isinstance(data, dict):
+            return data
+    except Exception as e:
+        log.warning(f"_read_pinned_index: {e}")
+    return {}
+
+
 async def web_sync_loop():
+    global _index   # Global _index ni o'zgartirish uchun
     await asyncio.sleep(30)
-    consecutive_errors = 0
+    consecutive_errors  = 0
+    last_pin_msg_id     = None   # Oxirgi ko'rgan pinned msg_id
     while True:
         try:
-            await asyncio.sleep(43200)
+            await asyncio.sleep(60)    # 1 daqiqa
             if not ready(): continue
             from utils import ram_cache as ram
+
+            # Pinned xabarni o'qish
             try:
-                new_meta = await asyncio.wait_for(_load_meta(), timeout=20)
+                chat = await asyncio.wait_for(_bot.get_chat(_cid), timeout=10)
+                pin  = getattr(chat, "pinned_message", None)
+                if not pin:
+                    continue
+                cur_pin_id = pin.message_id
+            except Exception:
+                consecutive_errors += 1
+                continue
+
+            # Pin o'zgarmagan bo'lsa — tekshirish shart emas
+            if cur_pin_id == last_pin_msg_id:
+                continue
+            last_pin_msg_id = cur_pin_id
+
+            # Pinned faylni o'qish
+            try:
+                new_meta = await asyncio.wait_for(_read_pinned_index(), timeout=20)
             except asyncio.TimeoutError:
                 consecutive_errors += 1
                 continue
-            if not new_meta: continue
+            if not new_meta:
+                continue
             consecutive_errors = 0
 
             new_metas    = []
@@ -1290,21 +1539,75 @@ async def web_sync_loop():
                     if k.startswith("test_"):
                         new_test_ids[k] = v
 
+            # Ikkala format: bot (index_chunks) va proxy (tests_meta) ni qo'llab-quvvatlash
+            if "tests_meta" in new_meta and "index_chunks" not in new_meta:
+                # Proxy (web) format — tests_meta to'g'ridan
+                new_metas    = new_meta.get("tests_meta", [])
+                new_test_ids = {k: v for k, v in new_meta.items() if k.startswith("test_")}
+
             ram_ids = {t.get("test_id") for t in ram.get_all_tests_meta()}
             added   = 0
+            updated = 0
             for meta in new_metas:
                 tid = meta.get("test_id")
-                if not tid or tid in ram_ids: continue
-                clean = {k: v for k, v in meta.items() if k != "questions"}
-                ram.add_test_meta(clean)
-                if not any(m.get("test_id") == tid for m in _index.get("tests_meta", [])):
-                    _index.setdefault("tests_meta", []).insert(0, clean)
-                if new_test_ids.get(f"test_{tid}"):
-                    _index[f"test_{tid}"] = new_test_ids[f"test_{tid}"]
-                added += 1
-            if added:
-                log.info(f"Web sync: {added} yangi test")
+                if not tid: continue
+                new_msg_id  = new_test_ids.get(f"test_{tid}")
+                old_msg_id  = _index.get(f"test_{tid}")
+                msg_changed = new_msg_id and str(new_msg_id) != str(old_msg_id or "")
+                if tid not in ram_ids:
+                    clean = {k: v for k, v in meta.items() if k != "questions"}
+                    ram.add_test_meta(clean)
+                    if not any(m.get("test_id") == tid for m in _index.get("tests_meta", [])):
+                        _index.setdefault("tests_meta", []).insert(0, clean)
+                    if new_msg_id:
+                        _index[f"test_{tid}"] = new_msg_id
+                    added += 1
+                    if meta.get("source", "") in ("web", "web_split"):
+                        asyncio.create_task(_notify_web_test(meta, tid))
+                elif msg_changed:
+                    # Eski savol sonini saqlab qo'yamiz
+                    old_meta = next(
+                        (m for m in ram.get_all_tests_meta() if m.get("test_id") == tid),
+                        {}
+                    )
+                    old_qc = old_meta.get("question_count", 0)
+
+                    # 1. tg_db._tests_cache dan tozalash (asosiy muammo)
+                    _tests_cache.pop(tid, None)
+
+                    # 2. ram_cache dan tozalash
+                    ram.invalidate_cached_questions(tid)
+
+                    # 3. Index yangilash
+                    _index[f"test_{tid}"] = new_msg_id
+                    _index.pop(f"fid_{old_msg_id}", None)
+
+                    # 4. Meta yangilash
+                    clean = {k: v for k, v in meta.items() if k != "questions"}
+                    ram.update_test_meta(tid, clean)
+
+                    updated += 1
+                    log.info(f"Web sync: {tid} yangilandi — cache tozalandi")
+
+                    # 5. Creator ga hisobot (bot orqali)
+                    new_qc = meta.get("question_count", 0)
+                    asyncio.create_task(_notify_updated_test(meta, tid, old_qc, new_qc))
+            if added or updated:
+                log.info(f"Web sync: {added} yangi, {updated} yangilangan test")
                 mark_index_dirty()
+                try:
+                    await _save_index()
+                    log.info("Web sync: index TG ga saqlandi")
+                    # Bot o'z pini ni bilsin — keraksiz qayta ishlamasin
+                    try:
+                        chat2 = await _bot.get_chat(_cid)
+                        pin2  = getattr(chat2, "pinned_message", None)
+                        if pin2:
+                            last_pin_msg_id = pin2.message_id
+                    except Exception:
+                        pass
+                except Exception as _se:
+                    log.warning(f"Web sync: index saqlashda xato: {_se}")
 
         except asyncio.CancelledError:
             break
@@ -1524,6 +1827,58 @@ async def get_settings_tg():
 # GURUHLAR
 # ══════════════════════════════════════════════════════════════
 
+
+# ══════════════════════════════════════════════════════════════
+# BLOKLANGAN FOYDALANUVCHILAR — TG da saqlash
+# ══════════════════════════════════════════════════════════════
+
+async def save_blocked_users(blocked_ids: set):
+    """Bloklangan IDlar ro'yxatini TG kanalga saqlaydi."""
+    if not ready(): return False
+    ts      = datetime.now(UTC).strftime("%Y-%m-%d %H:%M")
+    old_mid = _meta.get("blocked_msg_id")
+    try:
+        msg = await _bot.send_document(
+            _cid,
+            document=_buf(
+                {"blocked_ids": list(blocked_ids), "count": len(blocked_ids), "saved_at": ts},
+                "blocked_ids.json"
+            ),
+            caption=f"BLOCKED_IDS | {len(blocked_ids)} ta | {ts}",
+            protect_content=False
+        )
+        _meta["blocked_msg_id"] = msg.message_id
+        _meta["blocked_fid"]    = msg.document.file_id
+        await _save_meta()
+        if old_mid and old_mid != msg.message_id:
+            try: await _bot.delete_message(_cid, old_mid)
+            except: pass
+        log.info(f"Bloklangan IDlar saqlandi: {len(blocked_ids)} ta")
+        return True
+    except Exception as e:
+        log.error(f"save_blocked_users: {e}")
+        return False
+
+
+async def load_blocked_users() -> set:
+    """TG kanaldan bloklangan IDlarni yuklaydi."""
+    fid = _meta.get("blocked_fid")
+    mid = _meta.get("blocked_msg_id")
+    if not mid and not fid:
+        return set()
+    data = {}
+    if fid:
+        data = await _read_file(fid)
+    if not data and mid:
+        data = await _download_doc(mid)
+    if not data:
+        return set()
+    ids = data.get("blocked_ids", [])
+    result = set(int(i) for i in ids if str(i).isdigit())
+    log.info(f"Bloklangan IDlar yuklandi: {len(result)} ta")
+    return result
+
+
 async def save_known_groups():
     """Bot admin bo'lgan guruhlarni TG ga JSON sifatida saqlaydi."""
     if not ready(): return False
@@ -1587,7 +1942,7 @@ async def load_known_groups():
                             _meta["known_groups_fid"]    = doc.file_id
                             log.info(f"known_groups kanaldan topildi (msg {scan_mid})")
                             break
-                    await asyncio.sleep(0.05)
+                    await asyncio.sleep(0)
                 except: pass
         except Exception as e:
             log.warning(f"load_known_groups kanal skani: {e}")

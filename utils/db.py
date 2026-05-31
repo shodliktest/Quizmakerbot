@@ -42,6 +42,9 @@ def update_user(tg_id, data):
 
 def block_user(tg_id, blocked=True):
     update_user(tg_id, {"is_blocked": blocked})
+    # RAM set da ham yangilash — middleware tez topsin
+    from utils import ram_cache as ram
+    ram.set_blocked(tg_id, blocked)
 
 def get_all_users():
     return list(ram.get_users().values())
@@ -129,27 +132,29 @@ async def create_test(creator_id, data, creator_name="", creator_username=""):
 
 async def delete_test(tid):
     """
-    Test o'chirish tartibi:
-      1. RAMda mavjud test — backup (lazy load YO'Q, faqat cache dan)
-      2. RAMdan o'chirish
-      3. TG indexda is_active=False
-    Lazy load QILINMAYDI — sekin va timeout beradi.
+    ADMIN o'chirganda — butunlay o'chiriladi.
+    TG dan ham o'chiriladi (is_active=False + backup).
     """
     from utils import tg_db
-
-    # Faqat RAM/cache dan olish — TGga bormaslik
-    test = ram.get_cached_questions(tid) or ram.get_test_meta(tid) or {}
-
-    # Backup — agar savollar RAM da bo'lsa yuboramiz, bo'lmasa faqat meta
+    test = ram.get_cached_questions(tid) or ram.get_test_meta_any(tid) or {}
     if tg_db.ready() and test:
         await tg_db.save_deleted_test_backup(test)
-
-    # RAMdan o'chirish
     ram.delete_test_from_ram(tid)
-
-    # TG indexda is_active=False (saqlaydi)
     if tg_db.ready():
         await tg_db.delete_test_tg(tid)
+
+
+async def creator_delete_test(tid):
+    """
+    YARATUVCHI o'chirganda — soft delete.
+    Test is_deleted=True bo'ladi, foydalanuvchilar ko'rmaydi.
+    Admin ko'ra oladi va TXT yuklab olishi mumkin.
+    TG bazada saqlanib turadi.
+    """
+    from utils import tg_db
+    ram.soft_delete_test(tid)
+    if tg_db.ready():
+        await tg_db.update_test_meta_tg(tid, {"is_deleted": True})
 
 def pause_test(tid, paused: bool):
     ram.update_test_meta(tid, {"is_paused": paused})
@@ -223,23 +228,26 @@ async def _sync_from_tg():
     """
     Web orqali qo'shilgan testlarni TG kanaldan RAMga yuklash.
     tg_db.web_sync_loop() tomonidan chaqiriladi.
-    To'g'ridan tg_db funksiyalaridan foydalanadi.
+    Yangi chunked arxitektura bilan ishlaydi.
     """
     from utils import tg_db
     if not tg_db.ready():
         return 0
 
     try:
-        new_index = await tg_db._load_index()
-        if not new_index or "tests_meta" not in new_index:
+        # Yangi tg_db da _load_index yo'q — get_tests_meta() ishlatamiz
+        # (u _index["tests_meta"] ni qaytaradi, init da chunklar yuklanadi)
+        fresh_metas = tg_db.get_tests_meta()
+        if not fresh_metas:
             return 0
 
         ram_ids = {t.get("test_id") for t in ram.get_all_tests_meta()}
         added = 0
-        for meta in new_index.get("tests_meta", []):
+        for meta in fresh_metas:
             tid = meta.get("test_id")
             if tid and tid not in ram_ids:
-                ram.add_test_meta(meta)
+                clean = {k: v for k, v in meta.items() if k != "questions"}
+                ram.add_test_meta(clean)
                 added += 1
                 log.info(f"_sync_from_tg: {tid} qo'shildi")
         return added
