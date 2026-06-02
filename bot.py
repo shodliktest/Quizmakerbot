@@ -30,6 +30,59 @@ async def _send_blocked_msg(bot, uid: int):
         pass
 
 
+class ForceJoinMiddleware(BaseMiddleware):
+    """
+    Barcha xabarlarda majburiy obuna tekshiruvi.
+    Admin va bloklash callbacklari tekshirilmaydi.
+    """
+    SKIP_CALLBACKS = {
+        "fj_check",      # A'zo bo'ldim tugmasi
+        "main_menu",
+    }
+    SKIP_COMMANDS = {"/start"}  # /start o'zi tekshiradi
+
+    async def __call__(self, handler, event, data):
+        try:
+            from utils.force_join import (
+                is_force_enabled, check_user_joined, send_join_request
+            )
+            from config import ADMIN_IDS
+
+            if not is_force_enabled():
+                return await handler(event, data)
+
+            uid = None
+            if isinstance(event, Message):
+                uid = event.from_user.id if event.from_user else None
+                # /start o'zi tekshiradi
+                if event.text and event.text.startswith("/start"):
+                    return await handler(event, data)
+            elif isinstance(event, CallbackQuery):
+                uid = event.from_user.id if event.from_user else None
+                # fj_check callback o'zi tekshiradi
+                if event.data in self.SKIP_CALLBACKS:
+                    return await handler(event, data)
+
+            # Admin tekshirilmaydi
+            if uid and uid in ADMIN_IDS:
+                return await handler(event, data)
+
+            if uid:
+                not_joined = await check_user_joined(event.bot, uid)
+                if not_joined:
+                    await send_join_request(event, not_joined, event.bot)
+                    if isinstance(event, CallbackQuery):
+                        await event.answer(
+                            "❌ Avval kanallarga a'zo bo'ling!", show_alert=True
+                        )
+                    return  # Handler ga o'TKAZMAYMIZ
+        except Exception as _fje:
+            import logging
+            logging.getLogger(__name__).warning(f"ForceJoinMiddleware: {_fje}")
+
+        return await handler(event, data)
+
+
 class BlockedUserMiddleware(BaseMiddleware):
     """
     Barcha event turlarida bloklangan userlarni to'xtatadi.
@@ -182,6 +235,8 @@ async def main():
     bot = Bot(token=BOT_TOKEN,
               default=DefaultBotProperties(parse_mode=ParseMode.HTML, protect_content=True))
     dp  = Dispatcher(storage=MemoryStorage())
+    dp.message.middleware(ForceJoinMiddleware())
+    dp.callback_query.middleware(ForceJoinMiddleware())
     dp.message.middleware(BlockedUserMiddleware())
     dp.callback_query.middleware(BlockedUserMiddleware())
     dp.poll_answer.middleware(BlockedUserMiddleware())
@@ -223,12 +278,14 @@ async def main():
         log.info(f"✅ Yuklandi: {ram.stats()['tests']} test meta, {ram.stats()['users']} user (savollar lazy)")
         _blocked_mod.load()
 
-    # Background tasklar
-    asyncio.create_task(_midnight_flush_loop(bot))
-    asyncio.create_task(_users_auto_flush_loop(bot))
-    asyncio.create_task(_cache_cleanup_loop())
-    asyncio.create_task(_web_sync_watchdog())   # Watchdog bilan web sync
-    asyncio.create_task(tg_db.auto_flush_loop())
+    # Background tasklar — to'g'ri bekor qilish uchun saqlaymiz
+    _bg_tasks = [
+        asyncio.create_task(_midnight_flush_loop(bot),      name="midnight_flush"),
+        asyncio.create_task(_users_auto_flush_loop(bot),    name="users_flush"),
+        asyncio.create_task(_cache_cleanup_loop(),          name="cache_cleanup"),
+        asyncio.create_task(_web_sync_watchdog(),           name="web_sync_watchdog"),
+        asyncio.create_task(tg_db.auto_flush_loop(),        name="auto_flush"),
+    ]
 
     # Admin ga xabar
     for aid in ADMIN_IDS:
@@ -240,7 +297,17 @@ async def main():
         except Exception: pass
 
     log.info("🚀 Bot ishga tushdi!")
-    await dp.start_polling(bot, drop_pending_updates=True, allowed_updates=["message","callback_query","poll_answer","inline_query","my_chat_member"])
+    try:
+        await dp.start_polling(bot, drop_pending_updates=True, allowed_updates=["message","callback_query","poll_answer","inline_query","my_chat_member"])
+    finally:
+        # Background tasklarni to'g'ri to'xtatish
+        for t in _bg_tasks:
+            t.cancel()
+        await asyncio.gather(*_bg_tasks, return_exceptions=True)
+        # Session ni yopish
+        session = bot.session
+        if hasattr(session, 'close'):
+            await session.close()
 
 
 # ── MIDNIGHT FLUSH — kuniga 1 marta, faqat 00:00 ──────────────
@@ -442,9 +509,17 @@ async def _main_no_signals():
     bot = Bot(token=BOT_TOKEN,
               default=DefaultBotProperties(parse_mode=ParseMode.HTML, protect_content=True))
     dp  = Dispatcher(storage=MemoryStorage())
+    # ── Barcha middlewarelar (main() bilan bir xil) ──
+    dp.message.middleware(ForceJoinMiddleware())
+    dp.callback_query.middleware(ForceJoinMiddleware())
+    dp.message.middleware(BlockedUserMiddleware())
+    dp.callback_query.middleware(BlockedUserMiddleware())
+    dp.poll_answer.middleware(BlockedUserMiddleware())
+    dp.inline_query.middleware(BlockedUserMiddleware())
     dp.message.middleware(ClearMenuMiddleware())
     dp.callback_query.middleware(ClearMenuMiddleware())
-
+    dp.message.middleware(GroupTrackerMiddleware())
+    dp.callback_query.middleware(GroupTrackerMiddleware())
 
     dp.include_router(r_inline)
     dp.include_router(r_poll_router)
@@ -524,6 +599,16 @@ async def _main_no_signals():
                 f"📅 {datetime.now(UTC).strftime('%Y-%m-%d %H:%M')} UTC")
         except Exception: pass
 
+    # Force join keshdan yuklash
+    try:
+        from utils.force_join import load_from_cache
+        load_from_cache()
+    except Exception as _fje:
+        log.warning(f"force_join load: {_fje}")
+
     log.info("🚀 Bot ishga tushdi!")
     # handle_signals=False — thread dan ishga tushirilganda signal xatosini oldini oladi
-    await dp.start_polling(bot, drop_pending_updates=True, handle_signals=False, allowed_updates=["message","callback_query","poll_answer","inline_query","my_chat_member"])
+    try:
+        await dp.start_polling(bot, drop_pending_updates=True, handle_signals=False, allowed_updates=["message","callback_query","poll_answer","inline_query","my_chat_member"])
+    finally:
+        await bot.session.close()
