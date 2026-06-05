@@ -384,6 +384,14 @@ async def _send_poll(bot, cid, state):
         task = asyncio.create_task(_poll_timeout(bot, cid, state, idx, wait))
         _poll_timers[cid] = task
     except Exception as e:
+        err_str = str(e).lower()
+        # User botni bloklagan - sessiyani yakunlaymiz
+        if 'forbidden' in err_str or 'blocked' in err_str or 'kicked' in err_str:
+            log.warning(f"Poll: user botni bloklagan {cid}, sessiya yakunlanadi")
+            _cancel_timer(cid)
+            await state.clear()
+            return
+        # Boshqa xatolar - keyingi savolga o'tamiz
         log.error(f"Poll xatosi: {e}")
         await state.update_data(idx=idx+1)
         await _send_poll(bot, cid, state)
