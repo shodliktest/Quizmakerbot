@@ -207,6 +207,39 @@ def poll_pause_kb():
     b.row(InlineKeyboardButton(text="❌ Testni yakunlash", callback_data="cancel_poll"))
     return b.as_markup()
 
+
+def poll_control_reply_kb() -> ReplyKeyboardMarkup:
+    """
+    Test yechayotganda pastda ko'rinadigan ReplyKeyboard.
+    Faqat private chatda ishlatiladi.
+    """
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text="⏸ Pauza"),
+                KeyboardButton(text="⏹ Tugatish"),
+            ]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder="⏸ yoki ⏹ bosing...",
+    )
+
+
+def poll_pause_reply_kb() -> ReplyKeyboardMarkup:
+    """Pauza holatida ko'rinadigan ReplyKeyboard."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text="▶️ Davom etish"),
+                KeyboardButton(text="⏹ Tugatish"),
+            ]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder="▶️ davom yoki ⏹ tugating...",
+    )
+
 def inline_pause_kb():
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="▶️ Davom etish",     callback_data="resume_inline"))
@@ -242,8 +275,26 @@ def admin_kb():
     )
     b.row(
         InlineKeyboardButton(text="🔒 Majburiy obuna",    callback_data="admin_force_join"),
+        InlineKeyboardButton(text="🛡 Xavfsizlik",        callback_data="admin_security"),
     )
     b.row(InlineKeyboardButton(text="🏠 Menyu", callback_data="main_menu"))
+    return b.as_markup()
+
+
+def security_kb(protect: bool) -> object:
+    """Xavfsizlik sozlamalari klaviaturasi"""
+    b = InlineKeyboardBuilder()
+    if protect:
+        b.row(InlineKeyboardButton(
+            text="🔓 Ruxsat berish (screenshot/forward)",
+            callback_data="sec_protect_off"
+        ))
+    else:
+        b.row(InlineKeyboardButton(
+            text="🔒 Bloklash (screenshot/forward)",
+            callback_data="sec_protect_on"
+        ))
+    b.row(InlineKeyboardButton(text="⬅️ Admin panel", callback_data="admin_panel"))
     return b.as_markup()
 
 
