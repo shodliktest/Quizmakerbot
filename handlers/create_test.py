@@ -431,6 +431,68 @@ async def send_sample(callback: CallbackQuery):
     )
 
 
+async def _upload_images_to_channel(bot, questions: list) -> list:
+    """
+    Rasmli savollarning rasmlarini STORAGE_CHANNEL_ID kanalga yuklaydi.
+    Har rasm uchun file_id olinadi va test JSON ga qo'shiladi.
+
+    q["_img_bytes"] → kanal → file_id → q["photo"] = file_id
+
+    Rasm yechish SHART EMAS — faqat testga ulanadi.
+    web_test.html bu file_id ni /api/proxy orqali ko'rsatadi.
+    """
+    from config import STORAGE_CHANNEL_ID
+    from aiogram.types import BufferedInputFile
+
+    if not STORAGE_CHANNEL_ID:
+        log.warning("STORAGE_CHANNEL_ID yo'q — rasmlar yuklanmadi")
+        return questions
+
+    uploaded = 0
+    failed   = 0
+
+    for idx, q in enumerate(questions):
+        img_bytes = q.get("_img_bytes")
+        if not img_bytes:
+            continue
+
+        img_ext = q.get("_img_ext", ".png").lstrip(".")
+        fname   = f"q{idx+1}.{img_ext}"
+
+        # Bir necha marta urinish (network xato uchun)
+        for attempt in range(3):
+            try:
+                photo = BufferedInputFile(img_bytes, filename=fname)
+                msg = await bot.send_photo(
+                    STORAGE_CHANNEL_ID,
+                    photo,
+                    caption=f"📷 Savol #{idx+1}",
+                    disable_notification=True,
+                )
+                # Eng katta o'lchamli rasmning file_id si
+                if msg.photo:
+                    q["photo"] = msg.photo[-1].file_id
+                    uploaded += 1
+                # Bytes ni JSON ga saqlamaymiz (juda katta bo'ladi)
+                q.pop("_img_bytes", None)
+                q.pop("_img_ext", None)
+                break
+            except Exception as e:
+                if attempt < 2:
+                    await asyncio.sleep(2)
+                else:
+                    log.warning(f"Rasm #{idx+1} yuklanmadi: {e}")
+                    failed += 1
+                    q.pop("_img_bytes", None)
+                    q.pop("_img_ext", None)
+
+        # Telegram rate limit — har rasmdan keyin kichik pauza
+        await asyncio.sleep(0.3)
+
+    log.info(f"Rasmlar: {uploaded} yuklandi, {failed} xato")
+    return questions
+
+
 @router.message(F.document, CreateTest.upload_file)
 async def upload_file(message: Message, state: FSMContext):
     doc = message.document
@@ -474,6 +536,16 @@ async def upload_file(message: Message, state: FSMContext):
 
         total    = len(questions)
         unmarked = sum(1 for q in questions if not q.get("_marked"))
+
+        # Rasmli savollar bo'lsa — rasmlarni TG kanalga yuklab file_id olamiz
+        img_count = sum(1 for q in questions if q.get("_img_bytes"))
+        if img_count > 0:
+            await status.edit_text(
+                f"🖼 <b>{img_count} ta rasm yuklanmoqda...</b>\n"
+                f"<i>Iltimos kuting</i>",
+                parse_mode="HTML"
+            )
+            questions = await _upload_images_to_channel(message.bot, questions)
 
         await state.update_data(questions=questions, _file_id=doc.file_id)
         await state.set_state(CreateTest.upload_file)  # state saqlanadi
@@ -1674,6 +1746,13 @@ async def _do_save_test(callback: CallbackQuery, state: FSMContext):
             return
     # ━━━━━━━━━━━━━━━━━━━━━━━━
     d = await state.get_data()
+    # Savollardan vaqtinchalik (_ bilan boshlanuvchi) maydonlarni tozalaymiz
+    # Lekin "photo" va "image" qoladi (web_test rasmni ko'rsatishi uchun)
+    raw_qs = d.get("questions", [])
+    clean_qs = []
+    for q in raw_qs:
+        cq = {k: v for k, v in q.items() if not k.startswith("_")}
+        clean_qs.append(cq)
     td = {
         "title":         d.get("title", "Nomsiz"),
         "category":      d.get("category", "Boshqa"),
@@ -1683,7 +1762,7 @@ async def _do_save_test(callback: CallbackQuery, state: FSMContext):
         "poll_time":     d.get("poll_time", 30),
         "passing_score": d.get("passing_score", 60),
         "max_attempts":  d.get("max_attempts", 0),
-        "questions":     d.get("questions", []),
+        "questions":     clean_qs,
     }
     tid  = await create_test(
         callback.from_user.id, td,
