@@ -451,8 +451,12 @@ async def upload_file(message: Message, state: FSMContext):
         # Rasmli savollar uchun tmp_path ni state da saqlaymiz
         has_img_qs = any(q.get("_has_image") for q in questions)
         if has_img_qs:
-            await state.update_data(_tmp_path=tmp_path)  # O'chirilmaydi
+            await state.update_data(
+                _tmp_path=tmp_path,
+                _file_name=doc.file_name,  # Fayl nomi — test nomiga taklif
+            )
         else:
+            await state.update_data(_file_name=doc.file_name)
             try: os.remove(tmp_path)
             except Exception: pass
         await _del(message.bot, message.chat.id, message.message_id)
@@ -604,22 +608,34 @@ async def uj_ai(cb: CallbackQuery, state: FSMContext):
                 questions = await _solve_image_questions(questions, path, cb.message)
 
         await state.update_data(questions=questions)
+        await state.update_data(questions=questions)
         solved     = sum(1 for q in questions if q.get("_ai_solved"))
-        total_un   = sum(1 for q in questions if not q.get("_marked") or q.get("_ai_solved"))
         img_solved = sum(1 for q in questions if q.get("_ai_solved") and q.get("_has_image"))
+        img_total  = sum(1 for q in questions if q.get("_has_image"))
         txt_solved = solved - img_solved
         total_q    = len(questions)
-        await cb.message.edit_text(
+        not_solved = len(unmarked) - solved
+
+        stat_text = (
             f"✅ <b>AI tugatdi!</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"📊 Jami: <b>{total_q}</b> ta savol\n"
             + (f"📝 Matnli: <b>{txt_solved}</b> ta yechildi\n" if has_texts else "")
-            + (f"🖼️ Rasmli: <b>{img_solved}</b> ta yechildi\n" if has_images else "")
-            + f"✅ Yechildi: <b>{solved}</b> / <b>{len(unmarked)}</b> ta\n"
-            + ("\n⚠️ <i>Ayrimlari yechilmadi — seryalik qo\'llanildi</i>\n" if solved < len(unmarked) else "")
-            + "\n<i>Davom etamiz...</i>",
-            parse_mode="HTML"
+            + (f"🖼️ Rasmli: <b>{img_solved}/{img_total}</b> ta yechildi\n" if has_images else "")
+            + f"✅ Yechildi: <b>{solved}/{len(unmarked)}</b> ta\n"
+            + (f"⚠️ Yechilmadi: <b>{not_solved}</b> ta\n" if not_solved > 0 else "")
         )
+        # Avval edit qilamiz — progress xabarini yangilaymiz
+        try:
+            await cb.message.edit_text(stat_text + "\n<i>Davom etamiz...</i>",
+                                        parse_mode="HTML")
+        except Exception:
+            pass
+        # Keyin YANGI xabar — saqlanib qolsin
+        try:
+            await cb.bot.send_message(cb.from_user.id, stat_text, parse_mode="HTML")
+        except Exception:
+            pass
         await asyncio.sleep(1)
         await _ask_poll_time(cb.message, state, len(questions))
     except Exception as e:
@@ -859,9 +875,9 @@ async def _solve_image_questions(questions: list, docx_path: str, msg) -> list:
     max_per_minute = 15 * len(gemini_keys)
 
     PROMPT = (
-        "Medical/anatomy test image question. "
-        "Identify the correct answer based on the image and options. "
-        "Return ONLY JSON: {\"correct_idx\": N, \"explanation\": \"brief\"}"
+        "Rasmli test savoli. "
+        "Rasm va variantlarga qarab to\'g\'ri javobni toping. "
+        "Faqat JSON qaytaring: {\"correct_idx\": N, \"explanation\": \"o\'zbek izoh (10 so\'zdan qisqa)\"}"
     )
 
     def _bar(d, t, w=8):
@@ -1033,6 +1049,104 @@ async def _ai_solve(questions: list, msg) -> list:
     log.info(f"AI: {len(clients)} kalit, {names}")
     cli_idx = 0
 
+    def _parse_ai_response(data: dict) -> list:
+        """
+        AI javobidan JSON ro'yxatini chiqaradi.
+        Barcha formatlarni qo'llab-quvvatlaydi:
+        - OpenAI/Groq: {"choices":[{"message":{"content":"..."}}]}
+        - Gemini:      {"candidates":[{"content":{"parts":[{"text":"..."}]}}]}
+        - Xato:        {"error": {...}}
+        """
+        # Xato tekshirish
+        if isinstance(data, dict):
+            err = data.get("error")
+            if err:
+                if isinstance(err, dict):
+                    msg = err.get("message", str(err))
+                    code = str(err.get("type","")) + str(err.get("code",""))
+                else:
+                    msg = str(err)
+                    code = str(err)
+                raise ValueError(f"API xato: {msg} (code={code})")
+
+        # Matnni topamiz
+        txt = ""
+
+        # 1. OpenAI/Groq/Together/OpenRouter format
+        choices = data.get("choices") if isinstance(data, dict) else None
+        if choices and isinstance(choices, list) and choices:
+            c = choices[0]
+            if isinstance(c, dict):
+                msg = c.get("message") or c.get("delta") or {}
+                if isinstance(msg, dict):
+                    txt = msg.get("content", "") or ""
+                elif isinstance(msg, str):
+                    txt = msg
+
+        # 2. Gemini format
+        if not txt:
+            candidates = data.get("candidates") if isinstance(data, dict) else None
+            if candidates and isinstance(candidates, list) and candidates:
+                c = candidates[0]
+                if isinstance(c, dict):
+                    content = c.get("content", {})
+                    if isinstance(content, dict):
+                        parts = content.get("parts", [])
+                        if parts and isinstance(parts, list):
+                            txt = parts[0].get("text", "") if isinstance(parts[0], dict) else ""
+
+        if not txt:
+            raise ValueError(f"AI javobida matn topilmadi: {str(data)[:100]}")
+
+        # JSON tozalash — markdown, ikki JSON, exstra matn
+        txt = txt.strip()
+        # ```json ... ``` ni olib tashlaymiz
+        txt = re.sub(r"```json\s*", "", txt)
+        txt = re.sub(r"```\s*", "", txt)
+        txt = txt.strip()
+
+        # [ ... ] qismini topamiz (faqat birinchi to'liq JSON array)
+        bracket_start = txt.find("[")
+        bracket_end   = txt.rfind("]")
+        if bracket_start != -1 and bracket_end > bracket_start:
+            txt = txt[bracket_start:bracket_end+1]
+
+        # JSON parse
+        try:
+            result = json.loads(txt)
+        except json.JSONDecodeError:
+            # Exstra data bo'lsa — birinchi to'liq JSON ni olamiz
+            depth = 0
+            in_str = False
+            esc    = False
+            end    = 0
+            for i, ch in enumerate(txt):
+                if esc:
+                    esc = False
+                    continue
+                if ch == "\\":
+                    esc = True
+                    continue
+                if ch == "\"" and not esc:
+                    in_str = not in_str
+                    continue
+                if not in_str:
+                    if ch == "[":
+                        depth += 1
+                    elif ch == "]":
+                        depth -= 1
+                        if depth == 0:
+                            end = i
+                            break
+            if end:
+                result = json.loads(txt[:end+1])
+            else:
+                raise
+
+        if not isinstance(result, list):
+            raise ValueError(f"JSON list emas: {type(result)}")
+        return result
+
     async def _post(payload):
         nonlocal cli_idx
         for attempt in range(len(clients)):
@@ -1047,40 +1161,52 @@ async def _ai_solve(questions: list, msg) -> list:
                                  "Content-Type": "application/json"},
                         json=p, timeout=aiohttp.ClientTimeout(total=90),
                     ) as r:
-                        data = await r.json()
-                err = data.get("error", {})
-                if err:
-                    code = str(err.get("type","")) + str(err.get("code",""))
-                    if any(w in code for w in ["rate_limit","quota","tokens","capacity"]):
-                        cli_idx += 1
-                        tried = attempt + 1
-                        log.warning(
-                            f"[{cli['name']}] kalit "
-                            f"{cli_idx % len(clients) + 1}/{len(clients)} limit "
-                            f"({tried}/{len(clients)} sinab ko'rildi)"
-                        )
-                        if tried >= len(clients):
-                            # Barcha kalitlar limitda — 62s kutamiz (Groq: 1 daqiqa)
-                            log.warning(
-                                f"Barcha {len(clients)} kalit limitda. 62s kutamiz..."
-                            )
-                            await asyncio.sleep(62)
-                            cli_idx = 0  # Qayta boshidan
-                        else:
-                            await asyncio.sleep(2)
-                        continue
-                    raise ValueError(f"[{cli['name']}] {err.get('message', str(err))}")
+                        # HTTP status tekshirish
+                        status = r.status
+                        data   = await r.json(content_type=None)
+
+                # Rate limit — HTTP 429 yoki error kodida
+                is_rate = False
+                if status == 429:
+                    is_rate = True
+                elif isinstance(data, dict):
+                    err  = data.get("error", {}) or {}
+                    code = str(err.get("type","")) + str(err.get("code","")) + str(err.get("message",""))
+                    if any(w in code.lower() for w in
+                           ["rate_limit","quota","tokens_per","capacity","too_many","overloaded"]):
+                        is_rate = True
+
+                if is_rate:
+                    cli_idx += 1
+                    tried = attempt + 1
+                    log.warning(
+                        f"[{cli['name']}] {status} limit "
+                        f"({tried}/{len(clients)} sinab ko'rildi)"
+                    )
+                    if tried >= len(clients):
+                        log.warning(f"Barcha {len(clients)} kalit limitda. 62s kutamiz...")
+                        await asyncio.sleep(62)
+                        cli_idx = 0
+                    else:
+                        await asyncio.sleep(3)
+                    continue
+
                 return data
+
             except aiohttp.ClientError as e:
-                log.warning(f"[{cli['name']}] xato: {e}")
+                log.warning(f"[{cli['name']}] network xato: {e}")
                 cli_idx += 1
+            except Exception as e:
+                log.warning(f"[{cli['name']}] kutilmagan xato: {e}")
+                cli_idx += 1
+
         raise ValueError(f"Barcha {len(clients)} ta kalit/provider ishlamadi! ({names})")
 
     SYSTEM = (
-        "You are an academic test expert. "
-        "Answer each question correctly. "
-        "Return ONLY JSON, no other text. "
-        "Keep explanations under 10 words."
+        "Siz akademik test ekspertisiz. "
+        "Har bir savolni to\'g\'ri yeching. "
+        "Faqat JSON qaytaring, boshqa hech narsa yozmang. "
+        "Izohni O\'ZBEK TILIDA, 10 so\'zdan qisqa yozing."
     )
 
     def _bar(done, total, w=10):
@@ -1128,8 +1254,8 @@ async def _ai_solve(questions: list, msg) -> list:
                 pass
 
         USER = (
-            "Solve and return JSON:\n"
-            "[{\"idx\": N, \"correct_idx\": 0, \"explanation\": \"short\"}]\n\n"
+            "Yeching va JSON qaytaring:\n"
+            "[{\"idx\": N, \"correct_idx\": 0, \"explanation\": \"o\'zbek izoh\"}]\n\n"
             f"{json.dumps(q_data, ensure_ascii=False)}"
         )
         try:
@@ -1139,9 +1265,7 @@ async def _ai_solve(questions: list, msg) -> list:
                 "max_tokens":  4000,
                 "temperature": 0.05,
             })
-            txt = data["choices"][0]["message"]["content"].strip()
-            txt = re.sub(r"```json\s*|\s*```", "", txt).strip()
-            for item in json.loads(txt):
+            for item in _parse_ai_response(data):
                 oi = item.get("idx", -1)
                 ci = item.get("correct_idx", 0)
                 ex = item.get("explanation", "")
@@ -1182,9 +1306,9 @@ async def _ai_solve(questions: list, msg) -> list:
                 for oi, q in batch
             ]
             USER = (
-                "Savollarni yeching va JSON qaytaring:\n"
-                "[{\"idx\": N, \"correct_idx\": 0, \"explanation\": \"izoh\"}]\n\n"
-                f"Savollar:\n{json.dumps(q_data, ensure_ascii=False)}"
+                "Yeching va JSON qaytaring:\n"
+                "[{\"idx\": N, \"correct_idx\": 0, \"explanation\": \"o\'zbek izoh\"}]\n\n"
+                f"{json.dumps(q_data, ensure_ascii=False)}"
             )
             try:
                 data = await _post({
@@ -1192,9 +1316,7 @@ async def _ai_solve(questions: list, msg) -> list:
                                  {"role":"user","content":USER}],
                     "max_tokens": 4000, "temperature": 0.05,
                 })
-                txt = data["choices"][0]["message"]["content"].strip()
-                txt = re.sub(r"```json\s*|\s*```", "", txt).strip()
-                for item in json.loads(txt):
+                for item in _parse_ai_response(data):
                     oi = item.get("idx", -1)
                     ci = item.get("correct_idx", 0)
                     ex = item.get("explanation", "")
@@ -1329,6 +1451,73 @@ async def set_pt(callback: CallbackQuery, state: FSMContext):
 # 4. FAN, MAVZU, SOZLAMALAR
 # ═══════════════════════════════════════════════════════════
 
+async def _ask_title(msg, state: FSMContext, category: str, file_name: str = ""):
+    """Test nomini so'rash — qo'lda yoki fayl nomidan"""
+    b = InlineKeyboardBuilder()
+    if file_name:
+        # Fayl nomidan tozalangan nom
+        clean = file_name
+        # Kengaytmani olib tashlaymiz
+        for ext in ('.docx','.doc','.pdf','.txt','.xlsx','.xls'):
+            clean = clean.replace(ext, '').replace(ext.upper(), '')
+        # Maxsus belgilar va pastki chiziqlarni bo'sh joyga
+        import re as _re
+        clean = _re.sub(r'[_\-]+', ' ', clean).strip()
+        clean = _re.sub(r'\s+', ' ', clean).strip()
+        if clean:
+            b.row(InlineKeyboardButton(
+                text=f"📄 {clean[:40]}",
+                callback_data="title_from_file"
+            ))
+    await state.update_data(category=category, _title_suggestion=file_name)
+    await state.set_state(CreateTest.set_title)
+
+    if hasattr(msg, 'edit_text'):
+        await msg.edit_text(
+            f"📁 Fan: <b>{category}</b>\n\n"
+            f"<b>🏷 Test nomini yozing:</b>\n"
+            f"<i>Yoki pastdagi tugma bilan fayl nomidan oling</i>",
+            parse_mode="HTML",
+            reply_markup=b.as_markup() if file_name else None
+        )
+    else:
+        await msg.answer(
+            f"<b>🏷 Test nomini yozing:</b>\n"
+            f"<i>Yoki pastdagi tugma bilan fayl nomidan oling</i>",
+            parse_mode="HTML",
+            reply_markup=b.as_markup() if file_name else None
+        )
+
+
+@router.callback_query(F.data == "title_from_file", CreateTest.set_title)
+async def title_from_file(callback: CallbackQuery, state: FSMContext):
+    """Fayl nomidan test nomini olish"""
+    await callback.answer()
+    d = await state.get_data()
+    file_name = d.get("_file_name", "")
+
+    import re as _re
+    clean = file_name
+    for ext in ('.docx','.doc','.pdf','.txt','.xlsx','.xls'):
+        clean = clean.replace(ext, '').replace(ext.upper(), '')
+    clean = _re.sub(r'[_\-]+', ' ', clean).strip()
+    clean = _re.sub(r'\s+', ' ', clean).strip()
+
+    if not clean:
+        return await callback.answer("Fayl nomi topilmadi", show_alert=True)
+
+    await state.update_data(title=clean)
+    await callback.message.edit_text(
+        f"<b>📊 QIYINLIK DARAJASI</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Mavzu: <b>{clean}</b>",
+        parse_mode="HTML",
+        reply_markup=difficulty_kb()
+    )
+    await state.set_state(CreateTest.set_difficulty)
+
+
+
 @router.callback_query(F.data.startswith("subj_"), CreateTest.set_subject)
 async def set_subj(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
@@ -1339,11 +1528,9 @@ async def set_subj(callback: CallbackQuery, state: FSMContext):
             "<i>Masalan: Fizika, Ona tili, Tarix...</i>"
         )
     await state.update_data(category=s)
-    await callback.message.edit_text(
-        f"📁 Fan: <b>{s}</b>\n\n"
-        f"<b>🏷 Test nomini yozing:</b>"
-    )
-    await state.set_state(CreateTest.set_title)
+    d = await state.get_data()
+    file_name = d.get("_file_name", "")
+    await _ask_title(callback.message, state, s, file_name)
 
 
 @router.message(F.text, CreateTest.set_subject)
@@ -1354,8 +1541,9 @@ async def subj_text(message: Message, state: FSMContext):
     # Maxsus fan nomini RAM ga saqlash
     from utils.ram_cache import add_user_custom_subject
     add_user_custom_subject(message.from_user.id, subj)
-    await message.answer("<b>🏷 Test nomini yozing:</b>")
-    await state.set_state(CreateTest.set_title)
+    d = await state.get_data()
+    file_name = d.get("_file_name", "")
+    await _ask_title(message, state, subj, file_name)
 
 
 @router.message(F.text, CreateTest.set_title)
