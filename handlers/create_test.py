@@ -1035,7 +1035,7 @@ async def _ai_solve(questions: list, msg) -> list:
 
     async def _post(payload):
         nonlocal cli_idx
-        for _ in range(len(clients)):
+        for attempt in range(len(clients)):
             cli = clients[cli_idx % len(clients)]
             p   = dict(payload)
             p["model"] = cli["model"]
