@@ -120,6 +120,10 @@ def _parse_docx(path: str) -> list:
         from docx import Document
         doc = Document(path)
     except Exception as e:
+        # NULL relationship xatosi — ZIP dan to'g'ridan o'qishga o'tamiz
+        if 'NULL' in str(e):
+            log.warning(f"DOCX NULL rel xatosi, alternativ usul: {e}")
+            return _parse_docx_via_zip(path)
         log.error(f"DOCX ochilmadi: {e}")
         return []
 
@@ -404,8 +408,12 @@ def _parse_docx_with_images(doc) -> list:
                 if rId:
                     try:
                         part = doc.part.related_parts[rId]
+                        # NULL yoki noto'g'ri target ni o'tkazib yuboramiz
+                        pname = str(part.partname)
+                        if 'NULL' in pname.upper() or not pname.strip('/'):
+                            continue
                         img_bytes = part.blob
-                        ext = os.path.splitext(part.partname)[1].lower() or '.png'
+                        ext = os.path.splitext(pname)[1].lower() or '.png'
                         img_map[i] = (img_bytes, ext)
                     except Exception:
                         pass
@@ -1475,6 +1483,152 @@ def _parse_question_list_only(lines: list) -> list:
     return questions
 
 
+
+def _parse_docx_via_zip(path: str) -> list:
+    """
+    NULL relationship xatosi bo'lganda DOCX ni ZIP orqali o'qiydi.
+    lxml bilan to'g'ridan XML dan savollarni ajratadi.
+    """
+    try:
+        import zipfile
+        from lxml import etree
+    except ImportError:
+        return []
+
+    LBL = ["A","B","C","D","E","F","G","H"]
+    questions = []
+
+    try:
+        with zipfile.ZipFile(path) as z:
+            # Rasm fayllarini olish
+            img_cache = {}  # rId → (bytes, ext)
+            try:
+                rels_xml = z.read('word/_rels/document.xml.rels')
+                rels_root = etree.fromstring(rels_xml)
+                for rel in rels_root:
+                    rId    = rel.get('Id', '')
+                    target = rel.get('Target', '')
+                    rtype  = rel.get('Type', '')
+                    if 'image' in rtype and 'NULL' not in target.upper() and target:
+                        fname = target.split('/')[-1]
+                        try:
+                            img_bytes = z.read(f'word/media/{fname}')
+                            ext = os.path.splitext(fname)[1].lower() or '.png'
+                            img_cache[rId] = (img_bytes, ext)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+            # Document XML ni o'qiymiz
+            doc_xml  = z.read('word/document.xml')
+            root     = etree.fromstring(doc_xml)
+            W        = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+            A        = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+            R_NS     = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+            A_NS     = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+            BLIP_TAG = f'{{{A_NS}}}blip'
+
+            paras = root.findall(f'.//{{{W}}}p')
+            n     = len(paras)
+            i     = 0
+
+            while i < n:
+                p = paras[i]
+
+                # Paragraf matni
+                texts = ''.join(
+                    t.text or '' for t in p.findall(f'.//{{{W}}}t')
+                )
+                text = texts.strip()
+
+                # Savol: # bilan boshlanadi
+                if not (text.startswith('#') or
+                        (text and text[0] in ('#', ' ') and '#' in text[:5])):
+                    i += 1
+                    continue
+
+                q_text = text.lstrip('# ').strip()
+                i += 1
+
+                # Keyingi paragrafda rasm bormi?
+                img_bytes = None
+                img_ext   = '.png'
+                if i < n:
+                    next_p = paras[i]
+                    blips  = next_p.findall(f'.//{{{BLIP_TAG}}}') or                              next_p.findall('.//{http://schemas.openxmlformats.org/drawingml/2006/main}blip')
+                    if not blips:
+                        # Namespace bilan topamiz
+                        all_blips = next_p.findall('.//{*}blip')
+                        blips = all_blips
+
+                    if blips:
+                        for blip in blips:
+                            rId = blip.get(f'{{{R_NS}}}embed', '')
+                            if rId and rId in img_cache:
+                                img_bytes, img_ext = img_cache[rId]
+                                break
+                        i += 1
+
+                # Variantlarni yig'amiz
+                variants    = []
+                correct_idx = -1
+
+                while i < n:
+                    vp   = paras[i]
+                    vtxt = ''.join(
+                        t.text or '' for t in vp.findall(f'.//{{{W}}}t')
+                    ).strip()
+
+                    if vtxt.startswith('#') or (vtxt and '#' in vtxt[:5] and vtxt[0] in ('#',' ')):
+                        break
+                    if not vtxt:
+                        i += 1
+                        continue
+
+                    if vtxt.startswith(('-','*','+','•')):
+                        is_c, clean = _is_correct_marker(vtxt)
+                        if vtxt.startswith('-') and not is_c:
+                            clean = vtxt[1:].strip()
+                        if is_c and correct_idx == -1:
+                            correct_idx = len(variants)
+                        variants.append(clean or vtxt[1:].strip())
+                    i += 1
+
+                if not q_text or len(variants) < 2:
+                    continue
+
+                opts = []
+                for j, v in enumerate(variants):
+                    lbl = LBL[j] if j < len(LBL) else str(j+1)
+                    opts.append(v if re.match(r"^[A-Ha-h]\s*[).]", v) else f"{lbl}) {v}")
+
+                has_mark    = correct_idx >= 0
+                correct_idx = max(0, correct_idx)
+
+                q = {
+                    "type":             "multiple_choice",
+                    "question":         q_text,
+                    "options":          opts,
+                    "correct":          opts[correct_idx],
+                    "explanation":      "",
+                    "accepted_answers": [],
+                    "points":           1,
+                    "_marked":          has_mark,
+                    "_has_image":       img_bytes is not None,
+                }
+                if img_bytes:
+                    q["_img_bytes"] = img_bytes
+                    q["_img_ext"]   = img_ext
+
+                questions.append(q)
+
+    except Exception as e:
+        log.error(f"_parse_docx_via_zip: {e}")
+
+    return questions
+
+
 def _parse_table_multicol(tables) -> list:
     """Ko'p ustunli jadval: Savol | To'g'ri | Muqobil | Muqobil"""
     questions = []
@@ -2085,6 +2239,9 @@ def _parse_block(block: str) -> dict | None:
         corr = _strip_marker(corr)
 
     has_marked = any(_is_correct_marker(l)[0] for l in lines[1:] if l.strip())
+    # Javob: bilan berilgan savollar ham belgilangan
+    if javob is not None:
+        has_marked = True
 
     result = {
         "type":             qtype,
