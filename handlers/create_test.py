@@ -1263,7 +1263,15 @@ async def _ai_solve(questions: list, msg) -> list:
                         await asyncio.sleep(3)
                     continue
 
-                return data
+                # Javobni shu yerda parse qilamiz — xato bo'lsa keyingi providerga
+                try:
+                    parsed = _parse_ai_response(data)
+                    return parsed
+                except Exception as pe:
+                    log.warning(f"[{cli['name']}] parse xato, keyingisiga: {pe}")
+                    cli_idx += 1
+                    await asyncio.sleep(1)
+                    continue
 
             except aiohttp.ClientError as e:
                 log.warning(f"[{cli['name']}] network xato: {e}")
@@ -1272,7 +1280,7 @@ async def _ai_solve(questions: list, msg) -> list:
                 log.warning(f"[{cli['name']}] kutilmagan xato: {e}")
                 cli_idx += 1
 
-        raise ValueError(f"Barcha {len(clients)} ta kalit/provider ishlamadi! ({names})")
+        raise ValueError(f"Barcha {len(clients)} provider ishlamadi! ({names})")
 
     SYSTEM = (
         "Siz akademik test ekspertisiz. "
@@ -1331,13 +1339,13 @@ async def _ai_solve(questions: list, msg) -> list:
             f"{json.dumps(q_data, ensure_ascii=False)}"
         )
         try:
-            data = await _post({
+            parsed_items = await _post({
                 "messages":    [{"role":"system","content":SYSTEM},
                                 {"role":"user","content":USER}],
                 "max_tokens":  4000,
                 "temperature": 0.05,
             })
-            for item in _parse_ai_response(data):
+            for item in parsed_items:
                 oi = item.get("idx", -1)
                 ci = item.get("correct_idx", 0)
                 ex = item.get("explanation", "")
@@ -1383,12 +1391,12 @@ async def _ai_solve(questions: list, msg) -> list:
                 f"{json.dumps(q_data, ensure_ascii=False)}"
             )
             try:
-                data = await _post({
+                parsed_items = await _post({
                     "messages": [{"role":"system","content":SYSTEM},
                                  {"role":"user","content":USER}],
                     "max_tokens": 4000, "temperature": 0.05,
                 })
-                for item in _parse_ai_response(data):
+                for item in parsed_items:
                     oi = item.get("idx", -1)
                     ci = item.get("correct_idx", 0)
                     ex = item.get("explanation", "")
