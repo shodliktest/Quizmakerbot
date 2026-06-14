@@ -672,6 +672,12 @@ def _parse_pdf(path: str) -> list:
         with fitz.open(path) as _pdoc:
             _has_imgs = any(len(_p.get_images()) > 0 for _p in _pdoc)
         if _has_imgs and any(l.startswith("#") for l in lines):
+            # 1-usul: PDF→DOCX (LibreOffice rasm-matn bog'liqligini saqlaydi)
+            q = _pdf_via_docx(path)
+            if q and any(qq.get("_img_bytes") for qq in q):
+                log.info(f"PDF→DOCX: {len(q)} savol rasmlar bilan")
+                return q
+            # 2-usul: To'g'ridan PyMuPDF
             q = _parse_pdf_with_images(path)
             if q:
                 return q
@@ -1436,43 +1442,49 @@ def _parse_docx_via_zip(path: str) -> list:
 
 def _parse_pdf_with_images(path: str) -> list:
     """
-    Rasmli PDF dan savollar + rasmlarni ajratadi.
+    Rasmli PDF dan savollar + rasmlarni ajratadi (PyMuPDF).
 
-    Tuzilish (DOCX bilan bir xil):
-      #Savol matni?
-      [🖼 rasm]
-      - Variant A
-      - *Variant B (to'g'ri)
-      - Variant C
-
-    PyMuPDF (fitz) bilan har sahifadagi matn va rasmlar
-    Y-koordinata bo'yicha tartiblanadi va savol-rasm-variant
-    ketma-ketligi aniqlanadi.
+    Har sahifada matn QATORLARI va rasmlar Y-koordinata bo'yicha
+    aralashtiriladi. # bilan boshlangan qator = yangi savol.
+    Savoldan keyingi rasm o'sha savolga biriktiriladi.
     """
     try:
         import fitz
     except ImportError:
-        log.warning("PyMuPDF yo'q — rasmli PDF qo'llab-quvvatlanmaydi")
+        log.warning("PyMuPDF yo'q")
         return []
 
-    LBL = ["A", "B", "C", "D", "E", "F", "G", "H"]
+    LBL = ["A","B","C","D","E","F","G","H"]
     questions = []
-
     try:
         doc = fitz.open(path)
     except Exception as e:
         log.error(f"PDF (fitz) ochilmadi: {e}")
         return []
 
-    # Barcha elementlarni (matn bloki yoki rasm) Y bo'yicha yig'amiz
-    elements = []  # (page_no, y, kind, data)
-
+    # Elementlar: (page, y, kind, data)
+    # kind: "line" (matn qatori) yoki "image"
+    elements = []
     for page_no, page in enumerate(doc):
-        # Matn bloklari
-        for b in page.get_text("blocks"):
-            # b = (x0, y0, x1, y1, text, block_no, block_type)
-            if b[6] == 0 and b[4].strip():
-                elements.append((page_no, b[1], "text", b[4].strip()))
+        # Matnni qator-qator olamiz (dict bilan aniqroq)
+        try:
+            pd = page.get_text("dict")
+            for blk in pd.get("blocks", []):
+                if blk.get("type") != 0:
+                    continue
+                for line in blk.get("lines", []):
+                    spans = line.get("spans", [])
+                    txt = "".join(sp.get("text","") for sp in spans).strip()
+                    if txt:
+                        y = line.get("bbox", [0,0,0,0])[1]
+                        elements.append((page_no, y, "line", txt))
+        except Exception:
+            # Fallback: blocks
+            for b in page.get_text("blocks"):
+                if b[6] == 0 and b[4].strip():
+                    for ln in b[4].strip().split("\n"):
+                        if ln.strip():
+                            elements.append((page_no, b[1], "line", ln.strip()))
 
         # Rasmlar
         for img_info in page.get_images(full=True):
@@ -1481,86 +1493,131 @@ def _parse_pdf_with_images(path: str) -> list:
                 bbox = page.get_image_bbox(img_info)
                 y = bbox.y0
             except Exception:
-                y = 0
+                y = 999999
             try:
                 base = doc.extract_image(xref)
-                img_bytes = base["image"]
-                img_ext   = "." + base.get("ext", "png")
-                elements.append((page_no, y, "image", (img_bytes, img_ext)))
+                elements.append((page_no, y, "image",
+                                 (base["image"], "." + base.get("ext","png"))))
             except Exception:
                 pass
 
     doc.close()
-
-    # Sahifa va Y bo'yicha tartiblaymiz
     elements.sort(key=lambda e: (e[0], e[1]))
 
-    # Savol-rasm-variant ketma-ketligini aniqlaymiz
+    # Savol-rasm-variant ketma-ketligi
     i = 0
     n = len(elements)
     while i < n:
         _, _, kind, data = elements[i]
-
-        if kind == "text" and data.startswith("#"):
-            # Yangi savol
+        if kind == "line" and data.startswith("#"):
             q_text = data.lstrip("#\xa0").strip()
             i += 1
-
-            img_bytes = None
-            img_ext   = None
-            variants  = []
+            img_bytes = img_ext = None
+            variants = []
             correct_idx = -1
-
-            # Keyingi elementlar: rasm va variantlar
             while i < n:
                 _, _, k2, d2 = elements[i]
-
-                if k2 == "text" and d2.startswith("#"):
-                    break  # Keyingi savol
-
+                if k2 == "line" and d2.startswith("#"):
+                    break
                 if k2 == "image" and img_bytes is None:
                     img_bytes, img_ext = d2
                     i += 1
                     continue
-
-                if k2 == "text":
-                    # Variantlarni qatorlarga bo'lamiz
-                    for line in d2.split("\n"):
-                        line = line.strip()
-                        if not line:
-                            continue
-                        if line.startswith(("-", "*", "+", "•")):
-                            is_c, clean = _is_correct_marker(line)
-                            if line.startswith("-") and not is_c:
-                                clean = line[1:].strip()
-                            if is_c and correct_idx == -1:
-                                correct_idx = len(variants)
-                            variants.append(clean or line[1:].strip())
+                if k2 == "line":
+                    line = d2.strip()
+                    if line.startswith(("-","*","+","•")):
+                        is_c, clean = _is_correct_marker(line)
+                        if line.startswith("-") and not is_c:
+                            clean = line[1:].strip()
+                        if is_c and correct_idx == -1:
+                            correct_idx = len(variants)
+                        variants.append(clean or line[1:].strip())
+                    elif variants:
+                        # Variant davomi (uzun variant)
+                        variants[-1] += " " + line
+                    else:
+                        # Savol davomi
+                        q_text += " " + line
                 i += 1
 
             if q_text and len(variants) >= 2:
                 opts = []
                 for j, v in enumerate(variants):
-                    lbl = LBL[j] if j < len(LBL) else str(j + 1)
+                    lbl = LBL[j] if j < len(LBL) else str(j+1)
                     opts.append(v if re.match(r"^[A-Ha-h]\s*[).]", v) else f"{lbl}) {v}")
-
                 has_mark = correct_idx >= 0
                 q = {
-                    "type": "multiple_choice",
-                    "question": q_text,
-                    "options": opts,
-                    "correct": opts[max(0, correct_idx)],
-                    "explanation": "",
-                    "accepted_answers": [],
-                    "points": 1,
-                    "_marked": has_mark,
-                    "_has_image": img_bytes is not None,
+                    "type": "multiple_choice", "question": q_text,
+                    "options": opts, "correct": opts[max(0,correct_idx)],
+                    "explanation": "", "accepted_answers": [], "points": 1,
+                    "_marked": has_mark, "_has_image": img_bytes is not None,
                 }
                 if img_bytes:
                     q["_img_bytes"] = img_bytes
-                    q["_img_ext"]   = img_ext
+                    q["_img_ext"] = img_ext
                 questions.append(q)
         else:
             i += 1
 
     return questions
+
+def _pdf_via_docx(path: str) -> list:
+    """
+    PDF ni LibreOffice bilan DOCX ga aylantiradi,
+    keyin DOCX rasm parserini (_parse_docx_with_images) ishlatadi.
+
+    LibreOffice rasm-matn joylashuvini PyMuPDF dan yaxshiroq saqlaydi.
+    """
+    import subprocess, tempfile, os
+    from pathlib import Path
+
+    out_dir = tempfile.mkdtemp(prefix="pdf2docx_")
+    try:
+        # LibreOffice bilan PDF → DOCX
+        subprocess.run(
+            ["libreoffice", "--headless", "--infilter=writer_pdf_import",
+             "--convert-to", "docx", path, "--outdir", out_dir],
+            check=True, timeout=120,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        # Yaratilgan DOCX ni topamiz
+        docx_files = list(Path(out_dir).glob("*.docx"))
+        if not docx_files:
+            log.warning("PDF→DOCX: DOCX yaratilmadi")
+            return []
+
+        docx_path = str(docx_files[0])
+        log.info(f"PDF→DOCX muvaffaqiyatli: {Path(docx_path).name}")
+
+        # DOCX rasm parserini ishlatamiz
+        try:
+            from docx import Document
+            doc = Document(docx_path)
+            q = _parse_docx_with_images(doc)
+            if q:
+                return q
+            # Rasmli topilmasa — oddiy DOCX parser
+            return _parse_docx(docx_path)
+        except Exception as e:
+            if 'NULL' in str(e):
+                return _parse_docx_via_zip(docx_path)
+            log.warning(f"PDF→DOCX parse xato: {e}")
+            return []
+
+    except subprocess.TimeoutExpired:
+        log.warning("PDF→DOCX: timeout (120s)")
+        return []
+    except FileNotFoundError:
+        log.warning("PDF→DOCX: LibreOffice topilmadi")
+        return []
+    except Exception as e:
+        log.warning(f"PDF→DOCX xato: {e}")
+        return []
+    finally:
+        # Vaqtinchalik papkani tozalaymiz (DOCX o'qilgandan keyin)
+        # Lekin _img_bytes allaqachon xotirada, fayl kerak emas
+        try:
+            import shutil
+            shutil.rmtree(out_dir, ignore_errors=True)
+        except Exception:
+            pass
