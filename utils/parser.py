@@ -37,6 +37,64 @@ log = logging.getLogger(__name__)
 #  ASOSIY KIRISH NUQTASI
 # ═══════════════════════════════════════════════════════════
 
+def check_images_in_file(path: str) -> dict:
+    """
+    Fayl ichida rasm bor-yo'qligini tekshiradi.
+    Qaytaradi: {"has_images": bool, "count": int, "type": "docx/pdf/none"}
+
+    Botda foydalanuvchiga "Bu faylda N ta rasm bor" deyish uchun.
+    """
+    import os
+    ext = os.path.splitext(path)[1].lower()
+    result = {"has_images": False, "count": 0, "type": "none"}
+
+    try:
+        if ext == ".docx":
+            from docx import Document
+            try:
+                doc = Document(path)
+                cnt = len(doc.inline_shapes)
+                # ZIP orqali ham tekshiramiz (NULL bo'lsa)
+                if cnt == 0:
+                    import zipfile
+                    with zipfile.ZipFile(path) as z:
+                        cnt = len([n for n in z.namelist()
+                                   if 'media/image' in n and not n.endswith('/')])
+                result = {"has_images": cnt > 0, "count": cnt, "type": "docx"}
+            except Exception:
+                # NULL xatosi — ZIP orqali
+                import zipfile
+                with zipfile.ZipFile(path) as z:
+                    cnt = len([n for n in z.namelist()
+                               if 'media/image' in n and not n.endswith('/')])
+                result = {"has_images": cnt > 0, "count": cnt, "type": "docx"}
+
+        elif ext == ".pdf":
+            try:
+                import fitz
+                doc = fitz.open(path)
+                cnt = sum(len(page.get_images()) for page in doc)
+                doc.close()
+                result = {"has_images": cnt > 0, "count": cnt, "type": "pdf"}
+            except ImportError:
+                # pdfplumber fallback
+                import pdfplumber
+                with pdfplumber.open(path) as pdf:
+                    cnt = sum(len(p.images) for p in pdf.pages)
+                result = {"has_images": cnt > 0, "count": cnt, "type": "pdf"}
+
+        elif ext == ".doc":
+            # DOC → DOCX convert qilib tekshiramiz
+            converted = _convert_doc(path)
+            if converted != path:
+                return check_images_in_file(converted)
+
+    except Exception as e:
+        log.warning(f"check_images_in_file: {e}")
+
+    return result
+
+
 def parse_file(path: str) -> list:
     ext = Path(path).suffix.lower()
     try:
@@ -665,48 +723,34 @@ def _parse_pdf(path: str) -> list:
 
     lines = [l.strip() for l in full_text.split("\n") if l.strip()]
 
-    # FORMAT P-IMG: Rasmli PDF (# savol + rasm + - variant)
-    # Avval rasm borligini tekshiramiz
-    try:
-        import fitz
-        with fitz.open(path) as _pdoc:
-            _has_imgs = any(len(_p.get_images()) > 0 for _p in _pdoc)
-        if _has_imgs and any(l.startswith("#") for l in lines):
-            # 1-usul: PDF→DOCX (LibreOffice rasm-matn bog'liqligini saqlaydi)
-            q = _pdf_via_docx(path)
-            if q and any(qq.get("_img_bytes") for qq in q):
-                log.info(f"PDF→DOCX: {len(q)} savol rasmlar bilan")
-                return q
-            # 2-usul: To'g'ridan PyMuPDF
-            q = _parse_pdf_with_images(path)
-            if q:
-                return q
-    except ImportError:
-        pass
-    except Exception as _pe:
-        log.warning(f"PDF rasm tekshiruvi: {_pe}")
-
-    # FORMAT C: ? savol + = variant (differential)
+    # ─── MATNNI O'Z FORMATIDA PARSE QILAMIZ ───
+    parsed = None
     q_cnt   = sum(1 for l in lines if l.startswith("?"))
     var_cnt = sum(1 for l in lines if any(l.startswith(v) for v in _VAR_STARTS))
+
+    # FORMAT C: ? savol + = variant (differential)
     if q_cnt > 0 and var_cnt > q_cnt:
-        q = _parse_question_eq(full_text)
-        if q:
-            return q
-
+        parsed = _parse_question_eq(full_text)
     # FORMAT C2: ? savol, markersiz variantlar
-    if q_cnt > 0:
-        q = _parse_question_no_marker(lines)
-        if q:
-            return q
-
+    if not parsed and q_cnt > 0:
+        parsed = _parse_question_no_marker(lines)
     # FORMAT B: ==== + ++++
-    if _is_eq_format(lines):
-        q = _parse_eq_hash(lines)
-        if q:
-            return q
-
+    if not parsed and _is_eq_format(lines):
+        parsed = _parse_eq_hash(lines)
     # FORMAT A: standart
+    if not parsed:
+        parsed = parse_text(full_text)
+
+    # ─── UNIVERSAL RASM BIRIKTIRISH ───
+    # Format qanday bo'lishidan qat'i nazar, rasmlarni savollarga biriktiramiz
+    if parsed:
+        try:
+            parsed = _attach_pdf_images(path, parsed, full_text)
+        except Exception as _ie:
+            log.warning(f"Rasm biriktirish: {_ie}")
+        return parsed
+
+    # Agar hech narsa topilmasa — bo'sh
     return parse_text(full_text)
 
 
@@ -1504,20 +1548,24 @@ def _parse_pdf_with_images(path: str) -> list:
     doc.close()
     elements.sort(key=lambda e: (e[0], e[1]))
 
+    # Savol belgisi: # yoki ?  | Variant belgisi: - * + • yoki =
+    Q_MARK = ("#", "?")
+    V_MARK = ("-", "*", "+", "•", "=")
+
     # Savol-rasm-variant ketma-ketligi
     i = 0
     n = len(elements)
     while i < n:
         _, _, kind, data = elements[i]
-        if kind == "line" and data.startswith("#"):
-            q_text = data.lstrip("#\xa0").strip()
+        if kind == "line" and data.startswith(Q_MARK):
+            q_text = data.lstrip("#?\xa0 ").strip()
             i += 1
             img_bytes = img_ext = None
             variants = []
             correct_idx = -1
             while i < n:
                 _, _, k2, d2 = elements[i]
-                if k2 == "line" and d2.startswith("#"):
+                if k2 == "line" and d2.startswith(Q_MARK):
                     break
                 if k2 == "image" and img_bytes is None:
                     img_bytes, img_ext = d2
@@ -1525,9 +1573,10 @@ def _parse_pdf_with_images(path: str) -> list:
                     continue
                 if k2 == "line":
                     line = d2.strip()
-                    if line.startswith(("-","*","+","•")):
+                    if line.startswith(V_MARK):
                         is_c, clean = _is_correct_marker(line)
-                        if line.startswith("-") and not is_c:
+                        # - yoki = bilan boshlanса va marker emas — oddiy variant
+                        if line[0] in ("-", "=") and not is_c:
                             clean = line[1:].strip()
                         if is_c and correct_idx == -1:
                             correct_idx = len(variants)
@@ -1621,3 +1670,120 @@ def _pdf_via_docx(path: str) -> list:
             shutil.rmtree(out_dir, ignore_errors=True)
         except Exception:
             pass
+
+
+# ═══════════════════════════════════════════════════════════
+# UNIVERSAL RASM BIRIKTIRISH (barcha PDF formatlar uchun)
+# ═══════════════════════════════════════════════════════════
+
+def _attach_pdf_images(path: str, questions: list, full_text: str) -> list:
+    """
+    PDF dagi rasmlarni savollarga biriktiradi — FORMAT FARQI YO'Q.
+
+    Mantiq:
+      1. PDF dan barcha rasmlarni (bytes + Y-koordinata) ajratamiz
+      2. Har savol matnining PDF dagi Y-pozitsiyasini topamiz
+      3. Har rasmni — undan YUQORIDAGI eng yaqin savolga biriktiramiz
+         (rasm odatda savol matnidan keyin keladi)
+
+    Bu # , ? , ==== — barcha formatlarda bir xil ishlaydi.
+    """
+    try:
+        import fitz
+    except ImportError:
+        # PyMuPDF yo'q — rasm biriktirib bo'lmaydi (lekin matn ishlaydi)
+        return questions
+
+    try:
+        doc = fitz.open(path)
+    except Exception as e:
+        log.warning(f"_attach_pdf_images fitz: {e}")
+        return questions
+
+    # ─── 1. Rasmlarni ajratamiz (global Y bilan) ───
+    images = []  # (global_y, img_bytes, img_ext)
+    page_y_offset = 0.0
+    for page in doc:
+        page_h = page.rect.height
+        for img_info in page.get_images(full=True):
+            xref = img_info[0]
+            try:
+                bbox = page.get_image_bbox(img_info)
+                gy = page_y_offset + bbox.y0
+            except Exception:
+                gy = page_y_offset
+            try:
+                base = doc.extract_image(xref)
+                images.append((gy, base["image"], "." + base.get("ext", "png")))
+            except Exception:
+                pass
+        page_y_offset += page_h
+
+    if not images:
+        doc.close()
+        return questions
+
+    # ─── 2. Savol matnlarining global Y pozitsiyasi ───
+    # Har savolning birinchi 15 belgisini PDF dan qidiramiz
+    q_positions = []  # (global_y, q_index)
+    page_y_offset = 0.0
+    page_texts = []
+    for page in doc:
+        page_texts.append((page_y_offset, page))
+        page_y_offset += page.rect.height
+
+    def _find_q_y(q_text):
+        """Savol matnining global Y koordinatasini topadi"""
+        # Savol matnidan qidiruv uchun bo'lak (markerlarsiz, qisqa)
+        probe = re.sub(r'^[#?=*+\-•\s]+', '', q_text).strip()[:20]
+        if len(probe) < 4:
+            return None
+        for y_off, page in page_texts:
+            try:
+                rects = page.search_for(probe, quads=False)
+                if rects:
+                    return y_off + rects[0].y0
+            except Exception:
+                continue
+        return None
+
+    for qi, q in enumerate(questions):
+        gy = _find_q_y(q.get("question", ""))
+        if gy is not None:
+            q_positions.append((gy, qi))
+
+    doc.close()
+
+    if not q_positions:
+        return questions
+
+    q_positions.sort()
+
+    # ─── 3. Har rasmni eng yaqin (yuqoridagi) savolga biriktiramiz ───
+    for img_y, img_bytes, img_ext in images:
+        # Rasmdan YUQORIDA va eng yaqin savolni topamiz
+        best_qi = None
+        best_dist = float("inf")
+        for q_y, qi in q_positions:
+            if q_y <= img_y:  # Savol rasmdan yuqorida
+                dist = img_y - q_y
+                if dist < best_dist:
+                    best_dist = dist
+                    best_qi = qi
+        # Agar yuqorida savol topilmasa — eng yaqin pastdagisi
+        if best_qi is None:
+            for q_y, qi in q_positions:
+                dist = abs(q_y - img_y)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_qi = qi
+
+        # Biriktiramiz (agar bu savolda hali rasm bo'lmasa)
+        if best_qi is not None and not questions[best_qi].get("_img_bytes"):
+            questions[best_qi]["_img_bytes"] = img_bytes
+            questions[best_qi]["_img_ext"]   = img_ext
+            questions[best_qi]["_has_image"]  = True
+
+    img_attached = sum(1 for q in questions if q.get("_img_bytes"))
+    log.info(f"PDF rasm biriktirildi: {img_attached} ta savol")
+    return questions
