@@ -1008,6 +1008,28 @@ def parse_text(text: str) -> list:
     return result
 
 
+def _clean_dup_label(text: str) -> str:
+    """
+    Variant boshidagi takroriy label ni tozalaydi.
+    "A) a)Matn"  → "Matn"
+    "B) b) Matn" → "Matn"
+    "a)Matn"     → "Matn"
+    Faqat MOS keluvchi takror (A)a)) yoki yakka kichik (a)) tozalanadi.
+    """
+    if not text:
+        return text
+    t = text.strip()
+    # 1. Katta + kichik MOS label: "A) a)" yoki "A)a)" yoki "A. a."
+    m = re.match(r'^([A-Za-z])\s*[).]\s*([a-z])\s*[).]\s*', t)
+    if m and m.group(1).lower() == m.group(2).lower():
+        return t[m.end():].strip()
+    # 2. Yakka kichik label boshida: "a)Matn" (lekin katta emas)
+    m2 = re.match(r'^([a-z])\s*[).]\s*(?=\S)', t)
+    if m2:
+        return t[m2.end():].strip()
+    return t
+
+
 def _is_correct_marker(line: str) -> tuple:
     """
     To'g'ri javob belgisini aniqlaydi — 3 ta holat:
@@ -1117,11 +1139,12 @@ def _parse_block(block: str) -> dict | None:
             continue
         is_correct, cleaned = _is_correct_marker(ls)
         if is_correct:
+            cleaned = _clean_dup_label(cleaned)
             opts.append(cleaned)
             corr = cleaned
             continue
         if re.match(r"^[A-Za-zA-Яа-яёЁ0-9]\s*[\).]\s*", ls):
-            opts.append(ls)
+            opts.append(_clean_dup_label(ls))
             continue
 
     if forced:
