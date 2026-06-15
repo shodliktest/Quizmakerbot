@@ -6,7 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardButton
 
-from utils.parser import parse_file
+from utils.parser import parse_file, check_images_in_file
 from utils.states import CreateTest
 from utils.db import create_test
 from keyboards.keyboards import subject_kb, difficulty_kb, visibility_kb, main_kb, test_created_kb
@@ -539,13 +539,24 @@ async def upload_file(message: Message, state: FSMContext):
 
         # Rasmli savollar bo'lsa — rasmlarni TG kanalga yuklab file_id olamiz
         img_count = sum(1 for q in questions if q.get("_img_bytes"))
+        # Faylda umuman rasm bormi (parse qilolmagan bo'lsa ham)
+        img_in_file = 0
+        try:
+            if os.path.exists(tmp_path):
+                _ii = check_images_in_file(tmp_path)
+                img_in_file = _ii.get("count", 0)
+        except Exception:
+            img_in_file = img_count
+
         if img_count > 0:
             await status.edit_text(
-                f"🖼 <b>{img_count} ta rasm yuklanmoqda...</b>\n"
+                f"🖼 <b>{img_count} ta rasm test bilan ulanmoqda...</b>\n"
                 f"<i>Iltimos kuting</i>",
                 parse_mode="HTML"
             )
             questions = await _upload_images_to_channel(message.bot, questions)
+        elif img_in_file > 0:
+            log.info(f"Faylda {img_in_file} rasm bor, savolga bog'lanmadi")
 
         await state.update_data(questions=questions, _file_id=doc.file_id)
         await state.set_state(CreateTest.upload_file)  # state saqlanadi
@@ -557,12 +568,18 @@ async def upload_file(message: Message, state: FSMContext):
             b.button(text="📨 Adminga murojaat",   callback_data="uj_admin")
             b.button(text="▶️ Shundayicha davom",  callback_data="uj_skip")
             b.adjust(1)
+            img_line = ""
+            if img_count > 0:
+                img_line = f"🖼 Rasmli: <b>{img_count}</b> ta (test bilan ulandi)\n"
+            elif img_in_file > 0:
+                img_line = f"⚠️ Faylda {img_in_file} rasm bor, lekin bog\'lanmadi\n"
             await status.edit_text(
                 f"📋 <b>{total} TA SAVOL TOPILDI</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"✅ Belgilangan: <b>{total - unmarked}</b> ta\n"
-                f"❓ Belgilanmagan: <b>{unmarked}</b> ta\n\n"
-                f"<i>To\'g\'ri javob aniqlanmagan. Nima qilamiz?</i>",
+                f"❓ Belgilanmagan: <b>{unmarked}</b> ta\n"
+                + img_line +
+                f"\n<i>To\'g\'ri javob aniqlanmagan. Nima qilamiz?</i>",
                 parse_mode="HTML",
                 reply_markup=b.as_markup()
             )
@@ -877,8 +894,18 @@ def _load_ai_clients():
     for p in _AI_PROVIDERS:
         for name in p["key_names"]:
             k = sec.get(name, "")
-            if k:
-                clients.append({"name": p["name"], "url": p["url"], "model": p["model"], "key": k})
+            if k and len(str(k).strip()) > 10:  # Bo'sh yoki noto'g'ri kalitni o'tkazamiz
+                clients.append({"name": p["name"], "url": p["url"],
+                                "model": p["model"], "key": str(k).strip()})
+
+    # Diagnostika — qaysi providerlar yuklandi
+    if clients:
+        prov_count = {}
+        for c in clients:
+            prov_count[c["name"]] = prov_count.get(c["name"], 0) + 1
+        log.info(f"AI klientlar yuklandi: {prov_count}")
+    else:
+        log.warning("HECH QANDAY AI kalit topilmadi! Secrets ni tekshiring.")
 
     return clients
 
