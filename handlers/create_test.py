@@ -597,13 +597,23 @@ async def _ask_poll_time(msg, state, q_count: int):
         b.add(InlineKeyboardButton(text=f"⏱ {s}s", callback_data=f"ptime_{s}"))
     b.adjust(3)
     b.row(InlineKeyboardButton(text="♾ Cheksiz", callback_data="ptime_0"))
-    await msg.edit_text(
+    txt = (
         f"<b>✅ {q_count} TA SAVOL TOPILDI!</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"⏱ <b>Har bir savol uchun necha soniya?</b>",
-        parse_mode="HTML",
-        reply_markup=b.as_markup()
+        f"⏱ <b>Har bir savol uchun necha soniya?</b>"
     )
+    # Eski xabarni edit qilishga urinamiz, fail bo'lsa yangi yuboramiz
+    try:
+        await msg.edit_text(txt, parse_mode="HTML", reply_markup=b.as_markup())
+    except Exception:
+        try:
+            await msg.answer(txt, parse_mode="HTML", reply_markup=b.as_markup())
+        except Exception:
+            try:
+                await msg.bot.send_message(msg.chat.id, txt,
+                                           parse_mode="HTML", reply_markup=b.as_markup())
+            except Exception:
+                pass
     await state.set_state(CreateTest.set_poll_time)
 
 
@@ -1093,7 +1103,7 @@ async def _solve_image_questions(questions: list, docx_path: str, msg) -> list:
                 opts = q.get("options", [])
                 if 0 <= ci < len(opts):
                     questions[orig_idx]["correct"]    = opts[ci]
-                    questions[orig_idx]["explanation"] = f"🤖🖼️ {ex}" if ex else ""
+                    questions[orig_idx]["explanation"] = ex if ex else ""
                     questions[orig_idx]["_ai_solved"]  = True
                     questions[orig_idx]["_marked"]     = True
                     solved += 1
@@ -1380,7 +1390,7 @@ async def _ai_solve(questions: list, msg) -> list:
                     opts = questions[oi].get("options", [])
                     if 0 <= ci < len(opts):
                         questions[oi]["correct"]    = opts[ci]
-                        questions[oi]["explanation"] = f"🤖 {ex}" if ex else ""
+                        questions[oi]["explanation"] = ex if ex else ""
                         questions[oi]["_ai_solved"]  = True
                         solved += 1
         except Exception as e:
@@ -1431,7 +1441,7 @@ async def _ai_solve(questions: list, msg) -> list:
                         opts = questions[oi].get("options", [])
                         if 0 <= ci < len(opts):
                             questions[oi]["correct"]    = opts[ci]
-                            questions[oi]["explanation"] = f"🤖 {ex}" if ex else ""
+                            questions[oi]["explanation"] = ex if ex else ""
                             questions[oi]["_ai_solved"]  = True
                             solved += 1
                 log.info(f"Retry batch {bn}: muvaffaqiyatli")
