@@ -1897,3 +1897,170 @@ async def cancel_create(callback: CallbackQuery, state: FSMContext):
         "❌ Bekor qilindi.",
         reply_markup=main_kb(callback.from_user.id, "private")
     )
+
+
+# ═══════════════════════════════════════════════════════════
+# AI BILAN QAYTA YECHISH (mavjud test uchun)
+# ═══════════════════════════════════════════════════════════
+
+@router.callback_query(F.data.startswith("reai_"))
+async def reai_solve(cb: CallbackQuery, state: FSMContext):
+    """Mavjud testning savollarini AI bilan qayta yechadi"""
+    from utils.tg_db import get_test_full, save_test_full
+
+    tid = cb.data[len("reai_"):]
+    await cb.answer()
+
+    test = await get_test_full(tid)
+    if not test or not test.get("questions"):
+        return await cb.message.answer("❌ Test topilmadi yoki bo'sh.")
+
+    questions = test["questions"]
+    total = len(questions)
+
+    # Barcha savollarni AI ga beramiz (belgilangan-belgilanmaganidan qat'i nazar)
+    msg = await cb.message.answer(
+        f"🤖 <b>AI qayta yechmoqda...</b>\n"
+        f"📊 Jami: {total} ta savol\n"
+        f"<i>Iltimos kuting</i>",
+        parse_mode="HTML"
+    )
+
+    # Rasmli va matnli ajratamiz
+    img_qs = [q for q in questions if q.get("_has_image") or q.get("photo")]
+    txt_qs = [q for q in questions if not (q.get("_has_image") or q.get("photo"))]
+
+    solved = 0
+    try:
+        # Matnli savollar — Groq/Gemini/...
+        if txt_qs:
+            txt_qs = await _ai_solve(txt_qs, msg)
+            solved += sum(1 for q in txt_qs if q.get("_ai_solved"))
+        # Rasmli savollar — Gemini Vision (photo file_id orqali)
+        # Eslatma: qayta yechishda rasm bytes yo'q, faqat file_id bor
+        # Shuning uchun rasmli savollar o'tkazib yuboriladi (web edit orqali)
+    except Exception as e:
+        log.error(f"reai_solve xato: {e}")
+
+    # Vaqtinchalik flaglarni tozalaymiz
+    clean_qs = []
+    for q in questions:
+        cq = {k: v for k, v in q.items() if not k.startswith("_")}
+        clean_qs.append(cq)
+    test["questions"] = clean_qs
+
+    # Saqlaymiz
+    try:
+        await save_test_full(test)
+    except Exception as e:
+        log.error(f"reai save xato: {e}")
+        return await msg.edit_text("❌ Saqlashda xato yuz berdi.")
+
+    try:
+        await msg.edit_text(
+            f"✅ <b>AI qayta yechdi!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📊 Jami: <b>{total}</b> ta savol\n"
+            f"✅ Yechildi: <b>{solved}</b> ta\n"
+            + (f"🖼 Rasmli {len(img_qs)} ta — web orqali tahrirlang\n" if img_qs else "")
+            + f"\n<i>Test yangilandi.</i>",
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
+
+
+# ═══════════════════════════════════════════════════════════
+# YANGI FAYL YUKLASH (eski test o'rniga)
+# ═══════════════════════════════════════════════════════════
+
+@router.callback_query(F.data.startswith("reupload_"))
+async def reupload_start(cb: CallbackQuery, state: FSMContext):
+    """Eski test savollarini yangi fayl bilan almashtirish"""
+    tid = cb.data[len("reupload_"):]
+    await cb.answer()
+
+    await state.update_data(_reupload_tid=tid)
+    await state.set_state(CreateTest.reupload_file)
+    await cb.message.answer(
+        f"📄 <b>Yangi fayl yuboring</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Eski savollar <b>o'chiriladi</b>, yangi fayldagi savollar yuklanadi.\n"
+        f"Test nomi va sozlamalari <b>o'zgarmaydi</b>.\n\n"
+        f"<i>Bekor qilish uchun /start</i>",
+        parse_mode="HTML"
+    )
+
+
+@router.message(F.document, CreateTest.reupload_file)
+async def reupload_file(message: Message, state: FSMContext):
+    """Yangi fayl — eski test savollarini almashtiradi"""
+    import tempfile, os
+    from utils.tg_db import get_test_full, save_test_full
+
+    d   = await state.get_data()
+    tid = d.get("_reupload_tid", "")
+    if not tid:
+        await state.clear()
+        return await message.answer("❌ Test ID topilmadi. /start bilan qayta urinib ko'ring.")
+
+    doc = message.document
+    status = await message.answer("⏳ Fayl yuklanmoqda...")
+
+    try:
+        file = await message.bot.get_file(doc.file_id)
+        ext  = os.path.splitext(doc.file_name or "")[1].lower() or ".docx"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+            tmp_path = tmp.name
+        await message.bot.download_file(file.file_path, tmp_path)
+
+        questions = parse_file(tmp_path)
+
+        # Rasmlarni TG kanalga yuklaymiz
+        img_count = sum(1 for q in questions if q.get("_img_bytes"))
+        if img_count > 0:
+            await status.edit_text(f"🖼 {img_count} ta rasm yuklanmoqda...")
+            questions = await _upload_images_to_channel(message.bot, questions)
+
+        try: os.remove(tmp_path)
+        except Exception: pass
+
+        if not questions:
+            await state.clear()
+            return await status.edit_text("❌ Faylda savol topilmadi.")
+
+        # Eski testni olamiz, savollarni almashtiramiz
+        test = await get_test_full(tid)
+        if not test:
+            await state.clear()
+            return await status.edit_text("❌ Eski test topilmadi.")
+
+        # Vaqtinchalik flaglarni tozalaymiz (photo qoladi)
+        clean_qs = []
+        for q in questions:
+            cq = {k: v for k, v in q.items() if not k.startswith("_")}
+            clean_qs.append(cq)
+
+        test["questions"] = clean_qs
+        await save_test_full(test)
+        await state.clear()
+
+        total  = len(clean_qs)
+        marked = sum(1 for q in questions if q.get("_marked"))
+        await status.edit_text(
+            f"✅ <b>Test yangilandi!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📊 Yangi savollar: <b>{total}</b> ta\n"
+            f"✅ Belgilangan: <b>{marked}</b> ta\n"
+            + (f"🖼 Rasmli: <b>{img_count}</b> ta\n" if img_count else "")
+            + f"\n<i>Test nomi va sozlamalari saqlanди.</i>",
+            parse_mode="HTML"
+        )
+
+    except Exception as e:
+        log.error(f"reupload_file xato: {e}")
+        await state.clear()
+        try:
+            await status.edit_text(f"❌ Xato: {str(e)[:100]}")
+        except Exception:
+            pass
