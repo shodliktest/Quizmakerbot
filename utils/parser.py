@@ -258,6 +258,18 @@ def _parse_docx(path: str) -> list:
         if q:
             return q
 
+    # FORMAT I: Har QATOR = alohida paragraf (raqamsiz, prefikssiz),
+    # savol so'roq/ikki nuqta/bo'sh joy bilan, variantlar ketma-ket,
+    # to'g'ri javob "+" bilan belgilangan (label A)/B)/C)/D) bo'lishi shart emas).
+    # Paragraf ichida "\n" bo'lsa ham (FORMAT G mos kelmagan holatlar uchun)
+    # avval qatorlarga yoyamiz, keyin FORMAT I logikasi ishlaydi.
+    flat_lines = []
+    for l in lines:
+        flat_lines.extend(s.strip() for s in l.split('\n') if s.strip())
+    q = _parse_loose_paragraphs(flat_lines)
+    if q:
+        return q
+
     # FORMAT F: Standart raqamli
     full_text = "\n".join(lines)
     q = parse_text(full_text)
@@ -512,6 +524,156 @@ def _parse_paragraph_per_question(lines: list) -> list:
             "points":           1,
             "_marked":          has_mark,
         })
+
+    return questions
+
+
+# ═══════════════════════════════════════════════════════════
+#  FORMAT I: Har QATOR alohida paragraf, label/raqamsiz savol,
+#  prefikssiz variantlar, to'g'ri javob "+" bilan belgilangan
+#  (Word'da extract-text orqali olingan ko'rinish):
+#
+#    Savol matni?
+#    Variant 1
+#    +To'g'ri variant
+#    Variant 3
+#    Variant 4
+#
+#  Variantlar A)/B)/C)/D) prefiksli bo'lsa ham ishlaydi (aralash holatlar).
+# ═══════════════════════════════════════════════════════════
+
+def _looks_like_loose_question(line: str) -> bool:
+    """
+    Qator savol matniga o'xshaydimi — label/raqamsiz, variant emasligini tekshiradi.
+    Belgilar: "?" yoki ":" bilan tugashi, bo'sh joy ifodalari (___, ------),
+    yoki "N. " bilan boshlanishi (raqamli savol).
+    """
+    clean = line.replace('*', '').strip()
+    if not clean:
+        return False
+    if clean.startswith('+'):
+        return False
+    if re.match(r'^[+]?[A-Ha-h]\s*[).]', clean):
+        return False
+    if clean.startswith('- '):
+        inner = clean[2:].strip()
+        if inner.startswith('+') or re.match(r'^[A-Ha-h]\s*[).]', inner):
+            return False
+    if clean.endswith('?') or clean.endswith(':'):
+        return True
+    if '___' in clean or '------' in clean or '______' in clean:
+        return True
+    if re.match(r'^\d+[.)]\s', clean):
+        return True
+    return False
+
+
+def _clean_loose_option(line: str) -> tuple:
+    """
+    Bitta variant qatorini tozalaydi.
+    Qaytaradi: (toza_matn, is_correct)
+    """
+    o = line.strip()
+    o = o.replace('**', '').strip()
+    if o.startswith('- '):
+        o = o[2:].strip()
+    is_correct = False
+    if o.startswith('+'):
+        is_correct = True
+        o = o[1:].strip()
+    # Allaqachon mavjud bo'lgan A)/B)/C)/D) prefiksini olib tashlaymiz
+    # (keyinroq label qayta qo'yiladi — bir xil formatga keltirish uchun)
+    m = re.match(r'^[+]?([A-Ha-h])\s*[).]\s*(.*)$', o)
+    if m:
+        o = m.group(2).strip()
+    return o, is_correct
+
+
+def _parse_loose_paragraphs(lines: list) -> list:
+    """
+    FORMAT I: Har savol va har variant — ALOHIDA, mustaqil paragraf
+    (orasida \n yo'q — DOCX'da har bo'lim alohida paragraf bo'lganda).
+
+    Mantiq:
+      1. Savolga o'xshagan qatorni topamiz (_looks_like_loose_question)
+      2. Undan keyingi ketma-ket Q-bo'lmagan qatorlarni variant deb olamiz
+      3. Agar bir nechta Q-qator ketma-ket kelsa — bittasiga birlashtiramiz
+         (masalan "Complete the sentence:" + "She ___ her arm...")
+      4. "+" bilan boshlangan variant — to'g'ri javob
+    """
+    LBL = ["A", "B", "C", "D", "E", "F", "G", "H"]
+
+    if not lines:
+        return []
+
+    tags = ['Q' if _looks_like_loose_question(l) else 'O' for l in lines]
+
+    # Savol bo'lmagan birinchi qatorlar bo'lsa — tashlab yuboramiz
+    items = list(lines)
+
+    # Ketma-ket Q qatorlarni bitta savolga birlashtiramiz
+    merged_items = []
+    merged_tags = []
+    i = 0
+    n = len(items)
+    while i < n:
+        if tags[i] == 'Q':
+            text = items[i]
+            j = i + 1
+            while j < n and tags[j] == 'Q':
+                text = text + ' ' + items[j]
+                j += 1
+            merged_items.append(text)
+            merged_tags.append('Q')
+            i = j
+        else:
+            merged_items.append(items[i])
+            merged_tags.append('O')
+            i += 1
+
+    questions = []
+    n2 = len(merged_items)
+    i = 0
+    while i < n2:
+        if merged_tags[i] != 'Q':
+            i += 1
+            continue
+
+        q_text = merged_items[i].replace('**', '').strip()
+        q_text = q_text[2:].strip() if q_text.startswith('- ') else q_text
+        q_text = re.sub(r'^\d+[.)]\s*', '', q_text)
+
+        j = i + 1
+        variants = []
+        correct_idx = -1
+        while j < n2 and merged_tags[j] == 'O':
+            opt_text, is_correct = _clean_loose_option(merged_items[j])
+            if opt_text:
+                if is_correct and correct_idx == -1:
+                    correct_idx = len(variants)
+                variants.append(opt_text)
+            j += 1
+
+        if q_text and len(variants) >= 2:
+            opts = []
+            for k, v in enumerate(variants):
+                lbl = LBL[k] if k < len(LBL) else str(k + 1)
+                opts.append(f"{lbl}) {v}")
+            has_mark = correct_idx >= 0
+            if correct_idx == -1:
+                correct_idx = 0
+            questions.append({
+                "type":             "multiple_choice",
+                "question":         q_text,
+                "options":          opts,
+                "correct":          opts[correct_idx],
+                "explanation":      "",
+                "accepted_answers": [],
+                "points":           1,
+                "_marked":          has_mark,
+            })
+
+        i = j if j > i else i + 1
 
     return questions
 
