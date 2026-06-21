@@ -26,6 +26,14 @@ FORMAT D — Jadval (Ko'p ustunli DOCX):
   Savol | To'g'ri javob | Muqobil | Muqobil
 
 FORMAT E — Ha/Yo'q, Bo'sh joy to'ldirish, Erkin javob
+
+FORMAT J — Markersiz, ketma-ket (to'g'ri javob aniqlanmaydi, PDF/TXT):
+  Savol matni?
+  Variant 1          ← qaysi to'g'ri ekani BELGISIZ
+  Variant 2
+  Variant 3
+  Variant 4
+  (natija: _marked=False, correct="" — bot AI/Seryalik/Admin so'raydi)
 """
 import re, logging, os, subprocess, tempfile
 from pathlib import Path
@@ -389,7 +397,7 @@ def _parse_abcd_table(tables) -> list:
                 opts.append(v if re.match(r"^[A-Ha-h]\s*[).]", v) else f"{lbl}) {v}")
             questions.append({
                 "type": "multiple_choice", "question": q_text,
-                "options": opts, "correct": opts[0],
+                "options": opts, "correct": "",  # Belgi yo'q — A variant TO'G'RI DEB OLINMAYDI
                 "explanation": "", "accepted_answers": [], "points": 1,
                 "_marked": False,
             })
@@ -425,9 +433,11 @@ def _parse_5x1_tables(tables) -> list:
         questions.append({
             "type":"multiple_choice","question":q_text,
             "options":opts,
-            "correct":opts[correct_idx] if correct_idx >= 0 else opts[0],
+            "correct":opts[correct_idx] if correct_idx >= 0 else "",
             "explanation":"","accepted_answers":[],"points":1,
-            "_marked": False,  # Belgilanmagan — AI/serial kerak
+            # Differensial tahlil orqali aniq topilgan bo'lsa belgilangan,
+            # aks holda belgilanmagan — A variant TO'G'RI DEB OLINMAYDI
+            "_marked": correct_idx >= 0,
         })
     return questions
 
@@ -511,14 +521,12 @@ def _parse_paragraph_per_question(lines: list) -> list:
             continue
 
         has_mark = correct_idx >= 0
-        if correct_idx == -1:
-            correct_idx = 0
 
         questions.append({
             "type":             "multiple_choice",
             "question":         q_text,
             "options":          opts,
-            "correct":          opts[correct_idx],
+            "correct":          opts[correct_idx] if has_mark else "",
             "explanation":      "",
             "accepted_answers": [],
             "points":           1,
@@ -660,17 +668,145 @@ def _parse_loose_paragraphs(lines: list) -> list:
                 lbl = LBL[k] if k < len(LBL) else str(k + 1)
                 opts.append(f"{lbl}) {v}")
             has_mark = correct_idx >= 0
-            if correct_idx == -1:
-                correct_idx = 0
             questions.append({
                 "type":             "multiple_choice",
                 "question":         q_text,
                 "options":          opts,
-                "correct":          opts[correct_idx],
+                "correct":          opts[correct_idx] if has_mark else "",
                 "explanation":      "",
                 "accepted_answers": [],
                 "points":           1,
                 "_marked":          has_mark,
+            })
+
+        i = j if j > i else i + 1
+
+    return questions
+
+
+# ═══════════════════════════════════════════════════════════
+#  FORMAT J: Savol/variant markersiz, to'g'ri javob BELGISIZ
+#  (Test banki andozasi — PDF/TXT, ko'pincha sahifa raqamlari
+#  va qator-wrap muammolari bilan birga keladi):
+#
+#    Savol matni?
+#    Variant 1
+#    Variant 2
+#    Variant 3
+#    Variant 4
+#
+#  Belgi (*, +, # va h.k.) UMUMAN YO'Q — qaysi variant to'g'ri
+#  ekanini matndan aniqlash imkonsiz. Shuning uchun "correct"
+#  BO'SH qoldiriladi va _marked=False qaytariladi — bot bu
+#  savollarni "belgilanmagan" deb ko'rsatib, foydalanuvchiga
+#  Seryalik javob / AI bilan yechish / Adminga murojaat
+#  menyusini taqdim etadi (birinchi variantni "to'g'ri" deb
+#  taxmin qilish XATO — bu chalg'ituvchi bo'lardi).
+# ═══════════════════════════════════════════════════════════
+
+def _strip_page_numbers(lines: list) -> list:
+    """Mustaqil sahifa raqami qatorlarini (faqat 1-3 xonali raqam) olib tashlaydi."""
+    return [l for l in lines if not re.match(r'^\d{1,3}$', l.strip())]
+
+
+def _looks_like_marker_free_question(line: str) -> bool:
+    """
+    FORMAT J uchun savol qatorini aniqlaydi.
+    Belgilar: "?" yoki ":" yoki "..." yoki "-" bilan tugashi,
+    yoki bo'sh joy ifodasi (___, ...) borligi.
+    (_looks_like_loose_question dan farqi — raqamli boshlanishni
+    talab qilmaydi, chunki bu formatda savollar deyarli hech qachon
+    "1." kabi raqamlanmaydi.)
+    """
+    clean = line.strip()
+    if not clean:
+        return False
+    s = clean.rstrip()
+    if s.endswith('?') or s.endswith(':') or s.endswith('...'):
+        return True
+    if s.endswith('-') and len(s) > 3:
+        return True
+    if '___' in s or '......' in s:
+        return True
+    return False
+
+
+def _parse_marker_free_sequential(lines: list) -> list:
+    """
+    FORMAT J: Har savol va variant alohida qatorda, hech qanday
+    to'g'ri-javob belgisi yo'q. Variantlar soni odatda 3-5 ta.
+
+    Qaysi variant to'g'ri ekanini aniqlab bo'lmaydi — shuning uchun
+    "correct" BO'SH ("") qoldiriladi, "_marked": False qaytariladi.
+    Bot bunday savollarni "belgilanmagan" deb belgilab, Seryalik
+    javob / AI bilan yechish / Adminga murojaat orqali to'ldirishni
+    so'raydi.
+
+    PDF dan kelgan matnda savol matni ba'zan 2 qatorga bo'linib
+    qolishi mumkin (sahifa kengligi sababli) — bunday hollarda
+    ketma-ket "savolga o'xshash" qatorlar bittasiga birlashtiriladi.
+    """
+    if not lines:
+        return []
+
+    items = _strip_page_numbers(lines)
+    if not items:
+        return []
+
+    tags = ['Q' if _looks_like_marker_free_question(l) else 'O' for l in items]
+
+    # Ketma-ket Q qatorlarni bitta savolga birlashtiramiz (PDF wrap holati)
+    merged_items, merged_tags = [], []
+    i, n = 0, len(items)
+    while i < n:
+        if tags[i] == 'Q':
+            text = items[i]
+            j = i + 1
+            while j < n and tags[j] == 'Q':
+                text = text + ' ' + items[j]
+                j += 1
+            merged_items.append(text)
+            merged_tags.append('Q')
+            i = j
+        else:
+            merged_items.append(items[i])
+            merged_tags.append('O')
+            i += 1
+
+    questions = []
+    n2 = len(merged_items)
+    i = 0
+    while i < n2:
+        if merged_tags[i] != 'Q':
+            i += 1
+            continue
+
+        q_text = merged_items[i].strip()
+
+        j = i + 1
+        variants = []
+        while j < n2 and merged_tags[j] == 'O':
+            v = merged_items[j].strip()
+            if v:
+                variants.append(v)
+            j += 1
+
+        # Kamida 2 ta variant bo'lishi shart (aks holda bu savol emas)
+        if q_text and len(variants) >= 2:
+            LBL = ["A", "B", "C", "D", "E", "F", "G", "H"]
+            opts = []
+            for k, v in enumerate(variants):
+                lbl = LBL[k] if k < len(LBL) else str(k + 1)
+                opts.append(f"{lbl}) {v}")
+            questions.append({
+                "type":             "multiple_choice",
+                "question":         q_text,
+                "options":          opts,
+                "correct":          "",   # Belgi yo'q — A variant TO'G'RI DEB OLINMAYDI
+                "explanation":      "",
+                "accepted_answers": [],
+                "points":           1,
+                "_marked":          False,
             })
 
         i = j if j > i else i + 1
@@ -694,7 +830,7 @@ def _parse_question_list_only(lines: list) -> list:
         questions.append({
             "type":"multiple_choice","question":q_text,
             "options":["A) —","B) —","C) —","D) —"],
-            "correct":"A) —",
+            "correct":"",  # Variantlarning o'zi yo'q — A) — TO'G'RI DEB OLINMAYDI
             "explanation":"","accepted_answers":[],"points":1,
             "_marked": False,
         })
@@ -841,10 +977,11 @@ def _parse_eq_hash(lines: list) -> list:
             continue
 
         has_mark = correct_idx != -1
-        if correct_idx == -1:
-            correct_idx = 0
-        if correct_idx >= len(clean_answers):
-            correct_idx = 0
+        if has_mark and correct_idx >= len(clean_answers):
+            # Xavfsizlik: marker topildi, lekin index chegaradan tashqari
+            # chiqib ketgan bo'lsa (kutilmagan holat) — belgilanmagan deb olamiz
+            has_mark = False
+            correct_idx = -1
 
         opts = []
         for i, ans in enumerate(clean_answers):
@@ -855,7 +992,7 @@ def _parse_eq_hash(lines: list) -> list:
             "type":             "multiple_choice",
             "question":         question,
             "options":          opts,
-            "correct":          opts[correct_idx],
+            "correct":          opts[correct_idx] if has_mark else "",
             "explanation":      "",
             "accepted_answers": [],
             "points":           1,
@@ -902,6 +1039,21 @@ def _parse_pdf(path: str) -> list:
     # FORMAT A: standart
     if not parsed:
         parsed = parse_text(full_text)
+        # Sifat tekshiruvi: agar matn uzun bo'lib, juda kam savol
+        # topilgan bo'lsa — bu FORMAT A mos kelmaganidan dalolat
+        # beradi (masalan, raqamsiz FORMAT J matni "1 ta chiqindi
+        # savol"ga aylanib qolishi mumkin). Bunday holda rad etamiz,
+        # FORMAT J o'rniga ishlasin.
+        if parsed and len(lines) > 30 and len(parsed) < max(3, len(lines) // 30):
+            parsed = None
+    # FORMAT J: savol/variant markersiz, ? yoki : bilan tugaydi,
+    # birinchi variant = to'g'ri javob (test banki konventsiyasi).
+    # ENG OXIRGI fallback — faqat boshqa hech qaysi format mos kelmasa
+    # ishlatiladi (aks holda raqamli A)/B)/*/+ belgili savollarni
+    # noto'g'ri ravishda tutib olib, to'g'ri javob belgisini yo'qotib
+    # yuborishi mumkin).
+    if not parsed:
+        parsed = _parse_marker_free_sequential(lines)
 
     # ─── UNIVERSAL RASM BIRIKTIRISH ───
     # Format qanday bo'lishidan qat'i nazar, rasmlarni savollarga biriktiramiz
@@ -1111,7 +1263,7 @@ def _parse_question_eq(text: str) -> list:
             "type":             "multiple_choice",
             "question":         q_text,
             "options":          opts,
-            "correct":          opts[correct_idx] if correct_idx >= 0 else opts[0],
+            "correct":          opts[correct_idx] if correct_idx >= 0 else "",
             "explanation":      "",
             "accepted_answers": [],
             "points":           1,
@@ -1143,7 +1295,16 @@ def _parse_txt(path: str) -> list:
         q = _parse_eq_hash(lines)
         if q:
             return q
-    return parse_text(text)
+    # FORMAT A: standart
+    q = parse_text(text)
+    if q and len(lines) > 30 and len(q) < max(3, len(lines) // 30):
+        q = None
+    if q:
+        return q
+    # FORMAT J: savol/variant markersiz, ? yoki : bilan tugaydi,
+    # birinchi variant = to'g'ri javob (test banki konventsiyasi).
+    # ENG OXIRGI fallback.
+    return _parse_marker_free_sequential(lines)
 
 def _read_txt(path: str) -> str:
     for enc in ("utf-8", "utf-8-sig", "cp1251", "latin-1"):
@@ -1326,8 +1487,9 @@ def _parse_block(block: str) -> dict | None:
         corr = "Ha" if (javob or "").lower().strip() in ("ha", "true", "yes") else "Yo'q"
     elif qtype in ("text_input", "fill_blank"):
         corr = javob or corr or ""
-    elif corr is None and opts:
-        corr = opts[0]
+    # multiple_choice uchun: agar hech qaysi variantda marker topilmagan
+    # bo'lsa, corr ni BO'SH qoldiramiz (pastda has_marked=False bo'ladi) —
+    # birinchi variantni "to'g'ri" deb OLINMAYDI.
 
     # Variantlardan markerlarni tozalaymiz
     # _is_correct_marker allaqachon toza matn qaytaradi
@@ -1343,7 +1505,14 @@ def _parse_block(block: str) -> dict | None:
     if corr:
         corr = _strip_marker(corr)
 
-    has_marked = any(_is_correct_marker(l)[0] for l in lines[1:] if l.strip())
+    # multiple_choice/multi_select uchun: variant orasida * + # va h.k.
+    # belgisi borligini tekshiramiz. true_false/fill_blank/text_input
+    # uchun esa "Javob:" yorlig'i orqali javob berilgan-bermaganini
+    # tekshiramiz — bu turlar uchun * # kabi belgi tabiatan ishlatilmaydi.
+    if qtype in ("multiple_choice", "multi_select"):
+        has_marked = any(_is_correct_marker(l)[0] for l in lines[1:] if l.strip())
+    else:
+        has_marked = bool(corr)
 
     result = {
         "type":             qtype,
@@ -1398,7 +1567,7 @@ def _parse_question_no_marker(lines: list) -> list:
             opts.append(f"{lbl}) {v}" if not re.match(r"^[A-Ha-h]\s*[).]", v) else v)
         questions.append({
             "type": "multiple_choice", "question": q_text,
-            "options": opts, "correct": opts[0],
+            "options": opts, "correct": "",  # Belgi yo'q — A variant TO'G'RI DEB OLINMAYDI
             "explanation": "", "accepted_answers": [], "points": 1,
             "_marked": False,
         })
@@ -1495,7 +1664,7 @@ def _parse_xlsx_sheet(df) -> list:
                 marked = True
             else:
                 if not opt_pool: continue
-                correct = opt_pool[0]; variants = opt_pool
+                correct = ""; variants = opt_pool  # Belgi yo'q — birinchi variant TO'G'RI DEB OLINMAYDI
         if len(variants) < 2: continue
         opts = []
         for i, v in enumerate(variants):
@@ -1503,7 +1672,7 @@ def _parse_xlsx_sheet(df) -> list:
             opts.append(v if re.match(r"^[A-Ha-h]\s*[).]", v) else f"{lbl}) {v}")
         questions.append({
             "type": "multiple_choice", "question": q_text,
-            "options": opts, "correct": opts[0],
+            "options": opts, "correct": opts[0] if marked else "",
             "explanation": "", "accepted_answers": [], "points": 1,
             "_marked": marked,
         })
@@ -1569,7 +1738,7 @@ def _parse_docx_with_images(doc) -> list:
         has_mark = correct_idx >= 0
         q = {
             "type": "multiple_choice", "question": q_text,
-            "options": opts, "correct": opts[max(0,correct_idx)],
+            "options": opts, "correct": opts[correct_idx] if has_mark else "",
             "explanation": "", "accepted_answers": [], "points": 1,
             "_marked": has_mark, "_has_image": img_bytes is not None,
         }
@@ -1652,7 +1821,7 @@ def _parse_docx_via_zip(path: str) -> list:
                 has_mark = correct_idx >= 0
                 q = {
                     "type": "multiple_choice", "question": q_text,
-                    "options": opts, "correct": opts[max(0,correct_idx)],
+                    "options": opts, "correct": opts[correct_idx] if has_mark else "",
                     "explanation": "", "accepted_answers": [], "points": 1,
                     "_marked": has_mark, "_has_image": img_bytes is not None,
                 }
@@ -1782,7 +1951,7 @@ def _parse_pdf_with_images(path: str) -> list:
                 has_mark = correct_idx >= 0
                 q = {
                     "type": "multiple_choice", "question": q_text,
-                    "options": opts, "correct": opts[max(0,correct_idx)],
+                    "options": opts, "correct": opts[correct_idx] if has_mark else "",
                     "explanation": "", "accepted_answers": [], "points": 1,
                     "_marked": has_mark, "_has_image": img_bytes is not None,
                 }
