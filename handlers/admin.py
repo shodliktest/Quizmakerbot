@@ -684,47 +684,79 @@ async def broadcast_send(message: Message, state: FSMContext):
 
 # ══ GURUH E'LON ════════════════════════════════════════════════
 
-@router.callback_query(F.data == "admin_group_broadcast")
-async def group_broadcast_start(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    if not is_admin(callback.from_user.id): return
+GROUPS_PER_PAGE = 10
 
+async def _show_groups_page(msg, state: FSMContext, page: int = 0, edit: bool = True):
     groups = ram.get_known_groups()
-    active = {cid: g for cid, g in groups.items() if g.get("active", True)}
+    active_items = [(cid, g) for cid, g in groups.items() if g.get("active", True)]
 
-    if not active:
+    if not active_items:
         b = InlineKeyboardBuilder()
         b.row(InlineKeyboardButton(text="⬅️ Admin", callback_data="admin_panel"))
+        text = (
+            "📣 <b>Guruh E'lon</b>\n\n"
+            "⚠️ Hali hech qaysi guruh yo'q.\n"
+            "Bot biror guruhga qo'shilganda bu ro'yxat to'ladi."
+        )
         try:
-            await callback.message.edit_text(
-                "📣 <b>Guruh E'lon</b>\n\n"
-                "⚠️ Hali hech qaysi guruh yo'q.\n"
-                "Bot biror guruhga qo'shilganda bu ro'yxat to'ladi.",
-                reply_markup=b.as_markup()
-            )
-        except TelegramBadRequest: pass
+            if edit:
+                await msg.edit_text(text, reply_markup=b.as_markup())
+            else:
+                await msg.answer(text, reply_markup=b.as_markup())
+        except TelegramBadRequest:
+            pass
         return
 
+    total_pages = (len(active_items) + GROUPS_PER_PAGE - 1) // GROUPS_PER_PAGE
+    page = max(0, min(page, total_pages - 1))
+    chunk = active_items[page * GROUPS_PER_PAGE:(page + 1) * GROUPS_PER_PAGE]
+    offset = page * GROUPS_PER_PAGE
+
     lines = [f"📣 <b>GURUH E'LON</b>\n"]
-    lines.append(f"Bot admin bo'lgan guruhlar: <b>{len(active)} ta</b>\n")
-    for i, (cid, g) in enumerate(active.items(), 1):
-        title    = g.get("title", "?")
-        members  = g.get("member_count", "?")
+    lines.append(f"Bot admin bo'lgan guruhlar: <b>{len(active_items)} ta</b>  |  Sahifa {page+1}/{total_pages}\n")
+    for i, (cid, g) in enumerate(chunk, offset + 1):
+        title   = g.get("title", "?")
+        members = g.get("member_count", "?")
         lines.append(f"{i}. <b>{title}</b> — {members} a'zo  <code>{cid}</code>")
 
     lines.append("\n✍️ Xabar yozing (matn, rasm, video — hammasi qo'llab-quvvatlanadi):")
 
     b = InlineKeyboardBuilder()
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"adm_grp_p{page-1}"))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"adm_grp_p{page+1}"))
+    if nav:
+        b.row(*nav)
     b.row(InlineKeyboardButton(text="❌ Bekor", callback_data="admin_panel"))
-    try:
-        await callback.message.edit_text(
-            "\n".join(lines),
-            reply_markup=b.as_markup()
-        )
-    except TelegramBadRequest:
-        await callback.message.answer("\n".join(lines), reply_markup=b.as_markup())
 
-    await state.set_state(AdminPanel.group_broadcast)
+    text = "\n".join(lines)
+    try:
+        if edit:
+            await msg.edit_text(text, reply_markup=b.as_markup())
+        else:
+            await msg.answer(text, reply_markup=b.as_markup())
+    except TelegramBadRequest:
+        await msg.answer(text, reply_markup=b.as_markup())
+
+    if state:
+        await state.set_state(AdminPanel.group_broadcast)
+
+
+@router.callback_query(F.data == "admin_group_broadcast")
+async def group_broadcast_start(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    if not is_admin(callback.from_user.id): return
+    await _show_groups_page(callback.message, state, page=0, edit=True)
+
+
+@router.callback_query(F.data.startswith("adm_grp_p"))
+async def group_broadcast_page(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    if not is_admin(callback.from_user.id): return
+    page = int(callback.data[9:])
+    await _show_groups_page(callback.message, state, page=page, edit=True)
 
 
 @router.message(AdminPanel.group_broadcast)
