@@ -596,10 +596,39 @@ async def force_start_cb(callback: CallbackQuery, state: FSMContext):
         )
     await state.clear()
 
-    # Yangi testni boshlash — start_inline_test ga yo'naltirish
-    from aiogram.types import CallbackQuery as CQ
-    callback.data = f"start_test_{tid}"
-    await start_inline_test(callback, state)
+    # Yangi testni boshlash — to'g'ridan-to'g'ri chaqiramiz
+    from utils.db import get_test_by_id
+    from utils.tg_db import get_test_full
+    from utils import ram_cache as ram
+
+    test = ram.get_test_by_id(tid)
+    if not test or not test.get("questions"):
+        test = await get_test_full(tid)
+    if not test:
+        try:
+            await callback.message.answer("❌ Test topilmadi.")
+        except Exception:
+            pass
+        return
+
+    qs = test.get("questions", [])
+    if not qs:
+        try:
+            await callback.message.answer("⚠️ Testda savollar yo'q.")
+        except Exception:
+            pass
+        return
+
+    cid = callback.message.chat.id if callback.message else uid
+    _register_participant(uid, tid, test)
+
+    await state.set_state(TestSolving.answering)
+    await state.update_data(
+        test=test, qs=qs, idx=0, ans={},
+        uid=uid, t0=__import__("time").time(),
+        is_demo=False,
+    )
+    await _send_question_new(callback.bot, cid, state, uid)
 
 
 def _register_participant(uid: int, tid: str, test: dict):
@@ -1178,7 +1207,9 @@ async def inline_pause_menu(callback: CallbackQuery, state: FSMContext):
         )
     except TelegramBadRequest: pass
 
-@router.callback_query(F.data == "resume_inline", StateFilter(TestSolving.paused))
+@router.callback_query(F.data == "resume_inline",
+                       StateFilter(TestSolving.paused, TestSolving.answering,
+                                   TestSolving.text_answer))
 async def resume_inline(callback: CallbackQuery, state: FSMContext):
     await callback.answer("▶️")
     uid    = callback.from_user.id
@@ -1189,7 +1220,7 @@ async def resume_inline(callback: CallbackQuery, state: FSMContext):
     qs  = d.get("qs", [])
     idx = d.get("idx", 0)
     if idx < len(qs):
-        await _show_next_question(callback.bot, cid, msg_id, qs, idx, state, uid)
+        await _send_question_new(callback.bot, cid, state, uid)
     else:
         d_fresh = await state.get_data()
         await _finish_inline(callback.bot, cid, state, d_fresh)
@@ -1224,6 +1255,11 @@ async def _finish_inline(bot, cid, state, d):
     is_partial = d.get("is_partial", False)
     _cancel_timer(uid)
 
+    if not qs:
+        await state.clear()
+        log.warning(f"_finish_inline: qs bo'sh, uid={uid}")
+        return
+
     scored = calculate_score(qs, ans)
     scored.update({
         "time_spent":    elapsed,
@@ -1233,13 +1269,30 @@ async def _finish_inline(bot, cid, state, d):
         "demo":          is_demo,
     })
     tid = test.get("test_id", "")
-    rid = save_result(uid, tid, scored, via_link=via_link)
+
+    try:
+        rid = save_result(uid, tid, scored, via_link=via_link)
+    except Exception as e:
+        log.error(f"_finish_inline save_result xato: {e}")
+        rid = f"{uid}_{tid}"
+
     await state.clear()
 
-    result_text = format_result(scored, test)
+    try:
+        result_text = format_result(scored, test)
+    except Exception as e:
+        log.error(f"_finish_inline format_result xato: {e}")
+        pct = scored.get("percentage", 0)
+        result_text = f"📊 <b>Test yakunlandi!</b>\n\n✅ Natija: <b>{pct}%</b>"
+
     if is_partial:
         result_text = "⚠️ <b>Test yarim qoldirildi</b>\n\n" + result_text
-    kb = result_kb(tid, rid)
+
+    try:
+        kb = result_kb(tid, rid)
+    except Exception as e:
+        log.error(f"_finish_inline result_kb xato: {e}")
+        kb = None
 
     if is_demo:
         from config import ADMIN_USERNAME
@@ -1262,17 +1315,36 @@ async def _finish_inline(bot, cid, state, d):
                     text=demo_text, reply_markup=b.as_markup())
                 return
             except TelegramBadRequest: pass
-        await bot.send_message(cid, demo_text, reply_markup=b.as_markup(), protect_content=True)
+        try:
+            await bot.send_message(cid, demo_text, reply_markup=b.as_markup(),
+                                   protect_content=True)
+        except Exception as e:
+            log.error(f"_finish_inline demo send xato: {e}")
         return
 
+    # Natijani yuborish — avval edit, keyin yangi xabar
+    sent = False
     if msg_id:
         try:
             await bot.edit_message_text(chat_id=cid, message_id=msg_id,
                 text=result_text, reply_markup=kb)
-            return
-        except TelegramBadRequest: pass
+            sent = True
+        except TelegramBadRequest:
+            pass
+        except Exception as e:
+            log.warning(f"_finish_inline edit xato: {e}")
 
-    await bot.send_message(cid, result_text, reply_markup=kb, protect_content=True)
+    if not sent:
+        try:
+            await bot.send_message(cid, result_text, reply_markup=kb,
+                                   protect_content=True)
+        except Exception as e:
+            log.error(f"_finish_inline send_message xato: {e}")
+            # Oxirgi urinish — markup siz
+            try:
+                await bot.send_message(cid, result_text)
+            except Exception as e2:
+                log.error(f"_finish_inline fallback xato: {e2}")
 
 
 # ── Referal tekshirish callback ──────────────────────────────
