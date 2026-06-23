@@ -301,7 +301,10 @@ def admin_kb():
         InlineKeyboardButton(text="🔒 Majburiy obuna",    callback_data="admin_force_join"),
         InlineKeyboardButton(text="🛡 Xavfsizlik",        callback_data="admin_security"),
     )
-    b.row(InlineKeyboardButton(text="🏠 Menyu", callback_data="main_menu"))
+    b.row(
+        InlineKeyboardButton(text="🔁 Loop monitor", callback_data="adm_loops"),
+        InlineKeyboardButton(text="🏠 Menyu",         callback_data="main_menu"),
+    )
     return b.as_markup()
 
 
