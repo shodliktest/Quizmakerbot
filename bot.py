@@ -247,6 +247,8 @@ def _beat(name: str, status: str = "ok", error: str = ""):
 def get_loop_health() -> dict:
     return dict(_LOOP_HEALTH)
 
+
+async def main():
     from handlers.inline_mode import router as r_inline
     from handlers.poll_router import router as r_poll_router
     from handlers.group       import router as r_group
