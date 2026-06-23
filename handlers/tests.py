@@ -1228,15 +1228,35 @@ async def resume_inline(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "cancel_test")
 async def cancel_test_cb(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
     uid = callback.from_user.id
     _cancel_timer(uid)
-    await state.clear()
-    await callback.answer("❌ To'xtatildi")
-    try:
-        await callback.message.edit_text("❌ <b>Test to'xtatildi.</b>")
-    except TelegramBadRequest: pass
-    await callback.bot.send_message(uid, "🏠 Asosiy menyu:", reply_markup=main_kb(uid),
-        protect_content=True)
+    d   = await state.get_data()
+    qs  = d.get("qs", [])
+    ans = d.get("ans", {})
+
+    # Agar kamida 1 ta javob bo'lsa — natijani ko'rsatamiz
+    if qs and ans:
+        d["is_partial"] = True
+        try:
+            await callback.message.edit_text("⏳ <b>Natijalar hisoblanmoqda...</b>")
+        except Exception:
+            pass
+        await _finish_inline(callback.bot,
+                             callback.message.chat.id if callback.message else uid,
+                             state, d)
+    else:
+        # Hech narsa yechilmagan — oddiy bekor qilish
+        await state.clear()
+        try:
+            await callback.message.edit_text("❌ <b>Test to'xtatildi.</b>")
+        except Exception:
+            pass
+        try:
+            await callback.bot.send_message(uid, "🏠 Asosiy menyu:",
+                reply_markup=main_kb(uid), protect_content=True)
+        except Exception:
+            pass
 
 
 # ── Yakunlash ━━━━━━━━━━━━━━━━━━━━━━━━
