@@ -1410,6 +1410,14 @@ async def auto_flush_loop():
             await asyncio.sleep(300)   # 5 daqiqa (oldin 2 edi)
             now = datetime.now(UTC)
 
+            # Heartbeat — bot.py dan import qilamiz (circular import oldini olish)
+            try:
+                import bot as _bot_mod
+                if hasattr(_bot_mod, "_beat"):
+                    _bot_mod._beat("auto_flush", "ok")
+            except Exception:
+                pass
+
             # Stats — faqat o'zgarga
             if _stats_dirty:
                 log.info("auto_flush: tests_stats...")
@@ -1439,6 +1447,12 @@ async def auto_flush_loop():
         except asyncio.CancelledError:
             break
         except Exception as e:
+            try:
+                import bot as _bot_mod
+                if hasattr(_bot_mod, "_beat"):
+                    _bot_mod._beat("auto_flush", "error", str(e))
+            except Exception:
+                pass
             log.error(f"auto_flush: {e}")
 
 
