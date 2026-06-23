@@ -507,7 +507,9 @@ def clear_expired_analysis():
     return removed
 
 def get_all_solvers_for_test(tid):
-    """Test yechgan barcha userlar — stats cache dan"""
+    """Test boshlagan barcha userlar — stats cache dan.
+    attempts==0 (faqat start bosgan) ham qo'shiladi, eng oxirida ko'rsatiladi.
+    """
     users  = get_users()
     result = []
     with _lck:
@@ -516,20 +518,22 @@ def get_all_solvers_for_test(tid):
         uid_str = key[6:]
         e       = _get(key, {})
         entry   = e.get("data", {}).get(tid)
-        if not entry or entry.get("attempts", 0) == 0:
+        if not entry:
             continue
         user = users.get(uid_str, {})
         result.append({
             "uid":        uid_str,
             "name":       user.get("name", f"User {uid_str}"),
             "username":   user.get("username", ""),
-            "attempts":   entry["attempts"],
-            "all_pcts":   entry["all_pcts"],
-            "best_score": entry["best_score"],
-            "avg_score":  entry["avg_score"],
+            "attempts":   entry.get("attempts", 0),
+            "all_pcts":   entry.get("all_pcts", []),
+            "best_score": entry.get("best_score", 0.0),
+            "avg_score":  entry.get("avg_score", 0.0),
             "last_at":    entry.get("last_at", ""),
+            "started":    entry.get("started", False),
         })
-    result.sort(key=lambda x: x["best_score"], reverse=True)
+    # Avval tugatganlar (yuqori ball), keyin 0-natijalilar
+    result.sort(key=lambda x: (x["attempts"] > 0, x["best_score"]), reverse=True)
     return result
 
 
