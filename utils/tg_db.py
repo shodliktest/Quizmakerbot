@@ -105,6 +105,7 @@ async def init(bot, channel_id):
     asyncio.create_task(load_known_groups())
     asyncio.create_task(_load_leaderboard())
     asyncio.create_task(_load_blocked_to_ram())
+    asyncio.create_task(_load_all_user_stats())  # ← kim yechgan uchun muhim
 
     log.info(f"Tayyor (tez): {len(_index.get('tests_meta',[]))} test meta yuklandi")
     log.info("Users, guruhlar va leaderboard background da yuklanmoqda...")
@@ -1160,6 +1161,41 @@ async def _load_user_stats(uid_str):
             if ram.get_user_stats_cache(uid) is None:
                 ram.set_user_stats_cache(uid, s, dirty=False)
         return
+
+
+async def _load_all_user_stats():
+    """
+    Bot startida barcha user_stats chunk larini RAMga yuklaydi.
+    Shunda 'kim yechgan' ro'yxati bot restart dan keyin ham to'g'ri ishlaydi.
+    """
+    from utils import ram_cache as ram
+    chunks = _meta.get("user_stats_chunks", [])
+    if not chunks:
+        log.info("user_stats: chunk yo'q, yuklanmadi")
+        return
+
+    total = 0
+    for i, chunk in enumerate(chunks):
+        fid  = chunk.get("fid")
+        mid  = chunk.get("msg_id")
+        data = {}
+        try:
+            if fid:
+                data = await _read_file(fid)
+            if not data and mid:
+                data = await _download_doc(mid)
+        except Exception as e:
+            log.warning(f"user_stats chunk {i+1} yuklanmadi: {e}")
+            continue
+        if not data:
+            continue
+        for uid_str, s in data.get("stats", {}).items():
+            if ram.get_user_stats_cache(uid_str) is None:
+                ram.set_user_stats_cache(uid_str, s, dirty=False)
+                total += 1
+        await asyncio.sleep(0.5)  # Telegram API limitiga qarshi
+
+    log.info(f"user_stats: {total} ta user RAMga yuklandi ({len(chunks)} chunk)")
 
 
 # ══════════════════════════════════════════════════════════════
