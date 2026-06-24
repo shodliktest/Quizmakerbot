@@ -484,14 +484,13 @@ async def cancel_poll(callback: CallbackQuery, state: FSMContext):
     uid = callback.from_user.id
     d   = await state.get_data()
 
-    # Faqat boshlagan user yoki admin
     if uid != d.get("uid", uid) and uid not in ADMIN_IDS:
         return await callback.answer("🚫 Faqat siz boshlagan testni to'xtata olasiz!", show_alert=True)
 
+    await callback.answer("⏹")
     cid = callback.message.chat.id if callback.message and callback.message.chat else uid
     _cancel_timer(cid)
-    await state.clear()
-    await callback.answer("❌")
+
     for mid in d.get("msg_ids", []):
         try: await callback.bot.stop_poll(cid, mid)
         except Exception: pass
@@ -502,10 +501,18 @@ async def cancel_poll(callback: CallbackQuery, state: FSMContext):
     try:
         if callback.message: await callback.message.delete()
     except Exception: pass
-    await callback.bot.send_message(
-        cid, "❌ <b>POLL TEST TO'XTATILDI</b>",
-        reply_markup=main_kb(uid, "private")
-    )
+
+    ans = d.get("ans", {})
+    qs  = d.get("qs", [])
+    if qs and ans:
+        d["is_partial"] = True
+        await _finish_poll(callback.bot, cid, state, d)
+    else:
+        await state.clear()
+        await callback.bot.send_message(
+            cid, "❌ <b>Test to'xtatildi.</b>",
+            reply_markup=main_kb(uid, "private")
+        )
 
 
 # ── Majburiy to'xtatib poll boshlaш ──────────────────────────
@@ -565,6 +572,7 @@ async def _finish_poll(bot, cid, state, d):
         "passing_score": test.get("passing_score", 60),
         "mode":          "poll",
         "demo":          is_demo,
+        "partial":       d.get("is_partial", False),
     })
     tid = test.get("test_id", "")
     rid = save_result(uid, tid, scored, via_link=via_link)
@@ -582,6 +590,8 @@ async def _finish_poll(bot, cid, state, d):
     rank_txt = f"\n🏅 <b>Reyting: {rank}/{len(all_pct)} o'rin</b>" if len(all_pct) > 1 else ""
 
     result_text = format_result(scored, test) + rank_txt
+    if d.get("is_partial"):
+        result_text = "⚠️ <b>Test yarim qoldirildi</b>\n\n" + result_text
 
     if is_demo:
         from config import ADMIN_USERNAME
@@ -657,7 +667,7 @@ async def reply_cancel_poll(message, state: FSMContext):
         return await message.answer("🚫 Faqat siz boshlagan testni to'xtata olasiz!")
     cid = message.chat.id
     _cancel_timer(cid)
-    await state.clear()
+
     try: await message.delete()
     except Exception: pass
     for mid in d.get("msg_ids", []):
@@ -667,8 +677,15 @@ async def reply_cancel_poll(message, state: FSMContext):
     if info_mid:
         try: await message.bot.delete_message(cid, info_mid)
         except Exception: pass
-    await message.bot.send_message(
-        cid,
-        "❌ <b>POLL TEST TO'XTATILDI</b>",
-        reply_markup=main_kb(uid, "private")
-    )
+
+    ans = d.get("ans", {})
+    qs  = d.get("qs", [])
+    if qs and ans:
+        d["is_partial"] = True
+        await _finish_poll(message.bot, cid, state, d)
+    else:
+        await state.clear()
+        await message.bot.send_message(
+            cid, "❌ <b>Test to'xtatildi.</b>",
+            reply_markup=main_kb(uid, "private")
+        )
