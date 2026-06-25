@@ -1731,3 +1731,210 @@ async def _show_loops(ev, edit=False):
             await msg.answer(text, reply_markup=b.as_markup())
     except TelegramBadRequest:
         await msg.answer(text, reply_markup=b.as_markup())
+
+
+# ══ LIVE MONITOR ══════════════════════════════════════════════
+@router.callback_query(F.data == "adm_live")
+async def adm_live_cb(callback: CallbackQuery):
+    await callback.answer()
+    if not is_admin(callback.from_user.id): return
+    await _show_live(callback.message, edit=True)
+
+
+@router.callback_query(F.data == "adm_live_refresh")
+async def adm_live_refresh_cb(callback: CallbackQuery):
+    await callback.answer("🔄")
+    if not is_admin(callback.from_user.id): return
+    await _show_live(callback.message, edit=True)
+
+
+async def _show_live(msg, edit=False):
+    from utils.ram_cache import get_live_sessions, get_live_by_test
+    sessions  = get_live_sessions()
+    by_test   = get_live_by_test()
+
+    lines = ["📡 <b>LIVE MONITOR</b>\n━━━━━━━━━━━━━━━━━━━━━━━━\n"]
+
+    if not sessions:
+        lines.append("😴 Hozir hech kim test yechmayapti")
+    else:
+        lines.append(f"🟢 Aktiv: <b>{len(sessions)} kishi</b>\n")
+        for tid, sess_list in by_test.items():
+            title = sess_list[0].get("title", tid)
+            lines.append(f"📝 <b>{title[:35]}</b> — {len(sess_list)} kishi")
+            for s in sess_list[:5]:
+                mode_icon = "📊" if s["mode"] == "poll" else "📋"
+                chat = s["chat_title"]
+                lines.append(
+                    f"  {mode_icon} Savol {s['idx']}/{s['total']} | "
+                    f"⏱ {s['elapsed']} | 🏘 {chat}"
+                )
+            if len(sess_list) > 5:
+                lines.append(f"  ... va yana {len(sess_list)-5} kishi")
+            lines.append("")
+
+    b = InlineKeyboardBuilder()
+    b.row(
+        InlineKeyboardButton(text="🔄 Yangilash", callback_data="adm_live_refresh"),
+        InlineKeyboardButton(text="⬅️ Admin",     callback_data="admin_panel"),
+    )
+    text = "\n".join(lines)
+    try:
+        if edit:
+            await msg.edit_text(text, reply_markup=b.as_markup())
+        else:
+            await msg.answer(text, reply_markup=b.as_markup())
+    except TelegramBadRequest:
+        await msg.answer(text, reply_markup=b.as_markup())
+
+
+# ══ TEST QIDIRISH (kod orqali) ═════════════════════════════════
+@router.callback_query(F.data == "adm_find_test")
+async def adm_find_test_cb(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    if not is_admin(callback.from_user.id): return
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="❌ Bekor", callback_data="admin_panel"))
+    try:
+        await callback.message.edit_text(
+            "🔍 <b>TEST QIDIRISH</b>\n\n"
+            "Test kodini yoki sarlavhasining bir qismini yozing:\n\n"
+            "<i>Masalan: ABC123 yoki «matematika»</i>",
+            reply_markup=b.as_markup()
+        )
+    except TelegramBadRequest:
+        await callback.message.answer(
+            "🔍 <b>TEST QIDIRISH</b>\n\nTest kodini yoki sarlavhasini yozing:",
+            reply_markup=b.as_markup()
+        )
+    await state.set_state(AdminPanel.find_test)
+
+
+@router.message(AdminPanel.find_test)
+async def adm_find_test_input(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await state.clear()
+        return
+
+    query = message.text.strip().upper()
+    try: await message.delete()
+    except Exception: pass
+
+    from utils.ram_cache import get_all_tests_meta, get_test_meta_any
+
+    # 1. To'g'ridan-to'g'ri kod bo'yicha qidirish
+    meta = get_test_meta_any(query)
+
+    # 2. Agar topilmasa — sarlavha bo'yicha qidirish
+    if not meta:
+        query_low = query.lower()
+        all_tests = get_all_tests_meta()
+        matches = [
+            t for t in all_tests
+            if query_low in t.get("title", "").lower()
+            or query_low in t.get("test_id", "").upper()
+        ]
+
+        if not matches:
+            b = InlineKeyboardBuilder()
+            b.row(InlineKeyboardButton(text="🔍 Qayta qidirish", callback_data="adm_find_test"))
+            b.row(InlineKeyboardButton(text="⬅️ Admin", callback_data="admin_panel"))
+            await message.answer(
+                f"❌ <b>Topilmadi:</b> <code>{query}</code>\n\n"
+                "Test kodi yoki sarlavha bo'yicha qidirildi.",
+                reply_markup=b.as_markup()
+            )
+            await state.clear()
+            return
+
+        if len(matches) == 1:
+            # Bitta natija — darhol sozlamalarga
+            meta = matches[0]
+        else:
+            # Bir nechta — sahifalash bilan ro'yxat
+            await state.clear()
+            _find_cache[message.from_user.id] = {"matches": matches, "query": query}
+            await _show_find_results(message, matches, page=0, query=query,
+                                     uid=message.from_user.id)
+            return
+
+    # Topildi — sozlamalarga yo'naltirish
+    await state.clear()
+    tid = meta.get("test_id", "")
+    from handlers.profile import _show_test_settings
+    await _show_test_settings(message, meta, tid, edit=False,
+                               viewer_uid=message.from_user.id)
+
+
+# ── Find test pagination ────────────────────────────────────────
+FIND_PER_PAGE = 7
+_find_cache: dict = {}  # uid → {"matches": [...], "query": "..."}
+
+async def _show_find_results(msg, matches: list, page: int, query: str,
+                              edit: bool = False, uid: int = None):
+    total_pages = (len(matches) + FIND_PER_PAGE - 1) // FIND_PER_PAGE
+    page = max(0, min(page, total_pages - 1))
+    chunk = matches[page * FIND_PER_PAGE:(page + 1) * FIND_PER_PAGE]
+    offset = page * FIND_PER_PAGE
+
+    lines = [
+        f"🔍 <b>QIDIRUV:</b> <code>{query}</code>",
+        f"📋 {len(matches)} ta topildi  |  Sahifa {page+1}/{total_pages}\n",
+    ]
+    b = InlineKeyboardBuilder()
+
+    for i, t in enumerate(chunk, offset + 1):
+        tid     = t.get("test_id", "")
+        title   = t.get("title", "?")
+        qc      = t.get("question_count", 0)
+        creator = t.get("creator_name") or t.get("creator_username") or "?"
+        paused  = "⏸" if t.get("is_paused") else ""
+        lines.append(
+            f"{i}. {paused}<b>{title[:35]}</b>\n"
+            f"   🆔 <code>{tid}</code>  📋 {qc} savol  👤 {creator}"
+        )
+        b.row(InlineKeyboardButton(
+            text=f"⚙️ {i}. {title[:22]}",
+            callback_data=f"mytest_settings_{tid}"
+        ))
+
+    # Nav tugmalar
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"adm_find_p_{page-1}"))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"adm_find_p_{page+1}"))
+    if nav:
+        b.row(*nav)
+    b.row(
+        InlineKeyboardButton(text="🔍 Qayta", callback_data="adm_find_test"),
+        InlineKeyboardButton(text="⬅️ Admin", callback_data="admin_panel"),
+    )
+
+    text = "\n".join(lines)
+    try:
+        if edit:
+            await msg.edit_text(text, reply_markup=b.as_markup())
+        else:
+            await msg.answer(text, reply_markup=b.as_markup())
+    except TelegramBadRequest:
+        await msg.answer(text, reply_markup=b.as_markup())
+
+
+@router.callback_query(F.data.startswith("adm_find_p_"))
+async def adm_find_page_cb(callback: CallbackQuery):
+    await callback.answer()
+    if not is_admin(callback.from_user.id): return
+    page = int(callback.data[11:])
+    uid  = callback.from_user.id
+    cached = _find_cache.get(uid)
+    if not cached:
+        return await callback.answer("❌ Qidiruv muddati o'tdi. Qayta qidiring.", show_alert=True)
+    await _show_find_results(
+        callback.message,
+        cached["matches"],
+        page=page,
+        query=cached["query"],
+        edit=True,
+        uid=uid
+    )

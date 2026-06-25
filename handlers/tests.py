@@ -572,6 +572,10 @@ async def start_inline_test(callback: CallbackQuery, state: FSMContext):
     # START bosgan odamni 0-natija bilan saqlaymiz
     _register_participant(uid, tid, test)
 
+    # Live monitor uchun
+    from utils.ram_cache import live_start
+    live_start(uid, test, mode="inline", chat_id=cid)
+
     await _send_question_new(callback.bot, cid, state, uid)
 
 
@@ -659,6 +663,10 @@ async def _send_question_new(bot, cid, state, uid):
     d   = await state.get_data()
     qs  = d.get("qs", [])
     idx = d.get("idx", 0)
+
+    # Live monitor yangilash
+    from utils.ram_cache import live_update
+    live_update(uid, idx)
 
     # State buzilgan bo'lsa (reboot dan keyin) — tozalash
     if not qs:
@@ -1263,7 +1271,10 @@ async def cancel_test_cb(callback: CallbackQuery, state: FSMContext):
 async def _finish_inline(bot, cid, state, d):
     from utils.scoring import calculate_score, format_result
     from keyboards.keyboards import result_kb
+    from utils.ram_cache import live_end
 
+    uid = d.get("uid", cid)
+    live_end(uid)  # Live monitordan o'chirish
     test       = d.get("test", {})
     qs         = d.get("qs", [])
     ans        = d.get("ans", {})
