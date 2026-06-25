@@ -185,6 +185,31 @@ async def cmd_start(message: Message, state: FSMContext):
             return
         # ━━━━━━━━━━━━━━━━━━━━━━━━
 
+        if param.lower().startswith("webtest_"):
+            tid  = param[8:].upper()
+            test = get_test_by_id(tid) or await _gtf(tid)
+            if test:
+                await message.answer(welcome, reply_markup=main_kb(uid, chat_type))
+                from aiogram.types import WebAppInfo
+                try:
+                    from handlers.webauth import WEBAPP_URL as _WU
+                except Exception:
+                    _WU = "https://quizmarkerbotweb.vercel.app"
+                _web_url = f"{_WU}/web_test.html?id={tid}&uid={uid}"
+                title = test.get("title", "?")
+                b = InlineKeyboardBuilder()
+                b.row(InlineKeyboardButton(
+                    text="🌐 Web testni ochish",
+                    web_app=WebAppInfo(url=_web_url)
+                ))
+                await message.answer(
+                    f"📝 <b>{title}</b>\n\n"
+                    f"🌐 Web test rejimi tanlandi.\n"
+                    f"Boshlash uchun tugmani bosing 👇",
+                    reply_markup=b.as_markup()
+                )
+            return
+
         if param.lower().startswith("poll_"):
             tid  = param[5:].upper()
             test = get_test_by_id(tid) or await _gtf(tid)
@@ -249,6 +274,7 @@ async def cmd_start(message: Message, state: FSMContext):
 @router.message(Command("help"))
 @router.message(F.text == "ℹ️ Yordam")
 async def help_msg(message: Message):
+    if message.chat.type != "private": return
     await _send_help(message)
 
 @router.callback_query(F.data == "help")
