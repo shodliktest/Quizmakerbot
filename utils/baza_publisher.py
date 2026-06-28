@@ -120,6 +120,12 @@ def _make_docx(questions: list, title: str = "", tid: str = "",
 
         doc.add_paragraph()  # bo'sh qator
 
+    # Watermark
+    try:
+        _add_watermark(doc, creator_name=creator_name, bot_username="Quizmarkerbot")
+    except Exception as _we:
+        log.warning(f"Watermark xato: {_we}")
+
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
@@ -187,6 +193,85 @@ def _make_txt_plain(questions: list) -> str:
         lines.append("")
 
     return "\n".join(lines)
+
+
+
+def _add_watermark(doc, creator_name: str = "", bot_username: str = "Quizmarkerbot"):
+    """Har sahifaga diagonal watermark: @Bot nomi + Muallif ismi"""
+    from lxml import etree
+
+    wm1 = ("@" + bot_username) if bot_username else "@Quizmarkerbot"
+    wm2 = ("Muallif: " + creator_name) if creator_name else ""
+
+    row2_xml = ""
+    if wm2:
+        row2_xml = (
+            "<w:p>"
+            '<w:pPr><w:jc w:val="center"/></w:pPr>'
+            "<w:r>"
+            "<w:rPr>"
+            '<w:color w:val="D8D8D8"/>'
+            '<w:sz w:val="52"/><w:szCs w:val="52"/>'
+            "</w:rPr>"
+            "<w:t>" + wm2 + "</w:t>"
+            "</w:r>"
+            "</w:p>"
+        )
+
+    xml_str = (
+        '<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:rPr><w:noProof/></w:rPr>"
+        "<w:pict>"
+        '<v:shape xmlns:v="urn:schemas-microsoft-com:vml"'
+        ' xmlns:o="urn:schemas-microsoft-com:office:office"'
+        ' xmlns:w10="urn:schemas-microsoft-com:office:word"'
+        ' id="watermark1" type="#_x0000_t136"'
+        ' style="position:absolute;margin-left:0;margin-top:0;'
+        "width:520pt;height:220pt;z-index:-251654144;"
+        "mso-position-horizontal:center;"
+        "mso-position-horizontal-relative:margin;"
+        "mso-position-vertical:center;"
+        'mso-position-vertical-relative:margin"'
+        ' fillcolor="#C8C8C8" stroked="f"'
+        ' o:allowoverlap="t">'
+        "<v:textbox>"
+        "<w:txbxContent>"
+        "<w:p>"
+        '<w:pPr><w:jc w:val="center"/></w:pPr>'
+        "<w:r>"
+        "<w:rPr>"
+        "<w:b/>"
+        '<w:color w:val="C8C8C8"/>'
+        '<w:sz w:val="96"/><w:szCs w:val="96"/>'
+        "</w:rPr>"
+        "<w:t>" + wm1 + "</w:t>"
+        "</w:r>"
+        "</w:p>"
+        + row2_xml +
+        "</w:txbxContent>"
+        "</v:textbox>"
+        '<w10:wrap xmlns:w10="urn:schemas-microsoft-com:office:word"'
+        ' w10:anchorx="margin" w10:anchory="margin"/>'
+        "</v:shape>"
+        "</w:pict>"
+        "</w:r>"
+    )
+
+    for section in doc.sections:
+        hdr = section.header
+        if not hdr.paragraphs:
+            hdr.add_paragraph()
+        para = hdr.paragraphs[0]
+        para.clear()
+        try:
+            wm_el = etree.fromstring(xml_str)
+            para._p.append(wm_el)
+        except Exception:
+            from docx.shared import Pt, RGBColor
+            r = para.add_run(wm1 + ("  |  " + wm2 if wm2 else ""))
+            r.font.size = Pt(7)
+            r.font.color.rgb = RGBColor(0xCC, 0xCC, 0xCC)
+            r.italic = True
 
 
 def _resolve_correct_idx(q: dict, opts: list) -> int:
@@ -289,7 +374,7 @@ async def publish_to_baza(
         # Caption
         caption = (
             f"📄 <b>{title}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
             f"🆔 <code>{tid}</code>\n"
             f"📁 {category or 'Boshqa'}\n"
             f"📊 {diff_txt}\n"
@@ -298,19 +383,29 @@ async def publish_to_baza(
             f"👤 {creator_name or "Noma'lum"}"
         )
 
-        # ── 2. Fayllarni guruhga yuborish (DOCX + TXT) ──
+        # ── 2. DOCX guruhga, TXT esa Storage kanalga (database) ──
         file_msg = await bot.send_document(
             chat_id=gid,
             document=doc_file,
             caption=caption,
         )
         try:
-            await bot.send_document(
-                chat_id=gid,
-                document=txt_file,
-            )
-        except Exception as te:
-            log.warning(f"TXT yuborilmadi: {te}")
+            from config import STORAGE_CHANNEL_ID
+            storage_gid = int(STORAGE_CHANNEL_ID or 0)
+        except Exception:
+            storage_gid = 0
+
+        if storage_gid:
+            try:
+                await bot.send_document(
+                    chat_id=storage_gid,
+                    document=txt_file,
+                    caption=f"📦 {title} | {tid}",
+                )
+            except Exception as te:
+                log.warning(f"TXT storage kanalga yuborilmadi: {te}")
+        else:
+            log.info("STORAGE_CHANNEL_ID yo'q — TXT yuborilmadi")
 
         # ── 3. Faylga reply — test kartasi + tugmalar ──
         # MUHIM: "Web test" va "Quiz Poll" — bot deep-link orqali
@@ -330,7 +425,7 @@ async def publish_to_baza(
             bld.row(
                 InlineKeyboardButton(text="🌐 Web test",
                     url=f"https://t.me/{bu}?start=webtest_{tid}"),
-                InlineKeyboardButton(text="📊 Quiz Poll",
+                InlineKeyboardButton(text="📊 Quiz Test ",
                     url=f"https://t.me/{bu}?start=poll_{tid}"),
             )
         bld.row(
@@ -342,12 +437,12 @@ async def publish_to_baza(
 
         card = (
             f"📌 <b>Yangi test!</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
             f"📝 <b>{title}</b>\n"
             f"📋 {qc} savol | {diff_txt} | {category or 'Boshqa'}\n"
             f"🆔 <code>{tid}</code>\n\n"
             f"👆 Fayl yuqorida\n"
-            f"👇 Boshlash:"
+            f"👇 Boshlash: Web Yoki Quiz"
         )
 
         await bot.send_message(
