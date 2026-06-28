@@ -36,42 +36,67 @@ def _make_docx(questions: list, title: str = "", tid: str = "",
     """
     try:
         from docx import Document
-        from docx.shared import Pt, RGBColor
+        from docx.shared import Pt, RGBColor, Inches
         from docx.enum.text import WD_ALIGN_PARAGRAPH
     except ImportError:
+        # python-docx yo'q — TXT bilan ketamiz
         return _make_txt(questions, title, tid, creator_name).encode("utf-8")
 
     doc = Document()
 
+    # Sarlavha
     h = doc.add_heading(title or "Test", level=1)
     h.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-    meta_lines = []
-    if tid:          meta_lines.append(f"🆔 Kod: {tid}")
-    if category:     meta_lines.append(f"📁 Fan: {category}")
-    if creator_name: meta_lines.append(f"👤 Yaratuvchi: {creator_name}")
-    meta_lines.append(f"📋 Savollar soni: {len(questions)} ta")
+    # ── Meta ma'lumotlar (test savollariga halaqit qilmaydi) ──
+    from datetime import datetime
+    now_str = datetime.now().strftime("%d.%m.%Y %H:%M")
 
-    meta_p = doc.add_paragraph("\n".join(meta_lines))
+    sep = doc.add_paragraph()
+    sep_run = sep.add_run("─" * 45)
+    sep_run.font.size = Pt(9)
+    sep_run.font.color.rgb = RGBColor(0xCC, 0xCC, 0xCC)
+    sep.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    meta_items = []
+    if tid:          meta_items.append(f"Kod: {tid}")
+    if category:     meta_items.append(f"Fan: {category}")
+    if creator_name: meta_items.append(f"Muallif: {creator_name}")
+    meta_items.append(f"Jami: {len(questions)} ta savol")
+    meta_items.append(f"Sana: {now_str}")
+
+    meta_p = doc.add_paragraph(" · ".join(meta_items))
     meta_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     for run in meta_p.runs:
-        run.font.size = Pt(10)
-        run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
+        run.font.size = Pt(8.5)
+        run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+        run.italic = True
 
-    doc.add_paragraph("─" * 40)
+    sep2 = doc.add_paragraph()
+    sep2_run = sep2.add_run("─" * 45)
+    sep2_run.font.size = Pt(9)
+    sep2_run.font.color.rgb = RGBColor(0xCC, 0xCC, 0xCC)
+    sep2.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
+    doc.add_paragraph()
+
+    # Savollar
     for i, q in enumerate(questions, 1):
         qt   = q.get("question") or q.get("text") or q.get("q") or ""
         opts = q.get("options", [])
+        corr = q.get("correct", "")
         expl = q.get("explanation", "") or ""
 
+        # To'g'ri javob indeksini aniqlash
         correct_idx = _resolve_correct_idx(q, opts)
 
+        # Savol matni — qalin
         qp = doc.add_paragraph()
         qr = qp.add_run(f"{i}. {qt}")
         qr.bold = True
         qr.font.size = Pt(11)
 
+        # Variantlar
         for j, opt in enumerate(opts):
             clean = re.sub(r'^[A-H]\s*[).]\s*', '', str(opt)).strip()
             lbl   = LETTERS[j] if j < len(LETTERS) else str(j)
@@ -83,8 +108,9 @@ def _make_docx(questions: list, title: str = "", tid: str = "",
             or_.font.size = Pt(10.5)
             if is_ok:
                 or_.bold = True
-                or_.font.color.rgb = RGBColor(0x00, 0x80, 0x00)
+                or_.font.color.rgb = RGBColor(0x00, 0x80, 0x00)  # yashil
 
+        # Izoh
         if expl:
             ep = doc.add_paragraph()
             er = ep.add_run(f"  💡 Izoh: {expl}")
@@ -92,7 +118,7 @@ def _make_docx(questions: list, title: str = "", tid: str = "",
             er.font.size = Pt(9.5)
             er.font.color.rgb = RGBColor(0x44, 0x44, 0x88)
 
-        doc.add_paragraph()
+        doc.add_paragraph()  # bo'sh qator
 
     buf = io.BytesIO()
     doc.save(buf)
@@ -132,21 +158,55 @@ def _make_txt(questions: list, title: str = "", tid: str = "",
     return "\n".join(lines)
 
 
+def _make_txt_plain(questions: list) -> str:
+    """
+    Sof TXT format — meta sarlavhasiz, faqat savol+variant+izoh.
+    Format:
+        1. Savol
+        A) variant
+        B) variant
+        *C) variant   ← to'g'ri javob
+        D) variant
+        Izoh : tushuntirish
+    """
+    lines = []
+    for i, q in enumerate(questions, 1):
+        qt   = q.get("question") or q.get("text") or q.get("q") or ""
+        opts = q.get("options", [])
+        expl = q.get("explanation", "") or ""
+        correct_idx = _resolve_correct_idx(q, opts)
+
+        lines.append(f"{i}. {qt}")
+        for j, opt in enumerate(opts):
+            clean = re.sub(r'^[A-H]\s*[).]\s*', '', str(opt)).strip()
+            lbl   = LETTERS[j] if j < len(LETTERS) else str(j)
+            prefix = "*" if j == correct_idx else ""
+            lines.append(f"{prefix}{lbl}) {clean}")
+        if expl:
+            lines.append(f"Izoh : {expl}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 def _resolve_correct_idx(q: dict, opts: list) -> int:
     """To'g'ri javob indeksini aniqlash"""
     corr = q.get("correct", "")
     if isinstance(corr, int):
         return corr
 
+    # "correct_index" mavjudmi?
     ci = q.get("correct_index")
     if isinstance(ci, int):
         return ci
 
     if isinstance(corr, str):
+        # "B) ..." formatida
         m = re.match(r'^([A-H])\s*[).]', corr.strip(), re.IGNORECASE)
         if m:
             return ord(m.group(1).upper()) - 65
 
+        # Variant matni bilan solishtiramiz
         corr_clean = re.sub(r'^[A-H]\s*[).]\s*', '', corr).strip()
         for j, opt in enumerate(opts):
             opt_clean = re.sub(r'^[A-H]\s*[).]\s*', '', str(opt)).strip()
@@ -175,12 +235,6 @@ async def publish_to_baza(
     Baza Guruhiga e'lon qilish:
       1. DOCX fayl yuborish
       2. Faylga reply — test kartasi + Ulashish
-
-    MUHIM: "Web test" va "Quiz Poll" tugmalari bot-deep-link orqali
-    ishlaydi (?start=webtest_TID / ?start=poll_TID). Guruh xabarida
-    web_app tugmasi ishlamaydi (Telegram cheklovi) — shuning uchun
-    bosilganda avtomatik bot shaxsiy chatiga o'tkaziladi, u yerda
-    bot darhol Mini App / Poll tugmasini taqdim etadi.
     """
     try:
         from config import BAZA_GROUP_ID
@@ -207,19 +261,32 @@ async def publish_to_baza(
         qc       = len(questions)
 
         # ── 1. DOCX fayl tayyorlash ──
+        # Fayl nomi — test nomidan, xavfsiz belgilar
+        safe_name = re.sub(r'[\\/:*?"<>|]', '', title or tid).strip() or tid
+        safe_name = safe_name[:60]  # Maksimal uzunlik
+
         try:
             docx_bytes = _make_docx(
-                questions, title=title, tid=tid,
-                category=category, creator_name=creator_name,
+                questions,
+                title=title,
+                tid=tid,
+                category=category,
+                creator_name=creator_name,
             )
-            filename = f"test_{tid}.docx"
+            filename = f"{safe_name}.docx"
         except Exception as de:
             log.warning(f"DOCX xato, TXT ga o'tish: {de}")
             docx_bytes = _make_txt(questions, title, tid, creator_name).encode("utf-8")
-            filename   = f"test_{tid}.txt"
+            filename   = f"{safe_name}.txt"
 
         doc_file = BufferedInputFile(docx_bytes, filename=filename)
 
+        # ── TXT fayl ham tayyorlaymiz (sof format, meta sarlavhasiz) ──
+        txt_str   = _make_txt_plain(questions)
+        txt_bytes = txt_str.encode("utf-8")
+        txt_file  = BufferedInputFile(txt_bytes, filename=f"{safe_name}.txt")
+
+        # Caption
         caption = (
             f"📄 <b>{title}</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -228,22 +295,32 @@ async def publish_to_baza(
             f"📊 {diff_txt}\n"
             f"📋 <b>{qc} ta savol</b>\n"
             f"🎯 O'tish: {passing_score}%\n"
-            f"\U0001F464 {creator_name or 'Nomalum'}"
+            f"👤 {creator_name or "Noma'lum"}"
         )
 
-        # ── 2. Faylni guruhga yuborish ──
+        # ── 2. Fayllarni guruhga yuborish (DOCX + TXT) ──
         file_msg = await bot.send_document(
             chat_id=gid,
             document=doc_file,
             caption=caption,
         )
+        try:
+            await bot.send_document(
+                chat_id=gid,
+                document=txt_file,
+            )
+        except Exception as te:
+            log.warning(f"TXT yuborilmadi: {te}")
 
         # ── 3. Faylga reply — test kartasi + tugmalar ──
-        # Web test / Quiz Poll — bot deep-link orqali (bot chatiga olib o'tadi)
+        # MUHIM: "Web test" va "Quiz Poll" — bot deep-link orqali
+        # (?start=webtest_TID / ?start=poll_TID). Guruh xabarida
+        # web_app tugmasi ishlamaydi (Telegram cheklovi), shuning
+        # uchun bosilganda avtomatik bot shaxsiy chatiga o'tkaziladi.
         bu = bot_username or ""
         if not bu:
             try:
-                me = await bot.me()
+                me = await bot.get_me()
                 bu = me.username
             except Exception:
                 bu = ""
