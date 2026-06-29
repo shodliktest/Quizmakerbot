@@ -166,12 +166,12 @@ def _make_result(test: dict, bot_username: str, demo=False) -> InlineQueryResult
         b = InlineKeyboardBuilder()
         b.row(
             InlineKeyboardButton(text="🌐 Web test",  url=f"{base}?start=webtest_{tid}"),
-            InlineKeyboardButton(text="📊 Quiz Poll", url=f"{base}?start=poll_{tid}"),
+            InlineKeyboardButton(text="📊 Quiz Test", url=f"{base}?start=poll_{tid}"),
         )
         b.row(
-            InlineKeyboardButton(text="👥 Guruhda Poll",
+            InlineKeyboardButton(text="👥 Guruhda Poll Test ",
                 url=f"https://t.me/{bot_username}?startgroup=gpoll_{tid}"),
-            InlineKeyboardButton(text="👥 Guruhda Inline",
+            InlineKeyboardButton(text="👥 Guruhda Inline Test",
                 url=f"https://t.me/{bot_username}?startgroup=ginline_{tid}"),
         )
         b.row(
