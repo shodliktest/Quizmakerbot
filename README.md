@@ -1,4 +1,4 @@
-# 🎓 Quiz Bot Pro — Firebase'siz versiya
+## 🎓 Quiz Bot Pro — Firebase'siz versiya
 
 ## ✅ Firebase kerak emas!
 Hamma narsa (testlar, userlar, natijalar) **Telegram kanalda** saqlanadi.
