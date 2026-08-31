@@ -1,4 +1,5 @@
 """👑 ADMIN PANEL"""
+import asyncio
 import json, logging
 from datetime import datetime, timezone
 from aiogram import Router, F
@@ -7,7 +8,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardButton
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 
 from config import ADMIN_IDS
 from utils import ram_cache as ram
@@ -17,6 +18,7 @@ from utils.states import AdminPanel
 
 log    = logging.getLogger(__name__)
 router = Router()
+_forward_mode_users: set[int] = set()
 UTC    = timezone.utc
 
 def is_admin(uid): return uid in ADMIN_IDS
@@ -62,6 +64,93 @@ async def _show_admin(ev, edit=False):
         await target.answer(text, reply_markup=admin_kb())
 
 
+# Supabase Free tarif bazasi hajmi chegarasi (MB). Agar keyinchalik
+# Pro tarifga o'tilsa, shu yerni yangilash kifoya (Pro = 8192 MB).
+SUPABASE_DB_LIMIT_MB = 500
+
+def _fmt_mb(bytes_val: int) -> float:
+    return round((bytes_val or 0) / 1024 / 1024, 1)
+
+
+# ══ PREMIUM ID BOSHQARUVI ═══════════════════════════════════════
+@router.callback_query(F.data == "admin_premium")
+async def admin_premium(callback: CallbackQuery):
+    await callback.answer()
+    if not is_admin(callback.from_user.id): return
+    from utils.premium import active_list
+    rows = await active_list(100)
+    lines = ["⭐ <b>PREMIUM ID BOSHQARUVI</b>", "━━━━━━━━━━━━━━━━━━━━━━━━"]
+    lines.append(f"Faol Premium: <b>{len(rows)}</b> ta\n")
+    if rows:
+        for r in rows[:30]:
+            exp = str(r.get("expires_at", ""))[:16].replace("T", " ")
+            lines.append(f"• <code>{r['user_id']}</code> — ⏳ {exp} UTC")
+        if len(rows) > 30: lines.append(f"\n… yana {len(rows)-30} ta")
+    else: lines.append("<i>Faol Premium ID yo‘q</i>")
+    b=InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="➕ Premium berish",callback_data="premium_add"))
+    b.row(InlineKeyboardButton(text="➕ Muddatni uzaytirish",callback_data="premium_extend"))
+    b.row(InlineKeyboardButton(text="❌ Premiumni bekor qilish",callback_data="premium_revoke"))
+    b.row(InlineKeyboardButton(text="🔄 Yangilash",callback_data="admin_premium"))
+    b.row(InlineKeyboardButton(text="⬅️ Admin panel",callback_data="admin_panel"))
+    await callback.message.edit_text("\n".join(lines),reply_markup=b.as_markup())
+
+
+@router.callback_query(F.data == "premium_add")
+async def premium_add_cb(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id): return await callback.answer("🚫",show_alert=True)
+    await callback.answer(); await state.set_state(AdminPanel.premium_manage); await state.update_data(premium_mode="add")
+    await callback.message.edit_text("➕ <b>PREMIUM BERISH</b>\n\nFormat: <code>USER_ID KUN</code>\nMasalan: <code>123456789 30</code>\n\n⏱ 1–3650 kun.\n/cancel — bekor qilish")
+
+@router.callback_query(F.data == "premium_extend")
+async def premium_extend_cb(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id): return await callback.answer("🚫",show_alert=True)
+    await callback.answer(); await state.set_state(AdminPanel.premium_manage); await state.update_data(premium_mode="extend")
+    await callback.message.edit_text("➕ <b>PREMIUM MUDDATINI UZAYTIRISH</b>\n\nFormat: <code>USER_ID KUN</code>\nMasalan: <code>123456789 30</code>\n\nYangi kunlar mavjud muddat ustiga qo‘shiladi.")
+
+@router.callback_query(F.data == "premium_revoke")
+async def premium_revoke_cb(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id): return await callback.answer("🚫",show_alert=True)
+    await callback.answer(); await state.set_state(AdminPanel.premium_manage); await state.update_data(premium_mode="revoke")
+    await callback.message.edit_text("❌ <b>PREMIUMNI BEKOR QILISH</b>\n\nFormat: <code>USER_ID</code>\nMasalan: <code>123456789</code>")
+
+@router.message(AdminPanel.premium_manage)
+async def premium_manage_input(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id): return
+    raw=(message.text or '').strip()
+    if raw.lower()=='/cancel': await state.clear(); return await message.answer("Bekor qilindi.",reply_markup=admin_kb())
+    d=await state.get_data(); mode=d.get('premium_mode')
+    import re
+    # USER_ID va KUN ni alohida parse qilamiz. Oldingi regex {5,15}
+    # kunlar uchun ham minimum 5 raqam talab qilgani sababli
+    # `7078456772 30` kabi to‘g‘ri format xato deb chiqardi.
+    parts=raw.replace(',', ' ').split()
+    if mode == 'revoke':
+        if len(parts) != 1 or not parts[0].isdigit():
+            return await message.answer("❌ Format noto‘g‘ri. Faqat USER_ID yuboring.")
+        uid=int(parts[0])
+    else:
+        if len(parts) != 2 or not parts[0].isdigit() or not parts[1].isdigit():
+            return await message.answer("❌ Format noto‘g‘ri. Yuboring: <code>USER_ID KUN</code>\nMasalan: <code>123456789 30</code>")
+        uid=int(parts[0]); days=int(parts[1])
+        if not 5 <= len(parts[0]) <= 15:
+            return await message.answer("❌ Telegram ID noto‘g‘ri.")
+        if not 1 <= days <= 3650:
+            return await message.answer("❌ Kun soni 1–3650 oralig‘ida bo‘lishi kerak.")
+    try:
+        from utils import premium
+        if mode=='revoke':
+            await premium.revoke(uid); await state.clear(); return await message.answer(f"✅ <code>{uid}</code> Premiumdan chiqarildi.",reply_markup=admin_kb())
+        days=int(parts[1]); row=await premium.grant(uid,days,message.from_user.id,extend=(mode=='extend'))
+        exp=row.get('expires_at','')[:19].replace('T',' ')
+        await state.clear()
+        await message.answer(f"✅ <b>Premium {'uzaytirildi' if mode=='extend' else 'berildi'}</b>\n\n👤 ID: <code>{uid}</code>\n⏱ Muddat: <b>{days} kun</b>\n📅 Tugaydi: <code>{exp} UTC</code>",reply_markup=admin_kb())
+        try:
+            await message.bot.send_message(uid,f"🎉 <b>Premium faollashtirildi!</b>\n\n⭐ Sizga Premium {'muddat uzaytirildi' if mode=='extend' else 'berildi'}.\n⏱ Qo‘shilgan muddat: <b>{days} kun</b>\n📅 Tugash sanasi: <code>{exp} UTC</code>\n\n🔐 Premium muddati davomida ID bilan cheklangan testlarning barchasiga kirishingiz mumkin.",parse_mode='HTML')
+        except Exception as e: log.warning('premium user notify %s: %s',uid,e)
+    except Exception as e:
+        log.exception('premium manage: %s',e); await message.answer(f"❌ Saqlashda xato: <code>{str(e)[:300]}</code>")
+
 # ══ STATISTIKA ════════════════════════════════════════════════
 @router.callback_query(F.data == "admin_stats")
 async def admin_stats(callback: CallbackQuery):
@@ -87,8 +176,41 @@ async def admin_stats(callback: CallbackQuery):
         f"🧠 <b>RAM holati:</b>\n"
         f"  💾 {st.get('mb',0)} MB / {st.get('limit_mb',450)} MB ({st.get('pct',0)}%)\n"
         f"  📦 Cached testlar: <b>{st.get('cached_q',0)} ta</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━"
     )
+
+    from utils import tg_db
+    storage = await tg_db.get_storage_stats()
+    if storage:
+        total_mb  = _fmt_mb(storage.get("total_bytes", 0))
+        pct       = round(total_mb / SUPABASE_DB_LIMIT_MB * 100, 1)
+        by_table  = {t["table_name"]: t for t in storage.get("tables", [])}
+        tests_row = by_table.get("tests")
+        text += (
+            f"\n🗄 <b>Supabase (baza) holati:</b>\n"
+            f"  💾 {total_mb} MB / {SUPABASE_DB_LIMIT_MB} MB ({pct}%)\n"
+        )
+        if tests_row:
+            tests_mb = _fmt_mb(tests_row.get("total_bytes", 0))
+            text += f"  📋 <code>tests</code> jadvali: <b>{tests_mb} MB</b> ({len(tests)} ta test)\n"
+            if tests and tests_row.get("total_bytes"):
+                avg_bytes_per_test = tests_row["total_bytes"] / len(tests)
+                remaining_bytes    = max(SUPABASE_DB_LIMIT_MB * 1024 * 1024 - storage.get("total_bytes", 0), 0)
+                approx_more        = int(remaining_bytes / avg_bytes_per_test)
+                text += f"  ➕ Taxminan yana <b>~{approx_more:,}</b> ta test sig'adi\n".replace(",", " ")
+        # Eng katta 3 ta jadval (tests dan tashqari) — qaerga joy ketayotganini ko'rish uchun
+        others = [t for t in storage.get("tables", []) if t["table_name"] != "tests"][:3]
+        if others:
+            text += "  <i>Boshqa yiriklari:</i> " + ", ".join(
+                f"{t['table_name']} ({_fmt_mb(t['total_bytes'])} MB)" for t in others
+            ) + "\n"
+    else:
+        text += (
+            f"\n🗄 <b>Supabase holati:</b> <i>sozlanmagan</i>\n"
+            f"  ⚙️ Yoqish uchun <code>fix_storage_stats.sql</code> ni\n"
+            f"  Supabase SQL Editor'da bir marta ishga tushiring.\n"
+        )
+
+    text += "━━━━━━━━━━━━━━━━━━━━━━━━"
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="⬅️ Admin panel", callback_data="admin_panel"))
     try: await callback.message.edit_text(text, reply_markup=b.as_markup())
@@ -242,9 +364,99 @@ async def adm_deleted_tests(callback: CallbackQuery):
     if page < total-1:
         nav.append(InlineKeyboardButton(text="▶️", callback_data=f"adm_deleted_{page+1}"))
     if nav: b.row(*nav)
+    if tests:
+        b.row(InlineKeyboardButton(
+            text=f"🗑 Barchasini butunlay tozalash ({len(tests)})",
+            callback_data="purge_ghost_all"
+        ))
     b.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data="adm_back_to_cats"))
     try: await callback.message.edit_text(text, reply_markup=b.as_markup())
     except TelegramBadRequest: await callback.message.answer(text, reply_markup=b.as_markup())
+
+
+@router.callback_query(F.data == "purge_ghost_all")
+async def purge_ghost_all_confirm(callback: CallbackQuery):
+    await callback.answer()
+    if not is_admin(callback.from_user.id): return
+    count = sum(1 for t in ram.get_all_tests_meta() if not t.get("is_active", True))
+    if count == 0:
+        return await callback.answer("Tozalanadigan test yo'q.", show_alert=True)
+    b = InlineKeyboardBuilder()
+    b.row(
+        InlineKeyboardButton(text="✅ Ha, tozalash", callback_data="purge_ghost_all_yes"),
+        InlineKeyboardButton(text="❌ Yo'q", callback_data="adm_deleted_0"),
+    )
+    try:
+        await callback.message.edit_text(
+            f"⚠️ <b>BARCHASINI BUTUNLAY TOZALASH</b>\n\n"
+            f"🗑 {count} ta avval o'chirilgan (Supabase'da osilib qolgan) test "
+            f"<b>butunlay tozalanadi</b>.\n"
+            f"Bu testlar allaqachon avval o'chirilgan, backup ham saqlangan bo'lishi kerak.\n\n"
+            f"Bu amalni qaytarib bo'lmaydi!",
+            reply_markup=b.as_markup()
+        )
+    except TelegramBadRequest: pass
+
+
+@router.callback_query(F.data == "purge_ghost_all_yes")
+async def purge_ghost_all_exec(callback: CallbackQuery):
+    await callback.answer("⏳ Tozalanmoqda...")
+    if not is_admin(callback.from_user.id): return
+    from utils.db import purge_ghost_tests
+    count = await purge_ghost_tests()
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="⬅️ Fanlar", callback_data="adm_back_to_cats"))
+    try:
+        await callback.message.edit_text(
+            f"✅ <b>{count} ta</b> test Supabase'dan butunlay tozalandi.\n"
+            f"Bazada endi bu testlardan iz qolmadi.",
+            reply_markup=b.as_markup()
+        )
+    except: pass
+
+
+@router.callback_query(F.data == "purge_user_stats")
+async def purge_user_stats_confirm(callback: CallbackQuery):
+    await callback.answer()
+    if not is_admin(callback.from_user.id): return
+    b = InlineKeyboardBuilder()
+    b.row(
+        InlineKeyboardButton(text="✅ Ha, tozalash", callback_data="purge_user_stats_yes"),
+        InlineKeyboardButton(text="❌ Yo'q", callback_data="admin_panel"),
+    )
+    try:
+        await callback.message.edit_text(
+            f"⚠️ <b>TAHLIL/TARIXNI BUTUNLAY TOZALASH</b>\n\n"
+            f"🧹 BARCHA foydalanuvchilarning test yechish tarixi, foizlari "
+            f"va tahlillari (<code>user_stats</code>) butunlay o'chiriladi.\n\n"
+            f"✅ <b>Saqlanib qoladi:</b>\n"
+            f"• Testlar va ularning meta ma'lumotlari\n"
+            f"• Testlarning umumiy statistikasi (necha marta yechilgan, o'rtacha ball)\n"
+            f"• Foydalanuvchilar ro'yxati (profil, rol, umumiy hisoblagichlar)\n\n"
+            f"❌ <b>Yo'qoladi:</b>\n"
+            f"• Har bir foydalanuvchining har bir test bo'yicha batafsil tarixi\n"
+            f"• \"Oxirgi tahlil\" ma'lumotlari\n\n"
+            f"Bu amalni qaytarib bo'lmaydi!",
+            reply_markup=b.as_markup()
+        )
+    except TelegramBadRequest: pass
+
+
+@router.callback_query(F.data == "purge_user_stats_yes")
+async def purge_user_stats_exec(callback: CallbackQuery):
+    await callback.answer("⏳ Tozalanmoqda...")
+    if not is_admin(callback.from_user.id): return
+    from utils import tg_db
+    count = await tg_db.purge_all_user_stats()
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="⬅️ Admin", callback_data="admin_panel"))
+    try:
+        await callback.message.edit_text(
+            f"✅ <b>{count} ta</b> foydalanuvchining tahlil/tarix yozuvi butunlay tozalandi.\n"
+            f"Testlar, test statistikasi va foydalanuvchilar ro'yxati tegilmadi.",
+            reply_markup=b.as_markup()
+        )
+    except: pass
 
 async def _show_admin_test_cats(msg, edit=False):
     tests = ram.get_all_tests_meta()
@@ -507,11 +719,57 @@ async def admin_deleted_tests(callback: CallbackQuery):
             text=f"📂 {cat} ({len(cats[cat])})",
             callback_data=f"del_cat_{cat[:30]}"
         ))
+    b.row(InlineKeyboardButton(
+        text=f"🗑 Barchasini butunlay o'chirish ({len(deleted)})",
+        callback_data="purge_all_deleted"
+    ))
     b.row(InlineKeyboardButton(text="⬅️ Admin", callback_data="admin_panel"))
     try:
         await callback.message.edit_text("\n".join(lines), reply_markup=b.as_markup())
     except TelegramBadRequest:
         await callback.message.answer("\n".join(lines), reply_markup=b.as_markup())
+
+
+@router.callback_query(F.data == "purge_all_deleted")
+async def purge_all_deleted_confirm(callback: CallbackQuery):
+    await callback.answer()
+    if not is_admin(callback.from_user.id): return
+    count = len(ram.get_deleted_tests())
+    if count == 0:
+        return await callback.answer("O'chirilgan test yo'q.", show_alert=True)
+    b = InlineKeyboardBuilder()
+    b.row(
+        InlineKeyboardButton(text="✅ Ha, barchasini o'chirish", callback_data="purge_all_deleted_yes"),
+        InlineKeyboardButton(text="❌ Yo'q", callback_data="admin_deleted_tests"),
+    )
+    try:
+        await callback.message.edit_text(
+            f"⚠️ <b>BARCHASINI BUTUNLAY O'CHIRISH</b>\n\n"
+            f"🗑 {count} ta o'chirilgan test bazadan, RAMdan, Supabase'dan "
+            f"<b>butunlay tozalanadi</b>.\n"
+            f"Har biri uchun backup TG kanalda saqlanadi.\n\n"
+            f"Bu amalni qaytarib bo'lmaydi!",
+            reply_markup=b.as_markup()
+        )
+    except TelegramBadRequest: pass
+
+
+@router.callback_query(F.data == "purge_all_deleted_yes")
+async def purge_all_deleted_exec(callback: CallbackQuery):
+    await callback.answer("⏳ Tozalanmoqda...")
+    if not is_admin(callback.from_user.id): return
+    from utils.db import purge_all_deleted_tests
+    count = await purge_all_deleted_tests()
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="⬅️ Admin", callback_data="admin_panel"))
+    try:
+        await callback.message.edit_text(
+            f"✅ <b>{count} ta</b> o'chirilgan test butunlay tozalandi.\n"
+            f"🗑 Baza, RAM, Supabase — tozalandi.\n"
+            f"💾 Backuplar TG kanalda saqlanadi.",
+            reply_markup=b.as_markup()
+        )
+    except: pass
 
 
 @router.callback_query(F.data.startswith("del_cat_"))
@@ -584,9 +842,10 @@ async def admin_restore_test(callback: CallbackQuery):
     if not is_admin(callback.from_user.id): return
     tid = callback.data[12:]
     from utils import tg_db
-    ram.update_test_meta(tid, {"is_deleted": False})
+    updates = {"is_deleted": False, "is_active": True}
+    ram.update_test_meta(tid, updates)
     if tg_db.ready():
-        await tg_db.update_test_meta_tg(tid, {"is_deleted": False})
+        await tg_db.update_test_meta_tg(tid, updates)
     meta = ram.get_test_meta_any(tid) or {}
     try:
         await callback.message.edit_text(
@@ -686,12 +945,70 @@ async def broadcast_send(message: Message, state: FSMContext):
 
 GROUPS_PER_PAGE = 10
 
+async def _refresh_known_groups(bot) -> dict:
+    """Known groupsni Telegram bilan tekshiradi va RAM/Supabase holatini yangilaydi.
+    Telegram Bot API botning barcha guruhlarini sanab beradigan endpoint bermaydi.
+    Shu sabab ro'yxat bot guruhdagi update olgan sari avtomatik to'ldiriladi.
+    Bot admin bo'lishi shart emas: e'lon yubora olishi kifoya.
+    """
+    from utils import tg_db
+    groups = ram.get_known_groups()
+    if not groups and tg_db.ready():
+        await tg_db.load_known_groups()
+        groups = ram.get_known_groups()
+    if not groups:
+        return {}
+    try:
+        me = await bot.me()
+        bot_id = me.id
+    except Exception:
+        bot_id = None
+    changed = False
+    for cid, g in list(groups.items()):
+        try:
+            chat_id = int(cid)
+            chat = await bot.get_chat(chat_id)
+            member = await bot.get_chat_member(chat_id, bot_id) if bot_id else None
+            status = getattr(member, 'status', '') if member else ''
+            if status in ('administrator', 'creator', 'member'):
+                g.update({
+                    'chat_id': chat_id,
+                    'title': chat.title or g.get('title') or 'Nomsiz guruh',
+                    'username': getattr(chat, 'username', '') or '',
+                    'type': chat.type,
+                    'member_count': await bot.get_chat_member_count(chat_id),
+                    'active': True,
+                    'bot_status': status,
+                })
+            else:
+                g['active'] = False
+                g['bot_status'] = status or 'unknown'
+            changed = True
+        except Exception as e:
+            err = str(e).lower()
+            if any(x in err for x in ('chat not found', 'bot was kicked', 'not a member', 'user not found')):
+                g['active'] = False
+                g['bot_status'] = 'left_or_kicked'
+                changed = True
+            else:
+                log.warning(f'Guruh tekshirish xato {cid}: {e}')
+    if changed:
+        ram.set_known_groups(groups)
+        if tg_db.ready():
+            try: await tg_db.save_known_groups()
+            except Exception: pass
+    return groups
+
+
 async def _show_groups_page(msg, state: FSMContext, page: int = 0, edit: bool = True):
+    await _refresh_known_groups(msg.bot)
     groups = ram.get_known_groups()
     active_items = [(cid, g) for cid, g in groups.items() if g.get("active", True)]
 
     if not active_items:
         b = InlineKeyboardBuilder()
+        b.row(InlineKeyboardButton(text="➕ ID bilan guruh qo‘shish", callback_data="adm_grp_add"))
+        b.row(InlineKeyboardButton(text="🔄 Yangilash", callback_data="admin_group_broadcast"))
         b.row(InlineKeyboardButton(text="⬅️ Admin", callback_data="admin_panel"))
         text = (
             "📣 <b>Guruh E'lon</b>\n\n"
@@ -713,7 +1030,7 @@ async def _show_groups_page(msg, state: FSMContext, page: int = 0, edit: bool = 
     offset = page * GROUPS_PER_PAGE
 
     lines = [f"📣 <b>GURUH E'LON</b>\n"]
-    lines.append(f"Bot admin bo'lgan guruhlar: <b>{len(active_items)} ta</b>  |  Sahifa {page+1}/{total_pages}\n")
+    lines.append(f"Bot xabar yubora oladigan guruhlar: <b>{len(active_items)} ta</b>  |  Sahifa {page+1}/{total_pages}\n")
     for i, (cid, g) in enumerate(chunk, offset + 1):
         title   = g.get("title", "?")
         members = g.get("member_count", "?")
@@ -729,6 +1046,8 @@ async def _show_groups_page(msg, state: FSMContext, page: int = 0, edit: bool = 
         nav.append(InlineKeyboardButton(text="▶️", callback_data=f"adm_grp_p{page+1}"))
     if nav:
         b.row(*nav)
+    b.row(InlineKeyboardButton(text="🔄 Guruhlarni tekshirish", callback_data="admin_group_broadcast"),
+          InlineKeyboardButton(text="➕ Guruh qo‘shish", callback_data="adm_grp_add"))
     b.row(InlineKeyboardButton(text="❌ Bekor", callback_data="admin_panel"))
 
     text = "\n".join(lines)
@@ -743,6 +1062,53 @@ async def _show_groups_page(msg, state: FSMContext, page: int = 0, edit: bool = 
     if state:
         await state.set_state(AdminPanel.group_broadcast)
 
+
+@router.callback_query(F.data == "adm_grp_add")
+async def group_add_start(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        return await callback.answer("🚫", show_alert=True)
+    await callback.answer()
+    await state.set_state(AdminPanel.group_add)
+    await callback.message.edit_text(
+        "➕ <b>GURUH QO‘SHISH</b>\n\n"
+        "Bot admin bo‘lgan guruh ID sini yuboring:\n"
+        "<code>-1001234567890</code>\n\n"
+        "Bot guruhda administrator bo‘lishi kerak.\n"
+        "/cancel — bekor qilish"
+    )
+
+@router.message(AdminPanel.group_add)
+async def group_add_input(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await state.clear(); return
+    raw=(message.text or '').strip()
+    if raw.lower() == '/cancel':
+        await state.clear(); return await message.answer("Bekor qilindi.", reply_markup=admin_kb())
+    if not raw.lstrip('-').isdigit():
+        return await message.answer("❌ Guruh ID noto‘g‘ri. Masalan: <code>-1001234567890</code>")
+    cid=int(raw)
+    if cid >= 0:
+        return await message.answer("❌ Telegram guruh ID odatda <code>-100...</code> ko‘rinishida bo‘ladi.")
+    try:
+        chat=await message.bot.get_chat(cid)
+        me=await message.bot.me()
+        member=await message.bot.get_chat_member(cid, me.id)
+        status=getattr(member,'status','')
+        if status not in ('administrator','creator','member'):
+            return await message.answer(f"❌ Bot bu guruhda xabar yubora olmaydi. Hozirgi status: <b>{status}</b>")
+        try: mc=await message.bot.get_chat_member_count(cid)
+        except Exception: mc=0
+        ram.add_known_group(cid, chat.title or 'Nomsiz guruh', getattr(chat,'username','') or '', chat.type, mc)
+        groups=ram.get_known_groups(); groups[str(cid)]['bot_status']=status; ram.set_known_groups(groups)
+        from utils import tg_db
+        if tg_db.ready(): await tg_db.save_known_groups()
+        await state.clear()
+        await message.answer(
+            f"✅ <b>Guruh qo‘shildi</b>\n\n📌 {chat.title or 'Nomsiz guruh'}\n🆔 <code>{cid}</code>\n👤 A’zolar: <b>{mc}</b>\n🤖 Status: <b>{status}</b>",
+            reply_markup=admin_kb())
+    except Exception as e:
+        log.warning(f'Guruhni ID bilan qo‘shish xato {cid}: {e}')
+        await message.answer(f"❌ Guruhni tekshirib bo‘lmadi. Bot guruhda ekanini va ID to‘g‘riligini tekshiring.\n\n<code>{str(e)[:500]}</code>")
 
 @router.callback_query(F.data == "admin_group_broadcast")
 async def group_broadcast_start(callback: CallbackQuery, state: FSMContext):
@@ -777,65 +1143,52 @@ async def group_broadcast_send(message: Message, state: FSMContext):
 
     for cid, g in active.items():
         try:
-            # Xabar turini aniqlash va forward qilish
-            if message.text:
-                await message.bot.send_message(
-                    int(cid),
-                    message.text,
-                    parse_mode="HTML"
-                )
-            elif message.photo:
-                await message.bot.send_photo(
-                    int(cid),
-                    message.photo[-1].file_id,
-                    caption=message.caption or ""
-                )
-            elif message.video:
-                await message.bot.send_video(
-                    int(cid),
-                    message.video.file_id,
-                    caption=message.caption or ""
-                )
-            elif message.document:
-                await message.bot.send_document(
-                    int(cid),
-                    message.document.file_id,
-                    caption=message.caption or ""
-                )
-            elif message.sticker:
-                await message.bot.send_sticker(int(cid), message.sticker.file_id)
-            elif message.voice:
-                await message.bot.send_voice(int(cid), message.voice.file_id,
-                                             caption=message.caption or "")
-            elif message.video_note:
-                await message.bot.send_video_note(int(cid), message.video_note.file_id)
-            else:
-                await message.forward(int(cid))
+            # Admin yuborgan xabarni aynan o‘z ko‘rinishida ko‘chiramiz:
+            # text/caption/rasm/video/document/sticker/voice va markup saqlanadi.
+            # Bu send_message(parse_mode=HTML) sababli yuzaga keladigan format xatolarini ham yo‘q qiladi.
+            while True:
+                try:
+                    await message.bot.copy_message(
+                        chat_id=int(cid),
+                        from_chat_id=message.chat.id,
+                        message_id=message.message_id,
+                    )
+                    break
+                except TelegramRetryAfter as e:
+                    await asyncio.sleep(max(1, int(e.retry_after)))
             ok += 1
-            # Guruh member sonini yangilab qo'yish
             try:
                 mc = await message.bot.get_chat_member_count(int(cid))
                 g["member_count"] = mc
-            except: pass
+            except Exception:
+                pass
         except Exception as e:
             fail += 1
             log.warning(f"Guruh e'lon xato {cid} ({g.get('title','?')}): {e}")
-            # Bot guruhdan chiqarilgan bo'lsa belgilaymiz
             err = str(e).lower()
-            if "bot was kicked" in err or "bot is not a member" in err or "chat not found" in err:
+            # Huquq/aloqa holatini tekshirib, noto‘g‘ri guruhni avtomatik passiv qilamiz.
+            if any(x in err for x in ("bot was kicked", "bot is not a member", "chat not found", "user is deactivated")):
                 ram.remove_known_group(int(cid))
-            elif "upgraded to a supergroup" in err or "migrated" in err:
-                # Guruh supergroup ga o'tgan - eski ID o'chiramiz
-                ram.remove_known_group(int(cid))
-                log.info(f"Guruh {cid} supergroup ga o'tdi, ro'yxatdan o'chirildi")
             elif "not enough rights" in err or "forbidden" in err:
-                # Bot xabar yubora olmaydi - guruhni passive qilish
                 g["active"] = False
-                log.info(f"Guruh {cid} passive qilindi (huquq yo'q)")
+                g["bot_status"] = "no_send_rights"
+            elif "migrated" in err or "upgraded to a supergroup" in err:
+                # Migration bo‘lsa, keyingi refresh yangi chat ID ni qo‘lda/yangilash orqali aniqlaydi.
+                g["active"] = False
+                g["bot_status"] = "migrated"
+
 
         try:
             await status.edit_text(f"⏳ {ok+fail}/{len(active)} | ✅{ok} ❌{fail}")
         except: pass
+
+    # Broadcast davomida o‘zgargan active/status holatlarini Supabase'ga yozamiz.
+    try:
+        from utils import tg_db
+        if tg_db.ready():
+            await tg_db.save_known_groups()
+    except Exception as e:
+        log.warning(f"known_groups broadcast holatini saqlash xato: {e}")
 
     await state.clear()
 
@@ -905,7 +1258,7 @@ async def adm_backups(callback: CallbackQuery):
     await callback.answer()
     if not is_admin(callback.from_user.id): return
     from utils import tg_db
-    dates = tg_db.get_backup_dates()
+    dates = await tg_db.get_backup_dates_async()
     info  = tg_db.get_index_info()
     text  = (
         f"🗂 <b>BACKUPLAR</b>\n"
@@ -930,96 +1283,66 @@ async def adm_backups(callback: CallbackQuery):
 @router.message(Command("rescan"))
 async def cmd_rescan(message: Message):
     """
-    TG kanaldan BARCHA JSON fayllarni skanerlaydi va ma'lumotlarni tiklaydi.
-    Testlar, userlar, guruhlar — hammasi tiklanadi.
+    SUPABASE versiyasida kanal skanerlash kerak emas.
+    Bu komanda endi Supabase'dan barcha ma'lumotlarni RAM ga qayta yuklaydi.
     """
     if not is_admin(message.from_user.id):
         return
     from utils import tg_db, ram_cache as ram
-    import time as _time
 
-    before_tests  = len(ram.get_all_tests_meta())
-    before_users  = len(ram.get_users())
-    before_groups = len([g for g in ram.get_known_groups().values() if g.get("active")])
-
+    before = len(ram.get_all_tests_meta())
     msg = await message.answer(
-        "🔍 <b>Kanal skanerlash boshlandi</b>\n\n"
-        "<code>[░░░░░░░░░░░░░░░░░░░░]</code> 0%\n"
-        "📨 0/3000 xabar ko'rildi\n"
-        "✅ 0 ta topildi\n\n"
-        "Bot ishlayveradi ✅"
+        "🔄 <b>Supabase dan qayta yuklanmoqda...</b>\n\n"
+        "Testlar, foydalanuvchilar va sozlamalar\n"
+        "to\'g\'ridan-to\'g\'ri bazadan o\'qiladi.\n\n"
+        "⏳ Bir soniya kuting..."
     )
 
-    # Progress callback
-    last_edit = [0]
-    async def on_progress(scanned, total, found, stage):
-        now = _time.time()
-        if now - last_edit[0] < 8:
-            return
-        last_edit[0] = now
-        bar_len = 20
-        filled  = int(bar_len * scanned / total) if total > 0 else 0
-        bar     = "█" * filled + "░" * (bar_len - filled)
-        pct     = int(100 * scanned / total) if total > 0 else 0
-        stage_txt = {
-            "scan":   "📡 Kanal skanerlash...",
-            "index":  "📋 Index chunklar...",
-            "tests":  "📝 Test fayllar...",
-            "users":  "👥 Foydalanuvchilar...",
-            "groups": "🏘 Guruhlar...",
-        }.get(stage, "⏳ Yuklanmoqda...")
-        try:
-            await msg.edit_text(
-                f"🔍 <b>Kanal skanerlash</b>\n\n"
-                f"{stage_txt}\n"
-                f"<code>[{bar}]</code> {pct}%\n"
-                f"📨 {scanned}/{total} xabar ko'rildi\n"
-                f"✅ {found} ta topildi\n\n"
-                f"Bot ishlayveradi ✅"
-            )
-        except Exception: pass
+    try:
+        await tg_db._load_tests_meta_to_ram()
+        await tg_db._load_users_to_ram()
+        await tg_db.load_known_groups()
 
-    result = await tg_db._migrate_from_old_index(progress_callback=on_progress)
+        after = len(ram.get_all_tests_meta())
+        users = len(ram.get_users())
 
-    after_tests  = len(ram.get_all_tests_meta())
-    after_users  = len(ram.get_users())
-    after_groups = len([g for g in ram.get_known_groups().values() if g.get("active")])
-
-    if result:
         await msg.edit_text(
-            f"✅ <b>Skanerlash yakunlandi!</b>\n\n"
-            f"📋 Testlar: <b>{before_tests}</b> → <b>{after_tests}</b> ta\n"
-            f"👥 Userlar: <b>{before_users}</b> → <b>{after_users}</b> ta\n"
-            f"🏘 Guruhlar: <b>{before_groups}</b> → <b>{after_groups}</b> ta\n\n"
-            f"✅ Hammasi tiklanib saqlandi!"
+            f"✅ <b>Yuklash yakunlandi!</b>\n\n"
+            f"📋 Testlar: <b>{before}</b> → <b>{after}</b> ta\n"
+            f"👥 Userlar: <b>{users}</b> ta\n\n"
+            f"🗄 Manba: Supabase (Postgres)"
         )
-    else:
-        await msg.edit_text(
-            "⚠️ Skanerlash natija bermadi.\n"
-            "Kanal bo'sh yoki xato yuz berdi."
-        )
+    except Exception as e:
+        await msg.edit_text(f"❌ Xato: {e}")
 
 
 @router.message(Command("reindex"))
 async def cmd_reindex(message: Message):
+    """
+    SUPABASE versiyasida reindex = barcha testlarni bazaga qayta yozish
+    (masalan meta ma'lumotlari to\'g\'rilash kerak bo\'lsa).
+    """
     if not is_admin(message.from_user.id):
         return
-    msg = await message.answer(
-        "♻️ <b>Reindex boshlandi...</b>\n"
-        "Barcha testlar qayta saqlanadi (protect_content=False).\n"
-        "Bu bir necha daqiqa davom etishi mumkin."
-    )
     from utils import tg_db, ram_cache as ram
-    metas  = ram.get_all_tests_meta()
-    total  = len(metas)
-    ok     = 0
+
+    metas = ram.get_all_tests_meta()
+    total = len(metas)
+    if not total:
+        await message.answer("📭 RAM da test yo\'q. Avval /rescan bajaring.")
+        return
+
+    msg = await message.answer(
+        f"♻️ <b>Reindex boshlandi...</b>\n"
+        f"{total} ta test meta Supabase ga yangilanadi."
+    )
+    ok = 0
     failed = 0
 
     for i, meta in enumerate(metas):
         tid = meta.get("test_id")
         if not tid:
             continue
-        # To'liq testni RAM yoki TGdan olish
         test = ram.get_cached_questions(tid) or tg_db._tests_cache.get(tid)
         if not test or not test.get("questions"):
             try:
@@ -1029,40 +1352,32 @@ async def cmd_reindex(message: Message):
         if not test or not test.get("questions"):
             failed += 1
             continue
-        # protect_content=False bilan qayta saqlash
-        saved = await tg_db.save_test_full(test)
-        if saved:
-            ok += 1
-        else:
+        try:
+            saved = await tg_db.save_test_full(test)
+            if saved:
+                ok += 1
+            else:
+                failed += 1
+        except Exception:
             failed += 1
-        # Progress har 5 testda
-        if (i + 1) % 5 == 0:
+
+        if (i + 1) % 20 == 0:
             try:
                 await msg.edit_text(
                     f"♻️ <b>Reindex:</b> {i+1}/{total}\n"
-                    f"✅ {ok} ta saqlandi | ❌ {failed} ta xato"
+                    f"✅ {ok} ta | ❌ {failed} ta"
                 )
             except Exception:
                 pass
-        await asyncio.sleep(0.3)  # Flood oldini olish
 
-    try:
-        await msg.edit_text(
-            f"✅ <b>Reindex yakunlandi!</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📊 Jami: {total} ta test\n"
-            f"✅ Saqlandi: {ok} ta\n"
-            f"❌ Xato: {failed} ta\n\n"
-            f"Endi barcha testlar protect_content=False bilan saqlanmoqda.\n"
-            f"Keyingi rebootlarda muammo bo'lmaydi."
-        )
-    except Exception:
-        pass
+    await msg.edit_text(
+        f"✅ <b>Reindex yakunlandi!</b>\n\n"
+        f"📋 Jami: {total} ta\n"
+        f"✅ Muvaffaqiyatli: {ok} ta\n"
+        f"❌ Xato: {failed} ta\n\n"
+        f"🗄 Manba: Supabase (Postgres)"
+    )
 
-
-# ── Forward rejimi ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-_forward_mode_users = set()   # Forward rejimda turgan adminlar
 
 @router.callback_query(F.data == "admin_forward_mode")
 async def enter_forward_mode(callback: CallbackQuery):
@@ -1098,6 +1413,20 @@ async def exit_forward_mode_cb(callback: CallbackQuery):
             "📨 Forward rejimi <b>o\'chirildi</b>.",
         )
     except TelegramBadRequest: pass
+
+
+@router.message(Command("done"), AdminPanel.waiting_json)
+async def import_json_done(message: Message, state: FSMContext):
+    d = await state.get_data()
+    n = d.get("_import_json_count", 0)
+    await state.clear()
+    await message.answer(f"✅ <b>Import yakunlandi.</b>\n\n📋 Jami saqlangan: <b>{n}</b> ta test.")
+
+
+@router.message(Command("cancel"), AdminPanel.waiting_json)
+async def import_json_cancel(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("❌ JSON import bekor qilindi.")
 
 
 @router.message(Command("cancel"))
@@ -1619,10 +1948,7 @@ async def adm_loop_restart_cb(callback: CallbackQuery):
                 except: pass
                 break
 
-        # web_sync_watchdog restart qilish (o'zi ichidan web_sync ni qaytadan boshlaydi)
-        if loop_name == "web_sync_watchdog":
-            asyncio.create_task(_bot_mod._web_sync_watchdog(), name="web_sync_watchdog")
-        elif loop_name == "auto_flush":
+        if loop_name == "auto_flush":
             from utils import tg_db
             asyncio.create_task(tg_db.auto_flush_loop(), name="auto_flush")
         elif loop_name == "midnight_flush":
@@ -1631,7 +1957,7 @@ async def adm_loop_restart_cb(callback: CallbackQuery):
             asyncio.create_task(_bot_mod._cache_cleanup_loop(), name="cache_cleanup")
 
         if hasattr(_bot_mod, "_beat"):
-            _bot_mod._beat(loop_name.replace("_watchdog", "").replace("web_sync_", "web_sync"), "restarted")
+            _bot_mod._beat(loop_name, "restarted")
 
     except Exception as e:
         await callback.message.answer(f"❌ Restart xatosi: {e}")
@@ -1663,8 +1989,7 @@ async def _show_loops(ev, edit=False):
     }
 
     LOOP_LABELS = {
-        "web_sync":     "🔄 Web Sync",
-        "auto_flush":   "💾 Auto Flush",
+        "auto_flush":     "💾 Supabase Auto Flush",
         "midnight_flush": "🌙 Midnight Flush",
         "cache_cleanup":  "🧹 Cache Cleanup",
     }
@@ -1673,7 +1998,7 @@ async def _show_loops(ev, edit=False):
     b = InlineKeyboardBuilder()
 
     # Barcha looplar
-    loop_keys = ["web_sync", "auto_flush", "midnight_flush", "cache_cleanup"]
+    loop_keys = ["auto_flush", "midnight_flush", "cache_cleanup"]
     for key in loop_keys:
         h     = health.get(key, {})
         label = LOOP_LABELS.get(key, key)
@@ -1701,10 +2026,9 @@ async def _show_loops(ev, edit=False):
         )
         # Qayta boshlash tugmasi faqat muammoli looplarda
         if status in ("error", "timeout", "cancelled", "unknown"):
-            watchdog_key = "web_sync_watchdog" if key == "web_sync" else key
             b.row(InlineKeyboardButton(
                 text=f"♻️ {label} restart",
-                callback_data=f"adm_loop_restart_{watchdog_key}"
+                callback_data=f"adm_loop_restart_{key}"
             ))
 
     # asyncio task holati
@@ -1713,7 +2037,7 @@ async def _show_loops(ev, edit=False):
     task_names = {t.get_name() for t in tasks if not t.done()}
     lines.append("━━━━━━━━━━━━━━━━━━━━━━━━")
     lines.append(f"⚙️ Aktiv tasklar: <b>{len(tasks)}</b>")
-    for expected in ["web_sync_watchdog", "auto_flush", "midnight_flush", "cache_cleanup"]:
+    for expected in ["auto_flush", "midnight_flush", "cache_cleanup"]:
         exists = expected in task_names
         lines.append(f"  {'✅' if exists else '❌'} {expected}")
 
@@ -1938,3 +2262,89 @@ async def adm_find_page_cb(callback: CallbackQuery):
         edit=True,
         uid=uid
     )
+
+
+# ══ JSON IMPORT — tayyor test JSON fayllarini bazaga yuklash ═══
+#
+# Format: bitta JSON = bitta test, quyidagi kabi tuzilish bilan:
+#   {"title": "...", "category": "...", "questions": [
+#       {"type": "multiple_choice", "question": "...", "options": [...],
+#        "correct": "...", "explanation": "...", "accepted_answers": [],
+#        "points": 1}, ...
+#   ], ...}
+# (bot avval eksport qilgan yoki shu tuzilishga mos har qanday JSON)
+#
+# /import_json bosilgach admin bir nechta .json faylni birma-bir
+# yuboradi — har biri alohida test sifatida darhol saqlanadi.
+# /done yoki /cancel bilan rejimdan chiqiladi.
+
+@router.message(Command("import_json"))
+async def cmd_import_json(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    await state.set_state(AdminPanel.waiting_json)
+    await state.update_data(_import_json_count=0)
+    await message.answer(
+        "📥 <b>JSON import rejimi</b>\n\n"
+        "Tayyor test JSON fayllarini birma-bir yuboring —\n"
+        "har biri alohida test sifatida <b>darhol</b> saqlanadi.\n\n"
+        "📌 Har bir fayl <code>questions</code> ro'yxatini o'z ichiga\n"
+        "olishi kerak (bot ichki formatiga mos).\n\n"
+        "✅ Tugatgach: /done\n"
+        "❌ Bekor qilish: /cancel"
+    )
+
+
+@router.message(F.document, AdminPanel.waiting_json)
+async def import_json_file(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    doc = message.document
+    if not doc.file_name.lower().endswith(".json"):
+        return await message.answer("❌ Faqat <b>.json</b> fayllar qabul qilinadi. (/done — tugatish)")
+
+    status = await message.answer(f"⏳ <code>{doc.file_name}</code> tahlil qilinmoqda...")
+    try:
+        file_obj = await message.bot.get_file(doc.file_id)
+        buf = await message.bot.download_file(file_obj.file_path)
+        raw = buf.read().decode("utf-8")
+    except Exception as e:
+        return await status.edit_text(f"❌ Faylni yuklab bo'lmadi: {e}")
+
+    try:
+        data = json.loads(raw)
+    except Exception as e:
+        return await status.edit_text(f"❌ JSON formatida xato:\n<code>{e}</code>")
+
+    from utils.db import import_test_from_json, validate_json_test
+    ok, err = validate_json_test(data)
+    if not ok:
+        return await status.edit_text(
+            f"❌ <b>{doc.file_name}</b> — noto'g'ri format:\n<code>{err}</code>"
+        )
+
+    try:
+        tid = await import_test_from_json(
+            message.from_user.id, data,
+            creator_name=message.from_user.full_name or "",
+            creator_username=message.from_user.username or "",
+        )
+    except Exception as e:
+        log.error(f"import_json_file xato: {e}", exc_info=True)
+        return await status.edit_text(f"❌ Saqlashda xato:\n<code>{e}</code>")
+
+    d = await state.get_data()
+    n = d.get("_import_json_count", 0) + 1
+    await state.update_data(_import_json_count=n)
+
+    qc = len(data.get("questions", []))
+    bu = (await message.bot.me()).username
+    await status.edit_text(
+        f"✅ <b>{n}-test saqlandi!</b>\n\n"
+        f"📝 {data.get('title', 'Nomsiz')}\n"
+        f"🆔 <code>{tid}</code>\n"
+        f"📋 {qc} ta savol\n"
+        f"🔗 <code>https://t.me/{bu}?start={tid}</code>\n\n"
+        f"➡️ Keyingi JSON faylni yuboring, yoki /done"
+    )
+
