@@ -2030,8 +2030,40 @@ async def load_blocked_users() -> set:
     return result
 
 
-async def save_known_groups():
+_kg_task = None
+_kg_lock = None
+
+
+async def save_known_groups(force: bool = False):
+    """
+    FIX (flood): oldin har chaqiruv alohida SendDocument yuborardi va
+    yuzlab parallel chaqiruv Telegram flood-limitiga urilardi.
+    Endi chaqiruvlar birlashtiriladi: 30 soniyada FAQAT BITTA saqlash.
+    force=True — darhol saqlaydi.
+    """
+    global _kg_task
+    if not ready(): return False
+    if force:
+        return await _save_known_groups_now()
+    if _kg_task is not None and not _kg_task.done():
+        return True          # allaqachon rejalashtirilgan
+    async def _delayed():
+        await asyncio.sleep(30)
+        await _save_known_groups_now()
+    _kg_task = asyncio.create_task(_delayed())
+    return True
+
+
+async def _save_known_groups_now():
     """Bot admin bo'lgan guruhlarni TG ga JSON sifatida saqlaydi."""
+    global _kg_lock
+    if _kg_lock is None:
+        _kg_lock = asyncio.Lock()
+    async with _kg_lock:
+        return await _save_known_groups_locked()
+
+
+async def _save_known_groups_locked():
     if not ready(): return False
     from utils import ram_cache as ram
     groups  = ram.get_known_groups()
@@ -2055,7 +2087,12 @@ async def save_known_groups():
         log.info(f"known_groups saqlandi: {len(groups)} ta")
         return True
     except Exception as e:
-        log.error(f"save_known_groups: {e}")
+        wait = getattr(e, "retry_after", None)
+        if wait:
+            log.warning(f"save_known_groups: flood limit, {wait}s kutiladi")
+            await asyncio.sleep(min(int(wait) + 1, 60))
+        else:
+            log.error(f"save_known_groups: {e}")
         return False
 
 
