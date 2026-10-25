@@ -385,8 +385,9 @@ async def main():
     dp.include_router(webauth.router)
     dp.include_router(web_cmd.router)
     # TG DB (Supabase) boshlash
-    from config import SUPABASE_URL, SUPABASE_KEY
-    if SUPABASE_URL and SUPABASE_KEY:
+    # FIX: config.py da SUPABASE_URL/KEY yo'q edi -> ImportError -> bot ishga tushmasdi.
+    # Ma'lumotlar bazasi = Telegram storage kanal (tg_db), shuning uchun shu tekshiriladi.
+    if STORAGE_CHANNEL_ID:
         from utils import tg_db
         log.info("Supabase DB initsializatsiya...")
         await tg_db.init(bot, STORAGE_CHANNEL_ID)
@@ -404,7 +405,7 @@ async def main():
         log.info(f"✅ Yuklandi: {ram.stats()['tests']} test meta, {ram.stats()['users']} user (savollar lazy)")
         _blocked_mod.load()
     else:
-        log.error("❌ SUPABASE_URL / SUPABASE_KEY sozlanmagan — bot ma'lumotlarsiz ishga tushadi!")
+        log.error("❌ STORAGE_CHANNEL_ID sozlanmagan — bot ma'lumotlarsiz ishga tushadi!")
 
     # Background tasklar — to'g'ri bekor qilish uchun saqlaymiz
     _bg_tasks = [
@@ -727,8 +728,9 @@ async def _main_no_signals():
 
     dp.include_router(_baza_router)
 
-    from config import SUPABASE_URL, SUPABASE_KEY
-    if SUPABASE_URL and SUPABASE_KEY:
+    # FIX: config.py da SUPABASE_URL/KEY yo'q edi -> ImportError -> bot ishga tushmasdi.
+    # Ma'lumotlar bazasi = Telegram storage kanal (tg_db), shuning uchun shu tekshiriladi.
+    if STORAGE_CHANNEL_ID:
         from utils import tg_db
         await tg_db.init(bot, STORAGE_CHANNEL_ID)
         # DIQQAT: tg_db.init() ICHIDA _load_tests_meta_to_ram() allaqachon
@@ -754,7 +756,7 @@ async def _main_no_signals():
             log.warning(f"force_join load: {_fje}")
     else:
         from utils import tg_db   # auto_flush_loop pastda kerak bo'ladi, lekin ready()=False bo'ladi
-        log.error("❌ SUPABASE_URL / SUPABASE_KEY sozlanmagan!")
+        log.error("❌ STORAGE_CHANNEL_ID sozlanmagan!")
 
     # Startup da bot admin bo'lgan guruhlarni aniqlash
     asyncio.create_task(_scan_groups_on_startup(bot))
