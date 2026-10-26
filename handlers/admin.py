@@ -204,11 +204,8 @@ async def admin_stats(callback: CallbackQuery):
                 f"{t['table_name']} ({_fmt_mb(t['total_bytes'])} MB)" for t in others
             ) + "\n"
     else:
-        text += (
-            f"\n🗄 <b>Supabase holati:</b> <i>sozlanmagan</i>\n"
-            f"  ⚙️ Yoqish uchun <code>fix_storage_stats.sql</code> ni\n"
-            f"  Supabase SQL Editor'da bir marta ishga tushiring.\n"
-        )
+        # Telegram-kanal rejimi: Supabase yo'q, shuning uchun uning haqida gap yo'q
+        text += "\n🗄 <b>Baza:</b> Telegram kanal (storage)\n"
 
     text += "━━━━━━━━━━━━━━━━━━━━━━━━"
     b = InlineKeyboardBuilder()

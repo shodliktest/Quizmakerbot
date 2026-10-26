@@ -601,7 +601,6 @@ async def force_start_cb(callback: CallbackQuery, state: FSMContext):
     await state.clear()
 
     # Yangi testni boshlash — to'g'ridan-to'g'ri chaqiramiz
-    from utils.db import get_test_by_id
     from utils.tg_db import get_test_full
     from utils import ram_cache as ram
 
@@ -1379,10 +1378,10 @@ async def _finish_inline(bot, cid, state, d):
 
 
 # ── Referal tekshirish callback ──────────────────────────────
-@router.callback_query(F.data.startswith("ref_check_"))
+@router.callback_query(F.data.startswith(("ref_check_", "ref_recheck_")))
 async def ref_check_callback(callback: CallbackQuery):
     """Foydalanuvchi 'Tekshirish' tugmasini bosdi"""
-    tid = callback.data.replace("ref_check_", "")
+    tid = callback.data.replace("ref_recheck_", "").replace("ref_check_", "")
     uid = callback.from_user.id
     
     from utils.ref_test import check_test_referral, send_referral_required_msg, grant_test_access

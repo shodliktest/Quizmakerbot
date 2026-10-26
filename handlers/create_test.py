@@ -234,6 +234,28 @@ async def create_start(message: Message, state: FSMContext):
     await state.set_state(CreateTest.choose_method)
 
 
+@router.callback_query(F.data == "start_create")
+async def back_to_create_menu(callback: CallbackQuery, state: FSMContext):
+    """'⬅️ Orqaga' tugmasi — usul tanlash menyusiga qaytish (oldin handler yo'q edi)"""
+    await callback.answer()
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="📁 Fayl (TXT/PDF/DOCX)", callback_data="method_file"))
+    b.row(InlineKeyboardButton(text="💬 Chat orqali (matn)",  callback_data="method_text"))
+    b.row(InlineKeyboardButton(text="📊 QuizBot forward",     callback_data="method_poll"))
+    b.row(InlineKeyboardButton(text="❌ Bekor",               callback_data="cancel_create"))
+    try:
+        await callback.message.edit_text(
+            "<b>➕ TEST YARATISH</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "<i>💡 Namunani ko'rish uchun turni tanlang</i>",
+            parse_mode="HTML",
+            reply_markup=b.as_markup()
+        )
+    except Exception:
+        pass
+    await state.set_state(CreateTest.choose_method)
+
+
 # ═══════════════════════════════════════════════════════════
 # REFERAL (rol cheklangan bo'lganda)
 # ═══════════════════════════════════════════════════════════

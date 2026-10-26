@@ -1607,7 +1607,7 @@ async def _save_ref_settings(callback, tid: str, enabled: bool, count: int):
 
     # RAM da yangilash
     try:
-        ram.update_test_entry(callback.from_user.id, tid, {
+        ram.update_test_meta(tid, {
             "ref_required": enabled,
             "ref_count":    count
         })
