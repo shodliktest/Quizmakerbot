@@ -194,6 +194,8 @@ class GroupTrackerMiddleware(BaseMiddleware):
     arrive with privacy mode enabled, but arbitrary user messages cannot.
     """
     _save_tasks = set()
+    _probe_at   = {}            # cid -> oxirgi tekshiruv vaqti (monotonic)
+    PROBE_EVERY = 6 * 3600      # har guruh uchun 6 soatda 1 marta
 
     @classmethod
     async def _persist_known_groups(cls):
@@ -228,6 +230,17 @@ class GroupTrackerMiddleware(BaseMiddleware):
             cid = str(chat.id)
             groups = ram.get_known_groups()
             existing = groups.get(cid)
+
+            # FLOOD/TEZLIK FIX: oldin HAR guruh xabarida getChatMember +
+            # getChatMemberCount chaqirilar va fayl (SendDocument) yuklanar edi ->
+            # Telegram "Flood control" va har update ~1.5 s sekin. Endi guruh
+            # ma'lumoti 6 soatda bir marta yangilanadi.
+            import time as _tm
+            _now = _tm.monotonic()
+            if (existing is not None and cid in self._probe_at
+                    and (_now - self._probe_at[cid]) < self.PROBE_EVERY):
+                return await handler(event, data)
+            self._probe_at[cid] = _now
 
             # Every received group update is a reliable "chat seen" signal.
             # Verify that the bot can actually send before marking it active.

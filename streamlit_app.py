@@ -646,16 +646,33 @@ hr { border-color: var(--border) !important; }
 
 # ══ BOT START ═════════════════════════════════════════════
 @st.cache_resource
+def _bot_state():
+    return {"thread": None, "last_try": 0.0}
+
 def start_bot():
+    """
+    FIX: oldin @st.cache_resource o'lib qolgan thread (yoki None) ni abadiy
+    eslab qolardi — bot bir marta yiqilsa, ilova reboot qilinmaguncha
+    qayta ishga tushmasdi. Endi thread o'lgan bo'lsa, 5 daqiqada bir marta
+    qayta ishga tushirishga urinadi.
+    """
+    import time as _t, logging
+    stt = _bot_state()
+    t = stt["thread"]
+    if t is not None and t.is_alive():
+        return t
+    if _t.time() - stt["last_try"] < 300:
+        return t
+    stt["last_try"] = _t.time()
     try:
         from bot import run_in_background
         t = run_in_background()
         if t is None:
-            import logging
             logging.getLogger(__name__).error("Bot thread None qaytardi!")
+        stt["thread"] = t
         return t
     except Exception as e:
-        import traceback, logging
+        import traceback
         logging.getLogger(__name__).error(f"start_bot xato: {e}")
         traceback.print_exc()
         return None
