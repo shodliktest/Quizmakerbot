@@ -100,6 +100,16 @@ async def init(bot, channel_id):
     await _load_all_index_chunks_fast()
     await _load_tests_stats()
 
+    # FIX: yangi bot.py testlarni RAM ga o'zi yuklamaydi (log: "0 test meta").
+    # Shu yerda to'ldiramiz — katalog, admin statistika va web API ishlashi uchun.
+    try:
+        from utils import ram_cache as _ram
+        _metas = _index.get("tests_meta", [])
+        if _metas:
+            _ram.set_tests_meta(list(_metas))
+    except Exception as e:
+        log.warning(f"RAM ga test meta yuklash: {e}")
+
     # Users va guruhlar — background da yuklanadi (bot allaqachon ishlaydi)
     asyncio.create_task(_load_users_list())
     asyncio.create_task(load_known_groups())
@@ -113,6 +123,36 @@ async def init(bot, channel_id):
 
 def ready():
     return _bot is not None and bool(_cid)
+
+
+# ── Majburiy obuna (force_join) sozlamasi — restartdan keyin ham saqlansin ──
+def get_force_join_cfg():
+    return _meta.get("force_join")
+
+async def save_force_join_cfg(cfg):
+    if not ready(): return False
+    _meta["force_join"] = cfg
+    return await _save_meta()
+
+
+# ── Admin panel moslik (shim) funksiyalari ──────────────────────────────────
+async def get_storage_stats():
+    """Supabase hajmi — Telegram bazada yo'q. Admin panel None ni to'g'ri qabul qiladi."""
+    return None
+
+async def get_backup_dates_async():
+    return get_backup_dates()
+
+async def _load_tests_meta_to_ram():
+    from utils import ram_cache as _ram
+    await _load_all_index_chunks_fast()
+    await _load_tests_stats()
+    _metas = _index.get("tests_meta", [])
+    if _metas:
+        _ram.set_tests_meta(list(_metas))
+
+async def _load_users_to_ram():
+    await _load_users_list()
 
 def mark_stats_dirty():
     global _stats_dirty

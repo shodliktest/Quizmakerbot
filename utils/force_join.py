@@ -26,6 +26,7 @@ def is_force_enabled() -> bool:
 def set_force_enabled(val: bool):
     global _force_enabled
     _force_enabled = val
+    _save()
 
 def add_channel(ch_id: int, title: str, invite: str = "", ch_type: str = "channel") -> bool:
     """Kanal/guruh ro'yxatga qo'shish"""
@@ -60,6 +61,35 @@ def _save():
         ram._set("force_join_enabled",  _force_enabled)
     except Exception as e:
         log.warning(f"force_join save: {e}")
+    # Telegram meta ga ham yozamiz — bot restart/reboot dan keyin yo'qolmasin
+    try:
+        import asyncio
+        from utils import tg_db
+        if tg_db.ready():
+            asyncio.get_running_loop().create_task(
+                tg_db.save_force_join_cfg(
+                    {"channels": list(_force_channels), "enabled": bool(_force_enabled)}
+                )
+            )
+    except RuntimeError:
+        pass   # ishlayotgan event loop yo'q
+    except Exception as e:
+        log.warning(f"force_join save (TG): {e}")
+
+async def load_from_db():
+    """Bot start da: avval Telegram meta, bo'lmasa RAM cache dan yuklash"""
+    global _force_channels, _force_enabled
+    try:
+        from utils import tg_db
+        cfg = tg_db.get_force_join_cfg()
+        if cfg:
+            _force_channels = list(cfg.get("channels") or [])
+            _force_enabled  = bool(cfg.get("enabled", False))
+            log.info(f"Force join yuklandi (TG): {len(_force_channels)} kanal, enabled={_force_enabled}")
+            return
+    except Exception as e:
+        log.warning(f"force_join load_from_db: {e}")
+    load_from_cache()
 
 def load_from_cache():
     """Bot start da RAM cache dan yuklash"""
